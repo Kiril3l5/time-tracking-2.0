@@ -1,0 +1,63 @@
+name: Deploy to Firebase
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Build common package
+        run: |
+          cd packages/common
+          npm run build
+
+      - name: Build admin app
+        if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'deploy-admin')
+        run: |
+          cd packages/admin
+          npm run build
+          
+      - name: Build hours app
+        if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'deploy-hours')
+        run: |
+          cd packages/hours
+          npm run build
+      
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v1'
+        with:
+          workload_identity_provider: 'projects/266526530869/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'github-actions-sa@autonomy-heroes.iam.gserviceaccount.com'
+          
+      - name: Deploy to Firebase
+        if: github.event_name == 'push'
+        run: |
+          npm install -g firebase-tools
+          firebase deploy
+          
+      - name: Deploy PR Preview
+        if: github.event_name == 'pull_request'
+        run: |
+          npm install -g firebase-tools
+          firebase hosting:channel:deploy pr-${{ github.event.pull_request.number }} 
