@@ -9,7 +9,7 @@
     "deploy:all": "firebase deploy",
     "deploy:admin": "firebase deploy --only hosting:admin",
     "deploy:hours": "firebase deploy --only hosting:hours",
-    "build:all": "npm run build:common && npm run build:admin && npm run build:hours",
+    "build:all": "pnpm run build:common && pnpm run build:admin && pnpm run build:hours",
     "build:common": "cd packages/common && pnpm run build",
     "build:admin": "cd packages/admin && pnpm run build",
     "build:hours": "cd packages/hours && pnpm run build",
@@ -17,11 +17,11 @@
     "docs:find-duplicates": "node scripts/find-duplicates.js",
     "docs:generate-index": "node scripts/generate-doc-index.js",
     "workflow:check": "node scripts/workflow-check.js",
-    "project:audit": "npm run docs:generate-index && npm run docs:find-duplicates",
-    "project:cleanup": "npm run cleanup",
+    "project:audit": "pnpm run docs:generate-index && pnpm run docs:find-duplicates",
+    "project:cleanup": "pnpm run cleanup",
     "lint": "echo 'Linting skipped for now' && exit 0",
     "test": "echo 'Tests skipped for now' && exit 0",
-    "precommit": "npm run project:audit"
+    "precommit": "pnpm run project:audit"
   },
   "devDependencies": {
     "js-yaml": "^4.1.0"

@@ -26,6 +26,19 @@ jobs:
           node-version: '20'
           cache: 'pnpm'
       
+      - name: Generate lockfile key
+        id: lockfile-key
+        run: echo "hash=$(sha256sum pnpm-lock.yaml | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+      
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            **/node_modules
+          key: ${{ runner.os }}-pnpm-${{ steps.lockfile-key.outputs.hash }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+      
       - name: Create .env file
         run: |
           echo "VITE_FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}" > .env
@@ -35,6 +48,12 @@ jobs:
           echo "VITE_FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}" >> .env
           echo "VITE_FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}" >> .env
           echo "VITE_FIREBASE_MEASUREMENT_ID=${{ secrets.FIREBASE_MEASUREMENT_ID }}" >> .env
+          echo "DEV=true" >> .env
+          
+          # Copy to all packages
+          cp .env packages/common/
+          cp .env packages/admin/
+          cp .env packages/hours/
       
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
@@ -48,9 +67,10 @@ jobs:
       - name: Build packages
         run: |
           echo "Building packages..."
-          pnpm run build:common || echo "Build issues in common, continuing"
-          pnpm run build:admin || echo "Build issues in admin, continuing"
-          pnpm run build:hours || echo "Build issues in hours, continuing"
+          # Set NODE_ENV for proper DEV variable
+          export NODE_ENV=production
+          # Use the script from package.json
+          pnpm run build:all
       
       # Only deploy when pushing to main branch
       - name: Firebase deploy
