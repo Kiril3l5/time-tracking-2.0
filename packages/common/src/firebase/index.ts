@@ -11,21 +11,27 @@ export * from './firestore';
 export * from './hooks';
 
 // Re-export specific Firebase types and functions that will be commonly used
-export {
-  // Auth exports
+// For types, use export type to satisfy isolatedModules
+export type {
   User as FirebaseUser,
   UserCredential,
+} from 'firebase/auth';
+
+export {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
   sendPasswordResetEmail,
 } from 'firebase/auth';
 
-export {
-  // Firestore exports
+export type {
   DocumentReference,
   DocumentData,
   QueryDocumentSnapshot,
+  QueryConstraint,
+} from 'firebase/firestore';
+
+export {
   collection,
   doc,
   query,
@@ -41,7 +47,6 @@ export {
   onSnapshot,
   Timestamp,
   serverTimestamp,
-  QueryConstraint,
 } from 'firebase/firestore';
 
 export {

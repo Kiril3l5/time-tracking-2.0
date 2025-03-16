@@ -10,7 +10,7 @@ import {
   } from 'firebase/auth';
   import { auth, db } from '../core/firebase';
   import { doc, setDoc, getDoc } from 'firebase/firestore';
-  import { UserProfile } from '../../types/firestore';
+  import { UserProfile, User as FirestoreUser } from '../../types/firestore';
   
   // Login with email and password
   export const login = async (email: string, password: string): Promise<UserCredential> => {
@@ -31,14 +31,14 @@ import {
   export const register = async (
     email: string, 
     password: string, 
-    userData: Omit<UserProfile, 'id' | 'isActive' | 'createdAt' | 'updatedAt'>
+    userData: Omit<FirestoreUser, 'id' | 'createdAt' | 'updatedAt'>
   ): Promise<UserCredential> => {
     // Create the user account
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
     
-    // Add user profile to Firestore
-    const newUserData: UserProfile = {
+    // Add user data to Firestore
+    const newUserData: FirestoreUser = {
       id: user.uid,
       email: user.email || email,
       firstName: userData.firstName,
@@ -48,12 +48,24 @@ import {
       role: userData.role || 'user',
       permissions: userData.permissions || [],
       isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     
     // Create user document
     await setDoc(doc(db, 'users', user.uid), newUserData);
+    
+    // Create user profile
+    const userProfile: UserProfile = {
+      id: user.uid,
+      userId: user.uid,
+      displayName: `${userData.firstName} ${userData.lastName}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    
+    // Create user profile document
+    await setDoc(doc(db, 'userProfiles', user.uid), userProfile);
     
     return userCredential;
   };
@@ -65,7 +77,7 @@ import {
   
   // Get user profile data from Firestore
   export const getUserProfile = async (userId: string): Promise<UserProfile | null> => {
-    const userDoc = await getDoc(doc(db, 'users', userId));
+    const userDoc = await getDoc(doc(db, 'userProfiles', userId));
     
     if (userDoc.exists()) {
       return userDoc.data() as UserProfile;

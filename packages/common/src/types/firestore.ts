@@ -82,3 +82,38 @@ export interface UserStats {
     currentWeekHours: number;
     lastUpdated: Date | string;
 }
+
+/**
+ * User profile information
+ */
+export interface UserProfile {
+    id: string;
+    userId: string;
+    displayName?: string;
+    photoURL?: string;
+    jobTitle?: string;
+    department?: string;
+    phoneNumber?: string;
+    address?: {
+        street?: string;
+        city?: string;
+        state?: string;
+        zip?: string;
+        country?: string;
+    };
+    emergencyContact?: {
+        name?: string;
+        relationship?: string;
+        phoneNumber?: string;
+    };
+    preferences?: {
+        theme?: 'light' | 'dark' | 'system';
+        emailNotifications?: boolean;
+        pushNotifications?: boolean;
+    };
+    hireDate?: string;
+    terminationDate?: string;
+    employmentType?: 'full-time' | 'part-time' | 'contractor' | 'intern';
+    createdAt: string;
+    updatedAt: string;
+}

@@ -17,6 +17,7 @@
     "docs:find-duplicates": "node scripts/find-duplicates.js",
     "docs:generate-index": "node scripts/generate-doc-index.js",
     "project:audit": "npm run docs:generate-index && npm run docs:find-duplicates",
-    "project:cleanup": "npm run cleanup"
+    "project:cleanup": "npm run cleanup",
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx || true"
   }
 }
