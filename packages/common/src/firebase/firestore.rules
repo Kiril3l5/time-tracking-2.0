@@ -1,0 +1,281 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+// === EXISTING Helper Functions (Unchanged) ===
+    function isAdmin() {
+      let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return userData.role == 'super-admin';
+    }
+    
+    function isManager() {
+      let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return userData.role == 'manager';
+    }
+    
+    function isAuthenticatedUser() {
+      return request.auth != null && request.auth.uid != null;
+    }
+    
+    function hasPermission(permission) {
+      let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return permission in userData.permissions && 
+             userData.permissions[permission] == true;
+    }
+    
+    function isManagerOf(workerId) {
+      let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return userData.role == 'manager' && 
+             'assignedWorkers' in userData && 
+             userData.assignedWorkers.includes(workerId);
+    }
+    
+    function getUserCompanyId() {
+      let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return userData.companyId;
+    }
+    
+    function hasCompanyAccess(companyId) {
+      let userCompanyId = getUserCompanyId();
+      return userCompanyId == companyId;
+    }
+
+    // === NEW Helper Functions (Week Config) ===
+    function isSuperAdmin() {
+      return request.auth.uid == 'galkin.kir' && isAdmin();
+    }
+
+    function isValidWeekConfig(config) {
+      return (config == null) || ( // Allow null/missing config
+        config is map &&
+        config.keys().hasAll(['startDay', 'workWeekLength']) &&
+        config.startDay is number &&
+        config.startDay >= 0 &&
+        config.startDay <= 6 &&
+        config.workWeekLength is number &&
+        config.workWeekLength >= 5 &&
+        config.workWeekLength <= 7
+      );
+    }
+
+    // === NEW Validation Functions ===
+    function isValidTimeEntry(data) {
+      return data.keys().hasAll(['date', 'hours', 'userId', 'companyId', 'status']) &&
+             data.date is string &&
+             data.hours is number &&
+             data.hours >= 0 &&
+             data.hours <= 24 &&
+             data.userId is string &&
+             data.companyId is string &&
+             data.status in ['pending', 'approved', 'rejected'];
+    }
+
+    // === Users Collection (Unchanged) ===
+    match /users/{userId} {
+      allow read: if isAuthenticatedUser() && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isManager()
+      );
+      
+      allow create: if 
+        isAuthenticatedUser() && (
+          request.auth.uid == userId ||
+          isAdmin()
+        ) &&
+        request.resource.data.keys().hasAll([
+          'email', 'firstName', 'lastName', 'role',
+          'permissions', 'metadata'
+        ]);
+      
+      allow update: if 
+        isAdmin() ||
+        (request.auth.uid == userId &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['firstName', 'lastName', 'profile', 'settings'])) ||
+        (isManager() && isManagerOf(userId) &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['status', 'timeEntries', 'approvedHours', 'updatedAt']));
+      
+      allow delete: if isAdmin();
+    }
+
+    // === User Settings Collection ===
+    match /userSettings/{userId} {
+      allow read: if isAuthenticatedUser() && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isManagerOf(userId)
+      );
+      
+      allow write: if isAuthenticatedUser() && (
+        request.auth.uid == userId ||
+        isAdmin()
+      );
+    }
+
+    // === User Stats Collection ===
+    match /userStats/{userId} {
+      allow read: if isAuthenticatedUser() && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isManagerOf(userId)
+      );
+      
+      allow write: if isAdmin();
+    }
+
+    // === Time Entries Collection ===
+    match /timeEntries/{entryId} {
+      function getUserAssignedWorkers() {
+          let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+          return userData.assignedWorkers;
+      }
+
+      allow read, list: if 
+          request.auth != null && (
+              isAdmin() ||
+              (isManager() && 
+               (resource == null || 
+                getUserAssignedWorkers().hasAny([resource.data.userId]))
+              ) ||
+              (resource == null || resource.data.userId == request.auth.uid)
+          );
+
+      allow create: if
+          request.auth != null &&
+          request.resource.data.userId == request.auth.uid &&
+          request.resource.data.status == 'pending';
+
+      allow update: if
+          request.auth != null && (
+              isAdmin() ||
+              (isManager() && 
+               getUserAssignedWorkers().hasAny([resource.data.userId])) ||
+              (resource.data.userId == request.auth.uid && 
+               resource.data.status == 'pending')
+          );
+
+      allow delete: if false;
+    }
+    
+ // === Companies Collection (Modified) === 
+    match /companies/{companyId} {
+      allow read: if isAuthenticatedUser() && (
+        isAdmin() || 
+        isManager() ||
+        hasCompanyAccess(companyId)
+      );
+
+      // Create - require valid weekConfig if present
+      allow create: if isAuthenticatedUser() && 
+        isAdmin() &&
+        (!request.resource.data.keys().hasAny(['settings.weekConfig']) || 
+          isValidWeekConfig(request.resource.data.settings.weekConfig));
+      
+      // Update - only super admin can modify weekConfig
+      allow update: if isAuthenticatedUser() && (
+        // Super admin can update anything
+        isSuperAdmin() ||
+        // Regular admin can update everything except weekConfig
+        (isAdmin() && 
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['settings.weekConfig'])) ||
+        // Manager with company access can update non-critical fields
+        (isManager() && hasCompanyAccess(companyId) &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['settings.weekConfig']))
+      );
+      
+      allow delete: if isAuthenticatedUser() && isAdmin();
+    }
+    
+    // === Invoices Collection ===
+    match /invoices/{invoiceId} {
+  // For list queries
+  allow list: if isAuthenticatedUser() && (
+    isAdmin() || 
+    (isManager() && hasPermission('generateInvoices'))
+  );
+  
+  // For document reads
+  allow get: if isAuthenticatedUser() && (
+    isAdmin() || 
+    (isManager() && hasPermission('generateInvoices') && hasCompanyAccess(resource.data.companyId))
+  );
+  
+  allow create: if isAuthenticatedUser() && (
+    isAdmin() || 
+    (isManager() && 
+     hasPermission('generateInvoices') && 
+     hasCompanyAccess(request.resource.data.companyId))
+  );
+  
+  allow update: if isAuthenticatedUser() && (
+    isAdmin() ||
+    (isManager() && 
+     hasPermission('generateInvoices') && 
+     hasCompanyAccess(resource.data.companyId))
+  );
+  
+  allow delete: if isAdmin();
+}
+  
+
+    // === User Settings Collection ===
+    match /userSettings/{userId} {
+      allow read: if isAuthenticatedUser() && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isManagerOf(userId)
+      );
+      
+      allow write: if isAuthenticatedUser() && (
+        request.auth.uid == userId ||
+        isAdmin()
+      );
+    }
+
+    // === User Stats Collection ===
+    match /userStats/{userId} {
+      allow read: if isAuthenticatedUser() && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isManagerOf(userId)
+      );
+      
+      allow write: if isAdmin();
+    }
+
+    // === Time Entries Collection ===
+    match /timeEntries/{entryId} {
+    function getUserAssignedWorkers() {
+        let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+        return userData.assignedWorkers;
+    }
+
+    allow read, list: if 
+        request.auth != null && (
+            isAdmin() ||
+            (isManager() && 
+             (resource == null || 
+              getUserAssignedWorkers().hasAny([resource.data.userId]))
+            ) ||
+            (resource == null || resource.data.userId == request.auth.uid)
+        );
+
+    allow create: if
+        request.auth != null &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.status == 'pending';
+
+    allow update: if
+        request.auth != null && (
+            isAdmin() ||
+            (isManager() && 
+             getUserAssignedWorkers().hasAny([resource.data.userId])) ||
+            (resource.data.userId == request.auth.uid && 
+             resource.data.status == 'pending')
+        );
+
+    allow delete: if false;
+}
+}
+}

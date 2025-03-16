@@ -1,11 +1,17 @@
-   // Export all types
-   export * from './types';
+// Export types if available
+export * from './types';
 
-   // Export all utils
-   export * from './utils';
+// Export components
+export * from './components/ErrorBoundary';
+export * from './components/NetworkStatus';
 
-   // Export all services
-   export * from './services';
+// Export utils
+export * from './utils/errorHandler';
+export * from './utils/permissions';
 
-   // Export all components
-   export * from './components';
+// Export Firebase
+export * from './firebase/performance/performance';
+
+// Export services
+export * from './services/api/time-entries';
+export * from './services/metadata';

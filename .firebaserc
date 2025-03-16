@@ -1,18 +1,18 @@
 {
-     "projects": {
-       "default": "autonomy-heroes"
-     },
-     "targets": {
-       "autonomy-heroes": {
-         "hosting": {
-           "admin": [
-             "admin-autonomyhero-2024"
-           ],
-           "hours": [
-             "hours-autonomyhero-2024"
-           ]
-         }
-       }
-     },
-     "etags": {}
-   }
+  "projects": {
+    "default": "autonomy-heroes"
+  },
+  "targets": {
+    "autonomy-heroes": {
+      "hosting": {
+        "admin": [
+          "admin-autonomyhero-2024"
+        ],
+        "hours": [
+          "hours-autonomyhero-2024"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

@@ -1,23 +1,50 @@
-import { initializeApp } from 'firebase/app';
-   import { getFirestore } from 'firebase/firestore';
-   import { getAuth } from 'firebase/auth';
+// Export core Firebase instances
+export { app, auth, db, functions } from './core/firebase';
 
-   const firebaseConfig = {
-     apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-     authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-     projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-     storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-     messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-     appId: import.meta.env.VITE_FIREBASE_APP_ID,
-     measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
-   };
+// Export auth utilities
+export * from './auth';
 
-   export const app = initializeApp(firebaseConfig);
-   export const db = getFirestore(app);
-   export const auth = getAuth(app);
+// Export Firestore utilities
+export * from './firestore';
 
-   // Export everything from firebase/auth
-   export * from 'firebase/auth';
-   
-   // Export everything from firebase/firestore
-   export * from 'firebase/firestore';
+// Export Firebase hooks
+export * from './hooks';
+
+// Re-export specific Firebase types and functions that will be commonly used
+export {
+  // Auth exports
+  User as FirebaseUser,
+  UserCredential,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  sendPasswordResetEmail,
+} from 'firebase/auth';
+
+export {
+  // Firestore exports
+  DocumentReference,
+  DocumentData,
+  QueryDocumentSnapshot,
+  collection,
+  doc,
+  query,
+  where,
+  orderBy,
+  limit,
+  startAfter,
+  getDocs,
+  getDoc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  Timestamp,
+  serverTimestamp,
+  QueryConstraint,
+} from 'firebase/firestore';
+
+export {
+  // Functions exports
+  httpsCallable,
+} from 'firebase/functions';

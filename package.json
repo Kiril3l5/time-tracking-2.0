@@ -1,4 +1,22 @@
 {
-    "name": "time-tracking-system",
-    "private": true
+  "name": "time-tracking-system",
+  "private": true,
+  "scripts": {
+    "emulators": "firebase emulators:start",
+    "emulators:seed": "firebase emulators:start --import=./seed",
+    "emulators:export": "firebase emulators:export ./seed",
+    "deploy:rules": "firebase deploy --only firestore:rules",
+    "deploy:all": "firebase deploy",
+    "deploy:admin": "firebase deploy --only hosting:admin",
+    "deploy:hours": "firebase deploy --only hosting:hours",
+    "build:all": "npm run build:common && npm run build:admin && npm run build:hours",
+    "build:common": "cd packages/common && npm run build",
+    "build:admin": "cd packages/admin && npm run build",
+    "build:hours": "cd packages/hours && npm run build",
+    "cleanup": "bash scripts/cleanup.sh",
+    "docs:find-duplicates": "node scripts/find-duplicates.js",
+    "docs:generate-index": "node scripts/generate-doc-index.js",
+    "project:audit": "npm run docs:generate-index && npm run docs:find-duplicates",
+    "project:cleanup": "npm run cleanup"
   }
+}

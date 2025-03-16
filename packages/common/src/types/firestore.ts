@@ -2,20 +2,44 @@ export interface TimeEntry {
     id: string;
     userId: string;
     companyId: string;
-    date: Date | string;
+    date: string;  // YYYY-MM-DD format
+    
+    // Hours breakdown
     hours: number;
+    regularHours: number;
+    overtimeHours: number;
+    ptoHours: number;
+    unpaidLeaveHours: number;
+    
+    // Additional fields
     projectId?: string;
     description?: string;
-    isTimeOff: boolean;
-    managerApproved: boolean;
-    managerApprovedBy?: string;
-    managerApprovedDate?: Date | string;
     yearWeek: string; // Format: YYYY-WW, e.g., "2023-34"
+    
+    // Workflow state fields
+    status: 'draft' | 'pending' | 'approved' | 'rejected' | 'processed';
+    isSubmitted: boolean;
+    needsApproval: boolean;
+    managerApproved: boolean;
+    overtimeApproved: boolean;
+    isTimeOff: boolean;
+    timeOffType?: 'pto' | 'sick' | 'unpaid' | 'other';
+    
+    // Approval info
+    managerId?: string;
+    managerApprovedBy?: string;
+    managerApprovedDate?: string;
+    managerNotes?: string;
+    
+    // Metadata
+    notes?: string;
+    isDeleted: boolean;
     createdAt: Date | string;
     updatedAt: Date | string;
-  }
+    updatedBy?: string;
+}
 
-  export interface User {
+export interface User {
     id: string;
     email: string;
     firstName: string;
@@ -28,22 +52,22 @@ export interface TimeEntry {
     lastLoginAt?: Date | string;
     createdAt: Date | string;
     updatedAt: Date | string;
-  }
+}
 
-  export interface Company {
+export interface Company {
     id: string;
     name: string;
     weekConfig: {
-      startDay: 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = Sunday, 1 = Monday, etc.
-      workingDays: number[];
-      hoursPerDay: number;
+        startDay: 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = Sunday, 1 = Monday, etc.
+        workingDays: number[];
+        hoursPerDay: number;
     };
     timezone: string;
     createdAt: Date | string;
     updatedAt: Date | string;
-  }
+}
 
-  export interface UserStats {
+export interface UserStats {
     id: string;
     userId: string;
     companyId: string;
@@ -52,4 +76,4 @@ export interface TimeEntry {
     ytdHoursWorked: number;
     currentWeekHours: number;
     lastUpdated: Date | string;
-  }
+}
