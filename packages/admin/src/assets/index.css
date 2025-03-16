@@ -1,0 +1,15 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #ff8d00;
+  --primary-dark: #e57e00;
+  --primary-light: #ffa333;
+}
+
+html, body {
+  font-family: "Roboto Condensed", sans-serif;
+}

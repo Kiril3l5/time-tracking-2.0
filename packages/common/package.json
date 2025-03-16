@@ -1,0 +1,21 @@
+{
+    "name": "@common",
+    "private": true,
+    "version": "0.1.0",
+    "main": "src/index.ts",
+    "scripts": {
+      "test": "vitest run",
+      "test:watch": "vitest"
+    },
+    "dependencies": {
+      "firebase": "^10.0.0",
+      "date-fns": "^2.30.0",
+      "react": "^18.2.0",
+      "react-dom": "^18.2.0"
+    },
+    "devDependencies": {
+      "@types/react": "^18.2.14",
+      "typescript": "^5.1.6",
+      "vitest": "^0.33.0"
+    }
+  }
