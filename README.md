@@ -32,6 +32,7 @@ Key technologies:
 
 Detailed documentation is available in the `/docs` directory:
 
+- [Architecture Overview](./docs/architecture/project-overview.md) - Complete architecture and patterns
 - [Environment Setup](./docs/env/setup.md) - Setting up environment variables
 - [Project Structure](./docs/structure/modules.md) - Module organization and dependencies
 - [Development Workflow](./docs/workflow/development.md) - Development processes and standards
