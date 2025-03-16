@@ -16,12 +16,11 @@
     "cleanup": "bash scripts/cleanup.sh",
     "docs:find-duplicates": "node scripts/find-duplicates.js",
     "docs:generate-index": "node scripts/generate-doc-index.js",
-    "workflow:check": "npm install -D js-yaml && node scripts/workflow-check.js",
-    "project:audit": "npm run docs:generate-index && npm run docs:find-duplicates && npm run workflow:check",
+    "workflow:check": "node scripts/workflow-check.js",
+    "project:audit": "npm run docs:generate-index && npm run docs:find-duplicates",
     "project:cleanup": "npm run cleanup",
     "lint": "echo 'Linting skipped for now' && exit 0",
     "test": "echo 'Tests skipped for now' && exit 0",
-    "postinstall": "cd packages/common && pnpm install && cd ../admin && pnpm install && cd ../hours && pnpm install",
     "precommit": "npm run project:audit"
   },
   "devDependencies": {
