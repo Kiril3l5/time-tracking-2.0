@@ -73,44 +73,16 @@ jobs:
           pnpm run build:all
       
       # Only deploy when pushing to main branch
-      - name: Firebase deploy
+      - name: Deploy to Firebase Hosting
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: '${{ secrets.GITHUB_TOKEN }}'
-          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
-          channelId: 'live'
-          projectId: 'autonomy-heroes'
-          target: 'admin'
+        run: |
+          npx firebase-tools deploy --only hosting:admin,hosting:hours --token "${{ secrets.FIREBASE_TOKEN }}" --project autonomy-heroes
       
-      - name: Firebase deploy hours
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: '${{ secrets.GITHUB_TOKEN }}'
-          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
-          channelId: 'live'
-          projectId: 'autonomy-heroes'
-          target: 'hours'
-      
-      # Deploy PR previews for admin
-      - name: Deploy PR Preview - Admin
+      # Deploy PR previews
+      - name: Deploy PR Preview
         if: github.event_name == 'pull_request'
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: '${{ secrets.GITHUB_TOKEN }}'
           firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
           projectId: 'autonomy-heroes'
-          channelId: 'pr-${{ github.event.number }}'
-          target: 'admin'
-      
-      # Deploy PR previews for hours
-      - name: Deploy PR Preview - Hours
-        if: github.event_name == 'pull_request'
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: '${{ secrets.GITHUB_TOKEN }}'
-          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
-          projectId: 'autonomy-heroes'
-          channelId: 'pr-${{ github.event.number }}'
-          target: 'hours'
