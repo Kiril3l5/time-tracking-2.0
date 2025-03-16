@@ -172,4 +172,148 @@ export const timeEntriesApi = {
       callback(entries);
     });
   },
-}; 
+};
+
+/**
+ * Collection reference for time entries
+ */
+const timeEntriesCollection = collection(db, 'timeEntries');
+
+/**
+ * Get all time entries with optional filters
+ */
+export async function getTimeEntries(filters?: Record<string, unknown>): Promise<TimeEntry[]> {
+  try {
+    let q = query(timeEntriesCollection, orderBy('date', 'desc'));
+    
+    // Apply filters if provided
+    if (filters) {
+      if (filters.userId) {
+        q = query(q, where('userId', '==', filters.userId));
+      }
+      
+      if (filters.companyId) {
+        q = query(q, where('companyId', '==', filters.companyId));
+      }
+      
+      if (filters.status) {
+        q = query(q, where('status', '==', filters.status));
+      }
+      
+      if (filters.startDate && filters.endDate) {
+        q = query(
+          q, 
+          where('date', '>=', filters.startDate), 
+          where('date', '<=', filters.endDate)
+        );
+      }
+    }
+    
+    const querySnapshot = await getDocs(q);
+    const entries: TimeEntry[] = [];
+    
+    querySnapshot.forEach((doc) => {
+      const data = doc.data();
+      entries.push({
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.()?.toISOString() || '',
+        updatedAt: data.updatedAt?.toDate?.()?.toISOString() || '',
+        approvedAt: data.approvedAt?.toDate?.()?.toISOString() || undefined,
+      } as TimeEntry);
+    });
+    
+    return entries;
+  } catch (error) {
+    console.error('Error fetching time entries:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get a single time entry by ID
+ */
+export async function getTimeEntry(id: string): Promise<TimeEntry> {
+  try {
+    const docRef = doc(timeEntriesCollection, id);
+    const docSnap = await getDoc(docRef);
+    
+    if (!docSnap.exists()) {
+      throw new Error(`Time entry with ID ${id} not found`);
+    }
+    
+    const data = docSnap.data();
+    return {
+      id: docSnap.id,
+      ...data,
+      createdAt: data.createdAt?.toDate?.()?.toISOString() || '',
+      updatedAt: data.updatedAt?.toDate?.()?.toISOString() || '',
+      approvedAt: data.approvedAt?.toDate?.()?.toISOString() || undefined,
+    } as TimeEntry;
+  } catch (error) {
+    console.error(`Error fetching time entry ${id}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Create a new time entry
+ */
+export async function createTimeEntry(data: Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt'>): Promise<TimeEntry> {
+  try {
+    const now = serverTimestamp();
+    const docRef = await addDoc(timeEntriesCollection, {
+      ...data,
+      createdAt: now,
+      updatedAt: now,
+    });
+    
+    // Get the created document to return
+    return getTimeEntry(docRef.id);
+  } catch (error) {
+    console.error('Error creating time entry:', error);
+    throw error;
+  }
+}
+
+/**
+ * Update an existing time entry
+ */
+export async function updateTimeEntry(id: string, data: Partial<Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt'>>): Promise<TimeEntry> {
+  try {
+    const docRef = doc(timeEntriesCollection, id);
+    await updateDoc(docRef, {
+      ...data,
+      updatedAt: serverTimestamp(),
+    });
+    
+    // Get the updated document to return
+    return getTimeEntry(id);
+  } catch (error) {
+    console.error(`Error updating time entry ${id}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Delete a time entry (soft delete by default)
+ */
+export async function deleteTimeEntry(id: string, hardDelete = false): Promise<void> {
+  try {
+    const docRef = doc(timeEntriesCollection, id);
+    
+    if (hardDelete) {
+      // Hard delete - remove from database
+      await deleteDoc(docRef);
+    } else {
+      // Soft delete - mark as deleted but keep in database
+      await updateDoc(docRef, {
+        isDeleted: true,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    console.error(`Error deleting time entry ${id}:`, error);
+    throw error;
+  }
+} 

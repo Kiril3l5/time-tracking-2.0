@@ -1,3 +1,6 @@
+/**
+ * Time entry data structure
+ */
 export interface TimeEntry {
     id: string;
     userId: string;
@@ -17,7 +20,7 @@ export interface TimeEntry {
     yearWeek: string; // Format: YYYY-WW, e.g., "2023-34"
     
     // Workflow state fields
-    status: 'draft' | 'pending' | 'approved' | 'rejected' | 'processed';
+    status: 'pending' | 'approved' | 'rejected';
     isSubmitted: boolean;
     needsApproval: boolean;
     managerApproved: boolean;
@@ -34,9 +37,11 @@ export interface TimeEntry {
     // Metadata
     notes?: string;
     isDeleted: boolean;
-    createdAt: Date | string;
-    updatedAt: Date | string;
+    createdAt: string;
+    updatedAt: string;
     updatedBy?: string;
+    approvedBy?: string;
+    approvedAt?: string;
 }
 
 export interface User {

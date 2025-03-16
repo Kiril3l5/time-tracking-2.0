@@ -15,3 +15,15 @@ export * from './firebase/performance/performance';
 // Export services
 export * from './services/api/time-entries';
 export * from './services/metadata';
+
+// Firebase core
+export * from './firebase/core/firebase';
+
+// Hooks
+export * from './hooks';
+
+// Store
+export * from './store';
+
+// Types
+export * from './types/firestore';
