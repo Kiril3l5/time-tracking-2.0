@@ -2,11 +2,13 @@
 
 This document provides an index of all documentation files in the project.
 
-Generated on: 2025-03-16T21:07:00.674Z
+Generated on: 2025-03-16T22:49:06.325Z
 
 ## Table of Contents
 
 - [Root](#root)
+- [architecture](#architecture)
+- [deployment](#deployment)
 - [env](#env)
 - [main_readme](#main_readme)
 - [network](#network)
@@ -20,8 +22,20 @@ Generated on: 2025-03-16T21:07:00.674Z
 
 | Document | Last Modified | Size | Lines | Summary |
 |----------|---------------|------|-------|--------|
-| [Documentation Index](./documentation-index.md) | 2025-03-16 | 3.8 KB | 79 | This document provides an index of all documentation files in the project. |
-| [Project Cleanup and Organization Summary](./project-cleanup-summary.md) | 2025-03-16 | 2.8 KB | 73 | (No summary available) |
+| [Documentation Index](./documentation-index.md) | 2025-03-16 | 5 KB | 103 | This document provides an index of all documentation files in the project. |
+| [Project Cleanup and Organization Summary](./project-cleanup-summary.md) | 2025-03-16 | 2.9 KB | 74 | (No summary available) |
+
+## architecture
+
+| Document | Last Modified | Size | Lines | Summary |
+|----------|---------------|------|-------|--------|
+| [Time Tracking System Architecture Overview](./architecture/project-overview.md) | 2025-03-16 | 6 KB | 174 | (No summary available) |
+
+## deployment
+
+| Document | Last Modified | Size | Lines | Summary |
+|----------|---------------|------|-------|--------|
+| [Firebase Deployment Setup](./deployment/setup.md) | 2025-03-16 | 6.5 KB | 220 | (No summary available) |
 
 ## env
 
@@ -55,14 +69,17 @@ Generated on: 2025-03-16T21:07:00.674Z
 
 | Document | Last Modified | Size | Lines | Summary |
 |----------|---------------|------|-------|--------|
+| [Data Fetching Strategy](./patterns/data-fetching.md) | 2025-03-16 | 9.1 KB | 324 | (No summary available) |
 | [Optimistic UI Updates Pattern](./patterns/optimistic-updates.md) | 2025-03-16 | 4.3 KB | 122 | (No summary available) |
+| [Mobile-First Responsive Design System](./patterns/responsive-design.md) | 2025-03-16 | 8.2 KB | 303 | (No summary available) |
+| [State Management Pattern](./patterns/state-management.md) | 2025-03-16 | 5.4 KB | 197 | (No summary available) |
 
 ## security
 
 | Document | Last Modified | Size | Lines | Summary |
 |----------|---------------|------|-------|--------|
 | [Firestore Security Rules Review](./security/firestore-rules.md) | 2025-03-16 | 4.4 KB | 141 | (No summary available) |
-| [Security Documentation Migration Plan](./security/migration-plan.md) | 2025-03-16 | 2.2 KB | 70 | (No summary available) |
+| [Security Documentation Migration Plan](./security/migration-plan.md) | 2025-03-16 | 2.3 KB | 74 | (No summary available) |
 
 ## structure
 

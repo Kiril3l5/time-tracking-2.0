@@ -26,6 +26,16 @@ jobs:
           node-version: '20'
           cache: 'pnpm'
       
+      - name: Create .env file
+        run: |
+          echo "VITE_FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}" > .env
+          echo "VITE_FIREBASE_AUTH_DOMAIN=autonomy-heroes.firebaseapp.com" >> .env
+          echo "VITE_FIREBASE_PROJECT_ID=autonomy-heroes" >> .env
+          echo "VITE_FIREBASE_STORAGE_BUCKET=autonomy-heroes.appspot.com" >> .env
+          echo "VITE_FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}" >> .env
+          echo "VITE_FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}" >> .env
+          echo "VITE_FIREBASE_MEASUREMENT_ID=${{ secrets.FIREBASE_MEASUREMENT_ID }}" >> .env
+      
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
       
