@@ -1,0 +1,101 @@
+# Firebase Deployment Workflow using Workload Identity Federation
+# This workflow uses Google Cloud Workload Identity Federation (recommended and secure approach)
+# No service account keys or tokens are needed
+
+name: Firebase Deployment
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      pull-requests: 'write'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+          run_install: false
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      
+      - name: Install dependencies
+        run: pnpm install
+      
+      - name: Lint
+        run: pnpm run lint
+      
+      - name: Test
+        run: pnpm run test
+      
+      - name: Build packages
+        run: |
+          export NODE_ENV=production
+          pnpm run build:all
+      
+      # Authenticate with Google Cloud using Workload Identity Federation
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: 'projects/266526530869/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'github-actions-sa@autonomy-heroes.iam.gserviceaccount.com'
+      
+      # Install Firebase CLI
+      - name: Setup Firebase CLI
+        run: npm install -g firebase-tools
+      
+      # Deploy to production when pushing to main
+      - name: Deploy to Production
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: firebase deploy --only hosting,firestore:rules
+      
+      # Deploy PR preview and comment on PR
+      - name: Deploy PR Preview
+        if: github.event_name == 'pull_request'
+        run: |
+          # Deploy to preview channel
+          echo "Deploying to preview channel for PR #${{ github.event.pull_request.number }}..."
+          PREVIEW_OUTPUT=$(firebase hosting:channel:deploy pr-${{ github.event.pull_request.number }} --json)
+          
+          # Extract the URL and create a comment
+          echo "$PREVIEW_OUTPUT" > preview_output.json
+          PREVIEW_URL=$(cat preview_output.json | jq -r '.result.url')
+          echo "Preview URL: $PREVIEW_URL"
+          
+          # Add comment to PR
+          gh pr comment ${{ github.event.pull_request.number }} --body "🚀 Preview deployment ready! Visit: $PREVIEW_URL"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The old approach using direct Firebase CLI command (kept for reference)
+      # - name: Deploy PR Preview
+      #   if: github.event_name == 'pull_request'
+      #   run: |
+      #     npm install -g firebase-tools
+      #     firebase hosting:channel:deploy pr-${{ github.event.number }} --json
+
+      # The previous approach using FIREBASE_SERVICE_ACCOUNT (commented out for reference)
+      # - name: Deploy PR Preview
+      #   if: github.event_name == 'pull_request'
+      #   uses: FirebaseExtended/action-hosting-deploy@v0
+      #   with:
+      #     repoToken: '${{ secrets.GITHUB_TOKEN }}'
+      #     firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
+      #     projectId: 'autonomy-heroes'
+      #     channelId: 'pr-${{ github.event.number }}'
