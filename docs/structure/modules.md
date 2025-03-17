@@ -1,5 +1,16 @@
 # Project Modules Overview
 
+**Summary:** A detailed breakdown of the Time Tracking System's monorepo structure, explaining the purpose, organization, and dependencies of each package including the common library, hours portal, admin portal, and cloud functions.
+
+## Document Information
+
+**Purpose:** To provide developers with a clear understanding of the project's module structure
+**Audience:** Developers and contributors to the codebase
+**Last Updated:** 2025-03-17
+**Maintainer:** Project Team
+
+---
+
 ## Overview
 
 This document outlines the module structure of the Time Tracking System, explaining the purpose and organization of each package in the monorepo.

@@ -1,5 +1,16 @@
 # Documentation Organization Guide
 
+**Summary:** A comprehensive guide establishing standards for documentation organization, content structure, maintenance processes, and best practices to ensure consistent, high-quality documentation across the Time Tracking System project.
+
+## Document Information
+
+**Purpose:** To establish consistent documentation standards across the project
+**Audience:** All contributors who create or update documentation
+**Last Updated:** 2025-03-17
+**Maintainer:** Project Team
+
+---
+
 ## Overview
 
 This guide establishes standards for organizing documentation within the Time Tracking System project. Following these guidelines will help maintain a clean, consistent, and easily navigable documentation structure.

@@ -35,6 +35,16 @@ function extractTitle(content) {
  * Generate a brief summary from the markdown content
  */
 function generateSummary(content) {
+  // First, check for our standardized summary format
+  const summaryMatch = content.match(/\*\*Summary:\*\*\s*(.*?)(?:\n\n|\n##)/s);
+  if (summaryMatch && summaryMatch[1]) {
+    const standardizedSummary = summaryMatch[1]
+      .replace(/\s+/g, ' ')  // Normalize whitespace
+      .trim();
+
+    return standardizedSummary.length > 100 ? `${standardizedSummary.substring(0, 97)}...` : standardizedSummary;
+  }
+  
   // Remove code blocks
   const withoutCode = content.replace(/```[\s\S]*?```/g, '');
   

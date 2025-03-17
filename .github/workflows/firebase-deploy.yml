@@ -1,3 +1,14 @@
+# Firebase Deployment Workflow
+# 
+# This is the recommended deployment approach for the Time Tracking System.
+# It uses Google Cloud Workload Identity Federation for secure, keyless authentication.
+# 
+# For detailed documentation on this deployment process, see:
+# docs/ci-cd-guide.md
+#
+# DO NOT create duplicate deployment workflows or manual deployment scripts.
+# All production deployments should go through this GitHub Actions workflow.
+
 name: Firebase Deployment
 
 on:
@@ -74,9 +85,16 @@ jobs:
       # Deploy PR previews
       - name: Deploy PR Preview
         if: github.event_name == 'pull_request'
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: '${{ secrets.GITHUB_TOKEN }}'
-          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
-          projectId: 'autonomy-heroes'
-          channelId: 'pr-${{ github.event.number }}'
+        run: |
+          npm install -g firebase-tools
+          firebase hosting:channel:deploy pr-${{ github.event.number }} --json
+
+      # The previous approach using FIREBASE_SERVICE_ACCOUNT (commented out for reference)
+      # - name: Deploy PR Preview
+      #   if: github.event_name == 'pull_request'
+      #   uses: FirebaseExtended/action-hosting-deploy@v0
+      #   with:
+      #     repoToken: '${{ secrets.GITHUB_TOKEN }}'
+      #     firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
+      #     projectId: 'autonomy-heroes'
+      #     channelId: 'pr-${{ github.event.number }}'

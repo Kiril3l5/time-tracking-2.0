@@ -1,5 +1,16 @@
 # Time Tracking 2.0 Project Setup
 
+**Summary:** A comprehensive setup guide for the Time Tracking 2.0 project, detailing the monorepo structure, development tools, workflows, configuration files, and troubleshooting steps.
+
+## Document Information
+
+**Purpose:** To help new developers understand and set up the project environment
+**Audience:** New developers and contributors to the project
+**Last Updated:** 2025-03-17
+**Maintainer:** Project Team
+
+---
+
 This document outlines the technical setup of the Time Tracking 2.0 project, including tools, configurations, development workflows, and deployment processes.
 
 ## Project Structure
@@ -72,42 +83,9 @@ We use PNPM as our package manager for its speed and efficiency with monorepos. 
 
 ## Deployment
 
-Deployment to Firebase happens automatically through GitHub Actions. The deployment targets two primary applications:
+For detailed information on deployment processes, CI/CD, and environments, please refer to the [CI/CD Guide](./ci-cd-guide.md).
 
-- **Admin Portal**: `admin-autonomyhero-2024.web.app` / `admin.autonomyheroes.com`
-- **Hours Portal**: `hours-autonomyhero-2024.web.app` / `hours.autonomyheroes.com`
-
-### Deployment Triggers
-
-- **Production**: Pushes to the `main` branch automatically deploy to production
-- **Preview**: Pull requests create isolated preview environments
-
-### Manual Deployment Commands
-
-For manual deployments from a local environment:
-
-```bash
-# Build all packages
-pnpm run build:all
-
-# Deploy everything
-pnpm run deploy:all
-
-# Deploy only admin app
-pnpm run deploy:admin
-
-# Deploy only hours app
-pnpm run deploy:hours
-
-# Deploy only Firestore rules
-pnpm run deploy:rules
-```
-
-### Security Considerations
-
-- **Workload Identity Federation**: Provides keyless authentication for CI/CD, following Google Cloud best practices
-- **Repository-specific Access**: The service account can only be used by GitHub Actions running in the specific repository
-- **PR Previews**: Pull request deployments create isolated preview channels for testing before merging
+> **Documentation Consolidation Notice**: As part of our effort to maintain a "Single Source of Truth" for all documentation, deployment information has been consolidated into the CI/CD Guide.
 
 ## Key Configuration Files
 
@@ -202,4 +180,4 @@ If you encounter issues with the project setup:
 1. Ensure you have the correct versions of Node.js and PNPM installed
 2. Try removing `node_modules` and reinstalling with `pnpm install`
 3. Check that all configuration files are properly set up
-4. Verify Firebase CLI authentication if performing manual deployments 
+4. For local development with Firebase, verify you're logged in with `firebase login`

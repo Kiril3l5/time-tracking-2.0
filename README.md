@@ -1,5 +1,16 @@
 # Time Tracking System
 
+**Summary:** A modern time tracking application featuring separate end-user and admin portals, built with TypeScript, React, and Firebase. This is the main repository entry point providing links to detailed documentation.
+
+## Document Information
+
+**Purpose:** To provide an overview of the project and guide users to specific documentation
+**Audience:** All project users, contributors, and stakeholders
+**Last Updated:** 2025-03-17
+**Maintainer:** Project Team
+
+---
+
 A modern, TypeScript-based time tracking application with two completely separate sites:
 - **/hours**: End-user facing application for time entry and tracking
 - **/admin**: Administration portal for managers and administrators
@@ -37,7 +48,7 @@ Detailed documentation is available in the `/docs` directory:
 ### Project Setup and Configuration
 - [**Project Setup**](./docs/project-setup.md) - Complete project setup guide with tools, configs, and workflows
 - [Environment Setup](./docs/env/setup.md) - Setting up environment variables
-- [Deployment Setup](./docs/deployment/setup.md) - GitHub Actions with Workload Identity Federation
+- [**CI/CD Guide**](./docs/ci-cd-guide.md) - Deployment process with GitHub Actions and Workload Identity Federation
 
 ### Architecture and Design
 - [Architecture Overview](./docs/architecture/project-overview.md) - Complete architecture and patterns
@@ -46,7 +57,7 @@ Detailed documentation is available in the `/docs` directory:
 
 ### Development Workflows
 - [Development Workflow](./docs/workflow/development.md) - Development processes and standards
-- [Development Guide](./docs/main_readme/development-deployment-guide.md) - Development workflow and legacy deployment
+- [Development Guide](./docs/main_readme/development-guide.md) - Development environment setup and workflows
 - [Documentation Guide](./docs/structure/documentation-guide.md) - Guidelines for maintaining documentation
 
 ### Technical Patterns

@@ -154,4 +154,4 @@ Types:
 
 ## Deployment Process
 
-See the [Development & Deployment Guide](../main_readme/development-deployment-guide.md) for detailed deployment instructions. 
+For deployment instructions, see the [CI/CD Guide](../ci-cd-guide.md). 

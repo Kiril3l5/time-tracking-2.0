@@ -1,5 +1,16 @@
 # TIME TRACKING SYSTEM - ARCHITECTURE 2.0
 
+**Summary:** A comprehensive architectural specification for the Time Tracking System, detailing the technical stack, project structure, domain models, and implementation patterns for both the hours portal and admin portal.
+
+## Document Information
+
+**Purpose:** To provide a complete architectural blueprint for developers and maintainers
+**Audience:** Developers, architects, and project stakeholders
+**Last Updated:** 2025-03-17
+**Maintainer:** Project Team
+
+---
+
 ## 1. OVERVIEW
 
 A modern, TypeScript-based time tracking application with two completely separate sites:
@@ -550,7 +561,7 @@ This architecture overview is complemented by the following detailed implementat
 | [Firebase Data Access Patterns](firebase-data-access-patterns.md) | Detailed patterns for accessing Firestore data, service layer implementation, and React Query integration | High |
 | [Firebase Integration Guide](firebase-integration-guide.md) | Comprehensive Firebase setup with type-safe configuration, authentication, Firestore access, and emulator integration | High |
 | [UI Component Library](ui-component-library.md) | Comprehensive component library with Tailwind implementation using #ff8d00 accent color and Roboto Condensed font | Medium |
-| [Development & Deployment Guide](development-deployment-guide.md) | Local development configuration, workflows, and deployment procedures | Medium |
+| [CI/CD Guide](../ci-cd-guide.md) | Local development configuration, workflows, and deployment procedures | Medium |
 | [Reporting System](reporting-system-guide.md) | Client-side report generation with data export capabilities and scalable architecture | Medium |
 
 ### User Flows & Business Logic
@@ -566,14 +577,14 @@ This architecture overview is complemented by the following detailed implementat
 | Document | Description | Priority |
 |----------|-------------|----------|
 | [Monitoring & Logging](monitoring-logging-guide.md) | Logging standards, monitoring setup, and alerting configuration | Low |
-| [Development & Deployment Guide](development-deployment-guide.md) | Comprehensive guide for development environment setup, workflows, and deployment procedures | Medium |
+| [CI/CD Guide](../ci-cd-guide.md) | Comprehensive guide for development environment setup, workflows, and deployment procedures | Medium |
 | **Performance Benchmarks** | Performance expectations, testing methodologies, and optimization techniques | Low |
 
 ### Development References
 
 | Document | Description | Priority |
 |----------|-------------|----------|
-| [Development & Deployment Guide](development-deployment-guide.md) | Local development configuration, emulator setup, testing environment, and deployment procedures | High |
+| [CI/CD Guide](../ci-cd-guide.md) | Local development configuration, emulator setup, testing environment, and deployment procedures | High |
 | **Contribution Guidelines** | Code standards, PR process, and review checklist | Medium |
 | **Troubleshooting Guide** | Common issues and their solutions | Low |
 

@@ -26,7 +26,7 @@ service cloud.firestore {
       let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
       return userData.role == 'manager' && 
              'assignedWorkers' in userData && 
-             userData.assignedWorkers.includes(workerId);
+             workerId in userData.assignedWorkers;
     }
     
     function getUserCompanyId() {
@@ -130,13 +130,25 @@ service cloud.firestore {
           let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
           return userData.assignedWorkers;
       }
+      
+      // Use the validation function for entry creation
+      function isValidTimeEntry(data) {
+        return data.keys().hasAll(['date', 'hours', 'userId', 'companyId', 'status']) &&
+               data.date is string &&
+               data.hours is number &&
+               data.hours >= 0 &&
+               data.hours <= 24 &&
+               data.userId is string &&
+               data.companyId is string &&
+               data.status in ['pending', 'approved', 'rejected'];
+      }
 
       allow read, list: if 
           request.auth != null && (
               isAdmin() ||
               (isManager() && 
                (resource == null || 
-                getUserAssignedWorkers().hasAny([resource.data.userId]))
+                resource.data.userId in getUserAssignedWorkers())
               ) ||
               (resource == null || resource.data.userId == request.auth.uid)
           );
@@ -144,13 +156,14 @@ service cloud.firestore {
       allow create: if
           request.auth != null &&
           request.resource.data.userId == request.auth.uid &&
-          request.resource.data.status == 'pending';
+          request.resource.data.status == 'pending' &&
+          isValidTimeEntry(request.resource.data);
 
       allow update: if
           request.auth != null && (
               isAdmin() ||
               (isManager() && 
-               getUserAssignedWorkers().hasAny([resource.data.userId])) ||
+               resource.data.userId in getUserAssignedWorkers()) ||
               (resource.data.userId == request.auth.uid && 
                resource.data.status == 'pending')
           );
@@ -189,93 +202,33 @@ service cloud.firestore {
     
     // === Invoices Collection ===
     match /invoices/{invoiceId} {
-  // For list queries
-  allow list: if isAuthenticatedUser() && (
-    isAdmin() || 
-    (isManager() && hasPermission('generateInvoices'))
-  );
-  
-  // For document reads
-  allow get: if isAuthenticatedUser() && (
-    isAdmin() || 
-    (isManager() && hasPermission('generateInvoices') && hasCompanyAccess(resource.data.companyId))
-  );
-  
-  allow create: if isAuthenticatedUser() && (
-    isAdmin() || 
-    (isManager() && 
-     hasPermission('generateInvoices') && 
-     hasCompanyAccess(request.resource.data.companyId))
-  );
-  
-  allow update: if isAuthenticatedUser() && (
-    isAdmin() ||
-    (isManager() && 
-     hasPermission('generateInvoices') && 
-     hasCompanyAccess(resource.data.companyId))
-  );
-  
-  allow delete: if isAdmin();
-}
-  
-
-    // === User Settings Collection ===
-    match /userSettings/{userId} {
-      allow read: if isAuthenticatedUser() && (
-        request.auth.uid == userId ||
-        isAdmin() ||
-        isManagerOf(userId)
+      // For list queries
+      allow list: if isAuthenticatedUser() && (
+        isAdmin() || 
+        (isManager() && hasPermission('generateInvoices'))
       );
       
-      allow write: if isAuthenticatedUser() && (
-        request.auth.uid == userId ||
-        isAdmin()
-      );
-    }
-
-    // === User Stats Collection ===
-    match /userStats/{userId} {
-      allow read: if isAuthenticatedUser() && (
-        request.auth.uid == userId ||
-        isAdmin() ||
-        isManagerOf(userId)
+      // For document reads
+      allow get: if isAuthenticatedUser() && (
+        isAdmin() || 
+        (isManager() && hasPermission('generateInvoices') && hasCompanyAccess(resource.data.companyId))
       );
       
-      allow write: if isAdmin();
+      allow create: if isAuthenticatedUser() && (
+        isAdmin() || 
+        (isManager() && 
+         hasPermission('generateInvoices') && 
+         hasCompanyAccess(request.resource.data.companyId))
+      );
+      
+      allow update: if isAuthenticatedUser() && (
+        isAdmin() ||
+        (isManager() && 
+         hasPermission('generateInvoices') && 
+         hasCompanyAccess(resource.data.companyId))
+      );
+      
+      allow delete: if isAdmin();
     }
-
-    // === Time Entries Collection ===
-    match /timeEntries/{entryId} {
-    function getUserAssignedWorkers() {
-        let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-        return userData.assignedWorkers;
-    }
-
-    allow read, list: if 
-        request.auth != null && (
-            isAdmin() ||
-            (isManager() && 
-             (resource == null || 
-              getUserAssignedWorkers().hasAny([resource.data.userId]))
-            ) ||
-            (resource == null || resource.data.userId == request.auth.uid)
-        );
-
-    allow create: if
-        request.auth != null &&
-        request.resource.data.userId == request.auth.uid &&
-        request.resource.data.status == 'pending';
-
-    allow update: if
-        request.auth != null && (
-            isAdmin() ||
-            (isManager() && 
-             getUserAssignedWorkers().hasAny([resource.data.userId])) ||
-            (resource.data.userId == request.auth.uid && 
-             resource.data.status == 'pending')
-        );
-
-    allow delete: if false;
-}
-}
+  }
 }

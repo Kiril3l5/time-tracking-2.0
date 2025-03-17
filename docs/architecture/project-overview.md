@@ -1,5 +1,16 @@
 # Time Tracking System Architecture Overview
 
+**Summary:** A detailed overview of the Time Tracking System architecture, including project structure, state management patterns, data fetching strategies, authentication flow, and deployment pipeline.
+
+## Document Information
+
+**Purpose:** To provide architectural guidance for developers working on the system
+**Audience:** Developers, architects, and technical leads
+**Last Updated:** 2025-03-17
+**Maintainer:** Project Team
+
+---
+
 > **Note:** This document provides a high-level overview of the current architecture implementation. For detailed module structure, see [Module Overview](../structure/modules.md). For the complete architecture blueprint, see [Architecture 2.0](../main_readme/PROJECT-2.0.md).
 
 This document provides a comprehensive overview of the Time Tracking System architecture, explaining how the project is organized and the key patterns implemented.

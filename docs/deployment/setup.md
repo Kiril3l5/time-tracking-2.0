@@ -1,6 +1,6 @@
 # Firebase Deployment Setup
 
-> **Note**: This document focuses specifically on the modern GitHub Actions setup with Workload Identity Federation. For general deployment workflows and processes, see also the [Development & Deployment Guide](../main_readme/development-deployment-guide.md).
+> **Note**: This document focuses specifically on the modern GitHub Actions setup with Workload Identity Federation. For general deployment workflows and processes, see the [CI/CD Guide](../ci-cd-guide.md).
 
 This document outlines the deployment setup for the Time Tracking System using Firebase Hosting and GitHub Actions with Workload Identity Federation.
 
