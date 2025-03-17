@@ -1,6 +1,6 @@
 {
   "firestore": {
-    "rules": "C:\\Users\\klgki\\Documents\\GitHub\\time-tracking-2.0\\packages\\common\\src\\firebase\\firestore.rules",
+    "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },
   "hosting": [
