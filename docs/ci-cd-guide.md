@@ -43,8 +43,10 @@ Currently, manual deployments are handled by pushing to the main branch. If you 
 For pull requests, the system will:
 1. Build a preview version of your changes
 2. Deploy it to a unique preview URL
-3. Add a comment to your PR with the preview URL
+3. Add a comment to your PR with the preview URL and a "View deployment" button
 4. Update the preview whenever you update the PR
+
+The PR preview deployment uses the same secure Workload Identity Federation authentication as the production deployment, but deploys to a temporary preview channel instead of the live site. Each PR gets its own unique preview URL to avoid conflicts.
 
 ## Environment Setup
 

@@ -66,9 +66,8 @@ jobs:
           # Use the script from package.json
           pnpm run build:all
       
-      # Authenticate with Google Cloud for main branch deployment
+      # Authenticate with Google Cloud for all deployments
       - name: Authenticate to Google Cloud
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: auth
         uses: google-github-actions/auth@v1
         with:
@@ -82,12 +81,26 @@ jobs:
           npm install -g firebase-tools
           firebase deploy --only hosting,firestore:rules
       
-      # Deploy PR previews
+      # Deploy PR previews using the Firebase Hosting GitHub Action
+      # This will add deployment info directly to the PR
       - name: Deploy PR Preview
         if: github.event_name == 'pull_request'
-        run: |
-          npm install -g firebase-tools
-          firebase hosting:channel:deploy pr-${{ github.event.number }} --json
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          # No need for firebaseServiceAccount when using workload identity federation
+          projectId: 'autonomy-heroes'
+          channelId: 'pr-${{ github.event.number }}'
+          # Use the credentials obtained from workload identity federation
+          entryPoint: './'
+          firebaseToolsVersion: '12.4.7'
+
+      # The old approach using direct Firebase CLI command (kept for reference)
+      # - name: Deploy PR Preview
+      #   if: github.event_name == 'pull_request'
+      #   run: |
+      #     npm install -g firebase-tools
+      #     firebase hosting:channel:deploy pr-${{ github.event.number }} --json
 
       # The previous approach using FIREBASE_SERVICE_ACCOUNT (commented out for reference)
       # - name: Deploy PR Preview
