@@ -33,17 +33,57 @@ jobs:
       - name: Install dependencies
         run: pnpm install
       
-      # Skip linting for now
-      # - name: Lint
-      #   run: pnpm run lint
+      # Debug step to check environment
+      - name: Debug Environment
+        run: |
+          echo "GitHub Repository: $GITHUB_REPOSITORY"
+          echo "GitHub Actor: $GITHUB_ACTOR"
+          echo "GitHub Ref: $GITHUB_REF"
+          node -v
+          npm -v
+          pnpm -v
       
-      # Skip tests for now
-      # - name: Test
-      #   run: pnpm run test
-      
-      # Create placeholder build files instead of actual build
+      # Create placeholder build files directly in the workflow
       - name: Create empty build directories
-        run: pnpm run create:empty-builds
+        run: |
+          # Create directories
+          mkdir -p packages/admin/dist
+          mkdir -p packages/hours/dist
+          
+          # Create index.html files
+          cat > packages/admin/dist/index.html << 'EOL'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Test Deployment - Admin</title>
+          </head>
+          <body>
+            <h1>Test Deployment - Admin Portal</h1>
+            <p>This is a temporary page for testing the CI/CD pipeline.</p>
+          </body>
+          </html>
+          EOL
+          
+          cat > packages/hours/dist/index.html << 'EOL'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Test Deployment - Hours</title>
+          </head>
+          <body>
+            <h1>Test Deployment - Hours Portal</h1>
+            <p>This is a temporary page for testing the CI/CD pipeline.</p>
+          </body>
+          </html>
+          EOL
+          
+          # List directories to verify
+          ls -la packages/admin/dist
+          ls -la packages/hours/dist
       
       # Authenticate with Google Cloud using Workload Identity Federation
       - name: Authenticate to Google Cloud
@@ -52,16 +92,31 @@ jobs:
         with:
           workload_identity_provider: 'projects/266526530869/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
           service_account: 'github-actions-sa@autonomy-heroes.iam.gserviceaccount.com'
+          token_format: 'access_token'
+      
+      # Debug step to check authentication
+      - name: Debug Authentication
+        run: |
+          echo "Authentication completed with token format: access_token"
+          echo "Testing gcloud command..."
+          gcloud projects list || echo "Gcloud command failed but continuing..."
       
       # Install Firebase CLI
       - name: Setup Firebase CLI
         run: npm install -g firebase-tools
       
-      # Deploy to test channel
+      # Deploy to test channel with verbose logging
       - name: Deploy to Test Channel
-        run: firebase hosting:channel:deploy github-test-${{ github.run_id }} --expires 1d
+        run: firebase hosting:channel:deploy github-test-${{ github.run_id }} --expires 1d --debug
       
       - name: Report Success
+        if: success()
         run: |
           echo "✅ Test deployment successful!"
-          echo "Test channel: github-test-${{ github.run_id }}" 
+          echo "Test channel: github-test-${{ github.run_id }}"
+      
+      - name: Report Failure
+        if: failure()
+        run: |
+          echo "❌ Deployment failed."
+          echo "Check the logs above for details." 
