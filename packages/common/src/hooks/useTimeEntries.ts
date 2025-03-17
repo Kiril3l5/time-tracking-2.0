@@ -1,12 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { createListQueryKey, createQueryKey } from '../lib/react-query';
 import { TimeEntry } from '../types/firestore';
-import { 
-  getTimeEntries, 
-  getTimeEntry, 
-  createTimeEntry as apiCreateTimeEntry, 
-  updateTimeEntry as apiUpdateTimeEntry, 
-  deleteTimeEntry as apiDeleteTimeEntry 
+import {
+  getTimeEntries,
+  getTimeEntry,
+  createTimeEntry as apiCreateTimeEntry,
+  updateTimeEntry as apiUpdateTimeEntry,
+  deleteTimeEntry as apiDeleteTimeEntry,
 } from '../services/api/time-entries';
 
 /**
@@ -14,7 +14,7 @@ import {
  */
 export function useTimeEntriesQuery(filters?: Record<string, unknown>) {
   const queryKey = createListQueryKey('timeEntries', filters);
-  
+
   return useQuery({
     queryKey,
     queryFn: () => getTimeEntries(filters),
@@ -26,7 +26,7 @@ export function useTimeEntriesQuery(filters?: Record<string, unknown>) {
  */
 export function useTimeEntryQuery(id: string) {
   const queryKey = createQueryKey('timeEntries', id);
-  
+
   return useQuery({
     queryKey,
     queryFn: () => getTimeEntry(id),
@@ -39,9 +39,9 @@ export function useTimeEntryQuery(id: string) {
  */
 export function useCreateTimeEntry() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: (data: Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt'>) => 
+    mutationFn: (data: Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt'>) =>
       apiCreateTimeEntry(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [['timeEntries', 'list']] });
@@ -54,11 +54,16 @@ export function useCreateTimeEntry() {
  */
 export function useUpdateTimeEntry() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt'>> }) => 
-      apiUpdateTimeEntry(id, data),
-    onSuccess: (updatedEntry) => {
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: Partial<Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt'>>;
+    }) => apiUpdateTimeEntry(id, data),
+    onSuccess: updatedEntry => {
       queryClient.invalidateQueries({ queryKey: createQueryKey('timeEntries', updatedEntry.id) });
       queryClient.invalidateQueries({ queryKey: [['timeEntries', 'list']] });
     },
@@ -70,12 +75,12 @@ export function useUpdateTimeEntry() {
  */
 export function useDeleteTimeEntry() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: ({ id, hardDelete = false }: { id: string, hardDelete?: boolean }) => 
+    mutationFn: ({ id, hardDelete = false }: { id: string; hardDelete?: boolean }) =>
       apiDeleteTimeEntry(id, hardDelete),
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: [['timeEntries', 'list']] });
     },
   });
-} 
+}

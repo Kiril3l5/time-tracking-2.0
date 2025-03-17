@@ -35,7 +35,7 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
     // Log the error to an error reporting service
     console.error('Error caught by ErrorBoundary:', error, errorInfo);
-    
+
     // Call the onError callback if provided
     if (this.props.onError) {
       this.props.onError(error, errorInfo);
@@ -48,14 +48,12 @@ export class ErrorBoundary extends Component<Props, State> {
       if (this.props.fallback) {
         return this.props.fallback;
       }
-      
+
       // Default fallback UI
       return (
         <div className="p-4 border border-red-300 rounded bg-red-50 text-red-700">
           <h2 className="text-lg font-semibold mb-2">Something went wrong</h2>
-          <p className="mb-4">
-            We're sorry, but an error occurred while rendering this component.
-          </p>
+          <p className="mb-4">We're sorry, but an error occurred while rendering this component.</p>
           <p className="text-sm font-mono bg-red-100 p-2 rounded">
             {this.state.error?.message || 'Unknown error'}
           </p>
@@ -72,4 +70,4 @@ export class ErrorBoundary extends Component<Props, State> {
     // If there's no error, render the children
     return this.props.children;
   }
-} 
+}

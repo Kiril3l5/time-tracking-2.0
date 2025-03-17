@@ -51,7 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       // This would actually call Firebase auth
       console.log('Login attempt with:', email, password);
-      
+
       // Mock successful login
       setUser({
         id: 'user-123',
@@ -59,7 +59,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         displayName: 'Test User',
         role: 'user',
       });
-      
+
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Unknown error'));
@@ -90,7 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       // This would actually call Firebase auth
       console.log('Register attempt with:', email, password, displayName);
-      
+
       // Mock successful registration
       setUser({
         id: 'user-123',
@@ -98,7 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         displayName,
         role: 'user',
       });
-      
+
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Unknown error'));
@@ -128,23 +128,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const timer = setTimeout(() => {
       setLoading(false);
     }, 1000);
-    
+
     return () => clearTimeout(timer);
   }, []);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        loading,
-        error,
-        login,
-        logout,
-        register,
-        resetPassword,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
-} 
+  // Create the provider value
+  const providerValue: AuthContextType = {
+    user,
+    loading,
+    error,
+    login,
+    logout,
+    register,
+    resetPassword,
+  };
+
+  // Return the provider component
+  return AuthContext.Provider({ value: providerValue, children });
+}

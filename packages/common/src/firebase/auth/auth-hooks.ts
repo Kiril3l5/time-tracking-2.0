@@ -13,7 +13,7 @@ export const useAuth = () => {
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthChange(async (authUser) => {
+    const unsubscribe = onAuthChange(async authUser => {
       setLoading(true);
       try {
         if (authUser) {

@@ -11,27 +11,27 @@ export const performance = getPerformance(app);
  */
 export function createPerformanceTrace(traceName: string) {
   const performanceTrace = trace(performance, traceName);
-  
+
   const startTrace = () => {
     performanceTrace.start();
     return performanceTrace;
   };
-  
+
   const stopTrace = () => {
     performanceTrace.stop();
     return performanceTrace;
   };
-  
+
   const putAttribute = (name: string, value: string) => {
     performanceTrace.putAttribute(name, value);
     return performanceTrace;
   };
-  
+
   const incrementMetric = (metricName: string, incrementBy = 1) => {
     performanceTrace.incrementMetric(metricName, incrementBy);
     return performanceTrace;
   };
-  
+
   return {
     startTrace,
     stopTrace,
@@ -51,10 +51,10 @@ export function measurePerformance<T extends (...args: any[]) => any>(
   return (...args: Parameters<T>): ReturnType<T> => {
     const perfTrace = createPerformanceTrace(`function_${functionName}`);
     perfTrace.startTrace();
-    
+
     try {
       const result = fn(...args);
-      
+
       // Handle promises
       if (result instanceof Promise) {
         return result
@@ -68,7 +68,7 @@ export function measurePerformance<T extends (...args: any[]) => any>(
             throw error;
           }) as ReturnType<T>;
       }
-      
+
       perfTrace.stopTrace();
       return result;
     } catch (error) {
@@ -86,4 +86,4 @@ export function useComponentPerformance(componentName: string) {
   // This would be implemented with useEffect and useRef
   // For now, just return the trace functions
   return createPerformanceTrace(`component_${componentName}`);
-} 
+}

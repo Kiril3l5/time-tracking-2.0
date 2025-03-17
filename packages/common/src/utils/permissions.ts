@@ -44,16 +44,16 @@ export function isManagerOf(manager: UserWithRole | null, workerId: string): boo
  */
 export function canViewTimeEntry(entry: TimeEntry, user: UserWithRole | null): boolean {
   if (!user || !entry) return false;
-  
+
   // Admin can view any entry
   if (isAdmin(user)) return true;
-  
+
   // User can view their own entries
   if (entry.userId === user.uid) return true;
-  
+
   // Manager can view entries from assigned workers
   if (isManager(user) && isManagerOf(user, entry.userId)) return true;
-  
+
   return false;
 }
 
@@ -62,7 +62,7 @@ export function canViewTimeEntry(entry: TimeEntry, user: UserWithRole | null): b
  */
 export function canCreateTimeEntry(userId: string, user: UserWithRole | null): boolean {
   if (!user) return false;
-  
+
   // Users can only create entries for themselves
   return userId === user.uid;
 }
@@ -72,15 +72,15 @@ export function canCreateTimeEntry(userId: string, user: UserWithRole | null): b
  */
 export function canEditTimeEntry(entry: TimeEntry, user: UserWithRole | null): boolean {
   if (!user || !entry) return false;
-  
+
   // Admin can edit any entry
   if (isAdmin(user)) return true;
-  
+
   // User can only edit their own pending entries
   if (entry.userId === user.uid) {
     return entry.status === 'pending';
   }
-  
+
   return false;
 }
 
@@ -89,15 +89,15 @@ export function canEditTimeEntry(entry: TimeEntry, user: UserWithRole | null): b
  */
 export function canApproveTimeEntry(entry: TimeEntry, user: UserWithRole | null): boolean {
   if (!user || !entry) return false;
-  
+
   // Admin can approve any entry
   if (isAdmin(user)) return true;
-  
+
   // Manager can approve entries from assigned workers
   if (isManager(user) && isManagerOf(user, entry.userId)) {
     return entry.status === 'pending';
   }
-  
+
   return false;
 }
 
@@ -106,15 +106,15 @@ export function canApproveTimeEntry(entry: TimeEntry, user: UserWithRole | null)
  */
 export function canDeleteTimeEntry(entry: TimeEntry, user: UserWithRole | null): boolean {
   if (!user || !entry) return false;
-  
+
   // Admin can delete any entry
   if (isAdmin(user)) return true;
-  
+
   // User can only delete their own pending entries
   if (entry.userId === user.uid) {
     return entry.status === 'pending';
   }
-  
+
   return false;
 }
 
@@ -124,7 +124,7 @@ export function canDeleteTimeEntry(entry: TimeEntry, user: UserWithRole | null):
  */
 export function canHardDeleteTimeEntry(user: UserWithRole | null): boolean {
   if (!user) return false;
-  
+
   // Only super-admin can hard delete
   return user.role === 'super-admin';
-} 
+}

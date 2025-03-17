@@ -30,7 +30,7 @@ export const timeEntriesApi = {
    * Create a new time entry
    */
   async create(
-    entry: Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'updatedBy'>, 
+    entry: Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'updatedBy'>,
     currentUser: User
   ): Promise<string> {
     // Validate user can only create entries for themselves
@@ -44,7 +44,7 @@ export const timeEntriesApi = {
       ...createMetadata(currentUser),
       ...updateMetadata(currentUser),
     });
-    
+
     return docRef.id;
   },
 
@@ -54,9 +54,9 @@ export const timeEntriesApi = {
   async getById(id: string): Promise<TimeEntry | null> {
     const docRef = doc(db, COLLECTION, id);
     const docSnap = await getDoc(docRef);
-    
+
     if (!docSnap.exists()) return null;
-    
+
     return {
       id: docSnap.id,
       ...docSnap.data(),
@@ -66,20 +66,16 @@ export const timeEntriesApi = {
   /**
    * Update a time entry
    */
-  async update(
-    id: string, 
-    data: Partial<TimeEntry>, 
-    currentUser: User
-  ): Promise<void> {
+  async update(id: string, data: Partial<TimeEntry>, currentUser: User): Promise<void> {
     const docRef = doc(db, COLLECTION, id);
     const docSnap = await getDoc(docRef);
-    
+
     if (!docSnap.exists()) {
       throw new Error('Time entry not found');
     }
-    
+
     const entry = docSnap.data() as TimeEntry;
-    
+
     // Security check: Only owner can update their entries unless user is manager/admin
     // Note: This is also enforced by Firestore rules, but we add it here for defense in depth
     if (entry.userId !== currentUser.uid) {
@@ -87,7 +83,7 @@ export const timeEntriesApi = {
       // For simplicity, we'll let the Firestore rules handle this check
       // Full implementation would verify manager/admin status here
     }
-    
+
     await updateDoc(docRef, {
       ...data,
       // Add metadata for security auditing
@@ -100,7 +96,7 @@ export const timeEntriesApi = {
    */
   async softDelete(id: string, currentUser: User): Promise<void> {
     const docRef = doc(db, COLLECTION, id);
-    
+
     await updateDoc(docRef, {
       isDeleted: true,
       // Add metadata for security auditing
@@ -134,14 +130,17 @@ export const timeEntriesApi = {
       where('isDeleted', '==', false),
       orderBy('date', 'asc'),
     ];
-    
+
     const q = query(collection(db, COLLECTION), ...constraints);
     const querySnapshot = await getDocs(q);
-    
-    return querySnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-    } as TimeEntry));
+
+    return querySnapshot.docs.map(
+      doc =>
+        ({
+          id: doc.id,
+          ...doc.data(),
+        }) as TimeEntry
+    );
   },
 
   /**
@@ -160,15 +159,18 @@ export const timeEntriesApi = {
       where('isDeleted', '==', false),
       orderBy('date', 'asc'),
     ];
-    
+
     const q = query(collection(db, COLLECTION), ...constraints);
-    
-    return onSnapshot(q, (snapshot) => {
-      const entries = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-      } as TimeEntry));
-      
+
+    return onSnapshot(q, snapshot => {
+      const entries = snapshot.docs.map(
+        doc =>
+          ({
+            id: doc.id,
+            ...doc.data(),
+          }) as TimeEntry
+      );
+
       callback(entries);
     });
   },
@@ -185,34 +187,30 @@ const timeEntriesCollection = collection(db, 'timeEntries');
 export async function getTimeEntries(filters?: Record<string, unknown>): Promise<TimeEntry[]> {
   try {
     let q = query(timeEntriesCollection, orderBy('date', 'desc'));
-    
+
     // Apply filters if provided
     if (filters) {
       if (filters.userId) {
         q = query(q, where('userId', '==', filters.userId));
       }
-      
+
       if (filters.companyId) {
         q = query(q, where('companyId', '==', filters.companyId));
       }
-      
+
       if (filters.status) {
         q = query(q, where('status', '==', filters.status));
       }
-      
+
       if (filters.startDate && filters.endDate) {
-        q = query(
-          q, 
-          where('date', '>=', filters.startDate), 
-          where('date', '<=', filters.endDate)
-        );
+        q = query(q, where('date', '>=', filters.startDate), where('date', '<=', filters.endDate));
       }
     }
-    
+
     const querySnapshot = await getDocs(q);
     const entries: TimeEntry[] = [];
-    
-    querySnapshot.forEach((doc) => {
+
+    querySnapshot.forEach(doc => {
       const data = doc.data();
       entries.push({
         id: doc.id,
@@ -222,7 +220,7 @@ export async function getTimeEntries(filters?: Record<string, unknown>): Promise
         approvedAt: data.approvedAt?.toDate?.()?.toISOString() || undefined,
       } as TimeEntry);
     });
-    
+
     return entries;
   } catch (error) {
     console.error('Error fetching time entries:', error);
@@ -237,11 +235,11 @@ export async function getTimeEntry(id: string): Promise<TimeEntry> {
   try {
     const docRef = doc(timeEntriesCollection, id);
     const docSnap = await getDoc(docRef);
-    
+
     if (!docSnap.exists()) {
       throw new Error(`Time entry with ID ${id} not found`);
     }
-    
+
     const data = docSnap.data();
     return {
       id: docSnap.id,
@@ -259,7 +257,9 @@ export async function getTimeEntry(id: string): Promise<TimeEntry> {
 /**
  * Create a new time entry
  */
-export async function createTimeEntry(data: Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt'>): Promise<TimeEntry> {
+export async function createTimeEntry(
+  data: Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt'>
+): Promise<TimeEntry> {
   try {
     const now = serverTimestamp();
     const docRef = await addDoc(timeEntriesCollection, {
@@ -267,7 +267,7 @@ export async function createTimeEntry(data: Omit<TimeEntry, 'id' | 'createdAt' |
       createdAt: now,
       updatedAt: now,
     });
-    
+
     // Get the created document to return
     return getTimeEntry(docRef.id);
   } catch (error) {
@@ -279,14 +279,17 @@ export async function createTimeEntry(data: Omit<TimeEntry, 'id' | 'createdAt' |
 /**
  * Update an existing time entry
  */
-export async function updateTimeEntry(id: string, data: Partial<Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt'>>): Promise<TimeEntry> {
+export async function updateTimeEntry(
+  id: string,
+  data: Partial<Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt'>>
+): Promise<TimeEntry> {
   try {
     const docRef = doc(timeEntriesCollection, id);
     await updateDoc(docRef, {
       ...data,
       updatedAt: serverTimestamp(),
     });
-    
+
     // Get the updated document to return
     return getTimeEntry(id);
   } catch (error) {
@@ -301,7 +304,7 @@ export async function updateTimeEntry(id: string, data: Partial<Omit<TimeEntry, 
 export async function deleteTimeEntry(id: string, hardDelete = false): Promise<void> {
   try {
     const docRef = doc(timeEntriesCollection, id);
-    
+
     if (hardDelete) {
       // Hard delete - remove from database
       await deleteDoc(docRef);
@@ -316,4 +319,4 @@ export async function deleteTimeEntry(id: string, hardDelete = false): Promise<v
     console.error(`Error deleting time entry ${id}:`, error);
     throw error;
   }
-} 
+}

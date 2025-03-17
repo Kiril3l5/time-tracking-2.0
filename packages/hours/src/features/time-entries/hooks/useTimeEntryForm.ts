@@ -32,12 +32,12 @@ export function useTimeEntryForm({ defaultValues, onSubmit }: UseTimeEntryFormPr
    */
   const updateTotalHours = () => {
     const { regularHours, overtimeHours, ptoHours, unpaidLeaveHours } = form.getValues();
-    const total = 
-      Number(regularHours || 0) + 
-      Number(overtimeHours || 0) + 
-      Number(ptoHours || 0) + 
+    const total =
+      Number(regularHours || 0) +
+      Number(overtimeHours || 0) +
+      Number(ptoHours || 0) +
       Number(unpaidLeaveHours || 0);
-    
+
     form.setValue('hours', total, { shouldValidate: true });
   };
 
@@ -46,7 +46,7 @@ export function useTimeEntryForm({ defaultValues, onSubmit }: UseTimeEntryFormPr
    */
   const handleTimeOffToggle = (isTimeOff: boolean) => {
     form.setValue('isTimeOff', isTimeOff, { shouldValidate: true });
-    
+
     if (isTimeOff) {
       // Reset regular and overtime hours for time off
       form.setValue('regularHours', 0, { shouldValidate: false });
@@ -57,7 +57,7 @@ export function useTimeEntryForm({ defaultValues, onSubmit }: UseTimeEntryFormPr
       form.setValue('unpaidLeaveHours', 0, { shouldValidate: false });
       form.setValue('timeOffType', undefined, { shouldValidate: true });
     }
-    
+
     updateTotalHours();
   };
 
@@ -68,4 +68,4 @@ export function useTimeEntryForm({ defaultValues, onSubmit }: UseTimeEntryFormPr
     handleTimeOffToggle,
     isTimeOff: form.watch('isTimeOff'),
   };
-} 
+}

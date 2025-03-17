@@ -28,10 +28,7 @@ export const queryClient = new QueryClient({
  * @param queryKey - The key for the query to prefetch
  * @param queryFn - The function that returns the data
  */
-export const prefetchQuery = async <T>(
-  queryKey: unknown[],
-  queryFn: () => Promise<T>
-) => {
+export const prefetchQuery = async <T>(queryKey: unknown[], queryFn: () => Promise<T>) => {
   try {
     await queryClient.prefetchQuery({
       queryKey,
@@ -64,4 +61,4 @@ export const createListQueryKey = (
   filters?: Record<string, unknown>
 ): unknown[] => {
   return filters ? [entity, 'list', filters] : [entity, 'list'];
-}; 
+};

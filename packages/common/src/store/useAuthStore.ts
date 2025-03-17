@@ -26,10 +26,10 @@ interface AuthState {
   profile: UserProfile | null;
   isLoading: boolean;
   error: Error | null;
-  
+
   // Authentication status
   isAuthenticated: boolean;
-  
+
   // Actions
   actions: {
     setUser: (user: User | null) => void;
@@ -56,47 +56,47 @@ const defaultState = {
  * Manages user authentication state
  */
 export const useAuthStore = create<AuthState>()(
-  immer((set) => ({
+  immer(set => ({
     // Initial state
     ...defaultState,
-    
+
     // Actions
     actions: {
-      setUser: (user) => 
-        set((state) => {
+      setUser: user =>
+        set(state => {
           state.user = user;
           state.isAuthenticated = !!user;
         }),
-      
-      setProfile: (profile) => 
-        set((state) => {
+
+      setProfile: profile =>
+        set(state => {
           state.profile = profile;
         }),
-      
-      setLoading: (isLoading) => 
-        set((state) => {
+
+      setLoading: isLoading =>
+        set(state => {
           state.isLoading = isLoading;
         }),
-      
-      setError: (error) => 
-        set((state) => {
+
+      setError: error =>
+        set(state => {
           state.error = error;
         }),
-      
-      reset: () => 
-        set(() => ({ ...defaultState, isLoading: false })),
+
+      reset: () => set(() => ({ ...defaultState, isLoading: false })),
     },
   }))
 );
 
 // Selector hooks for better performance
-export const useUser = () => useAuthStore((state) => state.user);
-export const useProfile = () => useAuthStore((state) => state.profile);
-export const useAuthStatus = () => useAuthStore((state) => ({
-  isAuthenticated: state.isAuthenticated,
-  isLoading: state.isLoading,
-  error: state.error,
-}));
+export const useUser = () => useAuthStore(state => state.user);
+export const useProfile = () => useAuthStore(state => state.profile);
+export const useAuthStatus = () =>
+  useAuthStore(state => ({
+    isAuthenticated: state.isAuthenticated,
+    isLoading: state.isLoading,
+    error: state.error,
+  }));
 
 // Role-based selectors
 export const useIsAdmin = () => {
@@ -115,4 +115,4 @@ export const useIsWorker = () => {
 };
 
 // Action hooks
-export const useAuthActions = () => useAuthStore((state) => state.actions); 
+export const useAuthActions = () => useAuthStore(state => state.actions);

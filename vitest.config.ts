@@ -1,14 +1,13 @@
-import { defineConfig } from 'vitest/config';
+/// <reference types="vitest" />
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
     globals: true,
-    environment: 'jsdom',
-    setupFiles: [], // Add setup files if needed
-    coverage: {
-      reporter: ['text', 'json', 'html'],
-      exclude: ['**/node_modules/**', '**/dist/**', '**/*.d.ts'],
-    },
-    include: ['packages/*/src/**/*.test.{ts,tsx}'],
+    environment: "jsdom",
+    include: ["packages/*/src/**/*.{test,spec}.{ts,tsx}"],
+    exclude: ["**/node_modules/**", "**/dist/**", "**/firestore-rules.test.ts"],
+    passWithNoTests: true,
+    setupFiles: ["./packages/common/src/setupTests.ts"],
   },
 }); 

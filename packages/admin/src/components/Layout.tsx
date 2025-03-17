@@ -16,10 +16,10 @@ export const Layout: React.FC = () => {
         <main className="flex-1 overflow-y-auto p-6">
           <Outlet />
         </main>
-        
+
         {/* Network status notification */}
         <NetworkStatus />
       </div>
     </div>
   );
-}; 
+};

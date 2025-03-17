@@ -5,9 +5,9 @@
   "main": "src/index.ts",
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test": "vitest run 'src/**/*.test.{ts,tsx}'",
+    "test:watch": "vitest 'src/**/*.test.{ts,tsx}'",
+    "test:coverage": "vitest run --coverage 'src/**/*.test.{ts,tsx}'",
     "test:rules": "firebase emulators:exec --only firestore \"vitest run tests/firestore-rules.test.ts\"",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build"

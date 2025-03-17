@@ -84,7 +84,7 @@ beforeAll(async () => {
   testEnv = await initializeTestEnvironment({
     projectId: 'time-tracking-test',
     firestore: {
-      rules: fs.readFileSync('src/firebase/firestore.rules', 'utf8'),
+      rules: fs.readFileSync('../../firestore.rules', 'utf8'),
       host: 'localhost',
       port: 8080
     }

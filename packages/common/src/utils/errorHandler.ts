@@ -28,7 +28,7 @@ export function logError(
   context: ErrorContext = {}
 ): void {
   const errorObj = typeof error === 'string' ? new Error(error) : error;
-  
+
   // Always log to console in development
   if (process.env.NODE_ENV !== 'production') {
     console.group(`[${severity.toUpperCase()}] Error Logged`);
@@ -36,7 +36,7 @@ export function logError(
     console.info('Context:', context);
     console.groupEnd();
   }
-  
+
   // In production, we could send this to an error tracking service
   if (process.env.NODE_ENV === 'production') {
     // Example integration with error tracking service (replace with actual implementation)
@@ -49,37 +49,27 @@ export function logError(
  */
 export function setupGlobalErrorHandlers(): void {
   // Handle all uncaught exceptions
-  window.addEventListener('error', (event) => {
-    logError(
-      event.error || new Error(event.message),
-      ErrorSeverity.FATAL,
-      {
-        action: 'global_uncaught_exception',
-        additionalData: {
-          fileName: event.filename,
-          lineNumber: event.lineno,
-          columnNumber: event.colno,
-        },
-      }
-    );
+  window.addEventListener('error', event => {
+    logError(event.error || new Error(event.message), ErrorSeverity.FATAL, {
+      action: 'global_uncaught_exception',
+      additionalData: {
+        fileName: event.filename,
+        lineNumber: event.lineno,
+        columnNumber: event.colno,
+      },
+    });
   });
-  
+
   // Handle all unhandled promise rejections
-  window.addEventListener('unhandledrejection', (event) => {
-    const error = event.reason instanceof Error 
-      ? event.reason 
-      : new Error(String(event.reason));
-    
-    logError(
-      error,
-      ErrorSeverity.ERROR,
-      {
-        action: 'unhandled_promise_rejection',
-        additionalData: {
-          reason: event.reason,
-        },
-      }
-    );
+  window.addEventListener('unhandledrejection', event => {
+    const error = event.reason instanceof Error ? event.reason : new Error(String(event.reason));
+
+    logError(error, ErrorSeverity.ERROR, {
+      action: 'unhandled_promise_rejection',
+      additionalData: {
+        reason: event.reason,
+      },
+    });
   });
 }
 
@@ -102,4 +92,4 @@ export function createAsyncErrorHandler<T extends (...args: any[]) => Promise<an
       throw error;
     }
   };
-} 
+}

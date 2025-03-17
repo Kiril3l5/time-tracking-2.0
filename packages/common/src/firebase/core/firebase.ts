@@ -59,6 +59,6 @@ if (import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATOR === 'true'
   connectAuthEmulator(auth, `http://${HOST}:${AUTH_PORT}`);
   connectFirestoreEmulator(db, HOST, FIRESTORE_PORT);
   connectFunctionsEmulator(functions, HOST, FUNCTIONS_PORT);
-  
+
   console.log('Using Firebase Emulators');
 }

@@ -1,8 +1,8 @@
 import type { Meta, StoryObj } from '@storybook/react';
 // Optional import for build environments without @storybook/test
 let userEvent = { click: async (element: any) => {} };
-let within = (element: any) => ({ 
-  getByRole: async (role: string, options: any) => element 
+let within = (element: any) => ({
+  getByRole: async (role: string, options: any) => element,
 });
 
 try {

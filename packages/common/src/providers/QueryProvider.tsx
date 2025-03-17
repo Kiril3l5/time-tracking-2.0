@@ -11,9 +11,5 @@ interface QueryProviderProps {
  * @param children - React components that will have access to React Query
  */
 export function QueryProvider({ children }: QueryProviderProps) {
-  return (
-    <QueryClientProvider client={queryClient}>
-      {children}
-    </QueryClientProvider>
-  );
-} 
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+}

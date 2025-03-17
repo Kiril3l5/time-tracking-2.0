@@ -30,10 +30,10 @@ export function createMetadata(user: User | null): CreationMetadata {
   if (!user) {
     throw new Error('User must be authenticated to create metadata');
   }
-  
+
   return {
     createdAt: new Date().toISOString(),
-    createdBy: user.uid
+    createdBy: user.uid,
   };
 }
 
@@ -46,10 +46,10 @@ export function updateMetadata(user: User | null): UpdateMetadata {
   if (!user) {
     throw new Error('User must be authenticated to update metadata');
   }
-  
+
   return {
     updatedAt: new Date().toISOString(),
-    updatedBy: user.uid
+    updatedBy: user.uid,
   };
 }
 
@@ -61,6 +61,6 @@ export function updateMetadata(user: User | null): UpdateMetadata {
 export function fullMetadata(user: User | null): DocumentMetadata {
   return {
     ...createMetadata(user),
-    ...updateMetadata(user)
+    ...updateMetadata(user),
   };
-} 
+}

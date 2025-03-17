@@ -15,9 +15,9 @@ export const Layout: React.FC = () => {
         <Outlet />
       </main>
       <Footer />
-      
+
       {/* Network status notification */}
       <NetworkStatus />
     </div>
   );
-}; 
+};

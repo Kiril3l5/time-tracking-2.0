@@ -12,10 +12,7 @@ export * from './hooks';
 
 // Re-export specific Firebase types and functions that will be commonly used
 // For types, use export type to satisfy isolatedModules
-export type {
-  User as FirebaseUser,
-  UserCredential,
-} from 'firebase/auth';
+export type { User as FirebaseUser, UserCredential } from 'firebase/auth';
 
 export {
   signInWithEmailAndPassword,
