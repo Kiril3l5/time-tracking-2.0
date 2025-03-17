@@ -1,13 +1,6 @@
-# Firebase Deployment Workflow
-# 
-# This is the recommended deployment approach for the Time Tracking System.
-# It uses Google Cloud Workload Identity Federation for secure, keyless authentication.
-# 
-# For detailed documentation on this deployment process, see:
-# docs/ci-cd-guide.md
-#
-# DO NOT create duplicate deployment workflows or manual deployment scripts.
-# All production deployments should go through this GitHub Actions workflow.
+# Firebase Deployment Workflow using Workload Identity Federation
+# This workflow uses Google Cloud Workload Identity Federation (recommended and secure approach)
+# No service account keys or tokens are needed
 
 name: Firebase Deployment
 
@@ -23,7 +16,7 @@ jobs:
     permissions:
       contents: 'read'
       id-token: 'write'
-      pull-requests: 'write'  # Add permission to write to PRs for comments
+      pull-requests: 'write'
     
     steps:
       - name: Checkout code
@@ -50,24 +43,12 @@ jobs:
       - name: Test
         run: pnpm run test
       
-      - name: Project Cleanup
-        run: |
-          echo "Performing project cleanup before build..."
-          # Set CI environment variable to ensure proper cleanup behavior
-          export CI=true
-          # On CI we use the node script which will select the right platform script
-          pnpm run cleanup
-          echo "Cleanup completed."
-      
       - name: Build packages
         run: |
-          echo "Building packages..."
-          # Set NODE_ENV for proper DEV variable
           export NODE_ENV=production
-          # Use the script from package.json
           pnpm run build:all
       
-      # Authenticate with Google Cloud for all deployments
+      # Authenticate with Google Cloud using Workload Identity Federation
       - name: Authenticate to Google Cloud
         id: auth
         uses: google-github-actions/auth@v1
@@ -75,26 +56,30 @@ jobs:
           workload_identity_provider: 'projects/266526530869/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
           service_account: 'github-actions-sa@autonomy-heroes.iam.gserviceaccount.com'
       
-      # Deploy to production when pushing to main
-      - name: Deploy to Firebase Hosting and Rules
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          npm install -g firebase-tools
-          firebase deploy --only hosting,firestore:rules
+      # Install Firebase CLI
+      - name: Setup Firebase CLI
+        run: npm install -g firebase-tools
       
-      # Deploy PR previews using Firebase CLI directly
+      # Deploy to production when pushing to main
+      - name: Deploy to Production
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: firebase deploy --only hosting,firestore:rules
+      
+      # Deploy PR preview and comment on PR
       - name: Deploy PR Preview
         if: github.event_name == 'pull_request'
         run: |
-          npm install -g firebase-tools
-          PREVIEW_URL=$(firebase hosting:channel:deploy pr-${{ github.event.number }} --json | jq -r '.result.url')
+          # Deploy to preview channel
+          echo "Deploying to preview channel for PR #${{ github.event.pull_request.number }}..."
+          PREVIEW_OUTPUT=$(firebase hosting:channel:deploy pr-${{ github.event.pull_request.number }} --json)
+          
+          # Extract the URL and create a comment
+          echo "$PREVIEW_OUTPUT" > preview_output.json
+          PREVIEW_URL=$(cat preview_output.json | jq -r '.result.url')
           echo "Preview URL: $PREVIEW_URL"
           
-          # Add a comment to the PR with the preview URL
-          PR_COMMENT="🚀 Preview deployment is ready! Visit: $PREVIEW_URL"
-          
-          # Use GitHub CLI to add a comment to the PR
-          gh pr comment ${{ github.event.number }} --body "$PR_COMMENT"
+          # Add comment to PR
+          gh pr comment ${{ github.event.pull_request.number }} --body "🚀 Preview deployment ready! Visit: $PREVIEW_URL"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
