@@ -24,34 +24,50 @@ Key technologies:
 - **Language**: TypeScript (strict mode)
 - **Framework**: React 18
 - **Build Tool**: Vite
-- **State Management**: Redux Toolkit + React Query
+- **State Management**: Zustand + React Query
 - **UI**: Tailwind CSS
 - **Backend**: Firebase (Auth, Firestore, Functions)
+- **Testing**: Vitest + React Testing Library
+- **Package Manager**: PNPM with workspaces
 
 ## Documentation
 
 Detailed documentation is available in the `/docs` directory:
 
-- [Architecture Overview](./docs/architecture/project-overview.md) - Complete architecture and patterns
+### Project Setup and Configuration
+- [**Project Setup**](./docs/project-setup.md) - Complete project setup guide with tools, configs, and workflows
 - [Environment Setup](./docs/env/setup.md) - Setting up environment variables
+- [Deployment Setup](./docs/deployment/setup.md) - GitHub Actions with Workload Identity Federation
+
+### Architecture and Design
+- [Architecture Overview](./docs/architecture/project-overview.md) - Complete architecture and patterns
 - [Project Structure](./docs/structure/modules.md) - Module organization and dependencies
+- [Project Architecture](./docs/main_readme/PROJECT-2.0.md) - Complete architecture overview
+
+### Development Workflows
 - [Development Workflow](./docs/workflow/development.md) - Development processes and standards
+- [Development Guide](./docs/main_readme/development-deployment-guide.md) - Development workflow and legacy deployment
+- [Documentation Guide](./docs/structure/documentation-guide.md) - Guidelines for maintaining documentation
+
+### Technical Patterns
 - [Testing Strategy](./docs/testing/overview.md) - Testing approach and best practices
 - [State Management](./docs/patterns/state-management.md) - Zustand and React Query strategy
 - [Data Fetching](./docs/patterns/data-fetching.md) - Data fetching patterns and standards
 - [Responsive Design](./docs/patterns/responsive-design.md) - Mobile-first responsive approach
-- [Development Guide](./docs/main_readme/development-deployment-guide.md) - Development workflow and legacy deployment
-- [Deployment Setup](./docs/deployment/setup.md) - GitHub Actions with Workload Identity Federation
+- [Optimistic Updates](./docs/patterns/optimistic-updates.md) - Optimistic UI update patterns
+- [State Management Guide](./docs/main_readme/state-management-guide.md) - State management patterns
+
+### Firebase Integration
+- [Firebase Integration](./docs/main_readme/firebase-integration-guide.md) - Firebase configuration
+- [Firebase Data Access](./docs/main_readme/firebase-data-access-patterns.md) - Data access patterns
 - [Firestore Security](./docs/security/firestore-rules.md) - Security rules review and recommendations
 - [Security Implementation](./docs/main_readme/security-implementation-guide.md) - Security implementation details
-- [Network Connectivity](./docs/network/connectivity.md) - Network requirements and offline handling
-- [Project Architecture](./docs/main_readme/PROJECT-2.0.md) - Complete architecture overview
-- [Firebase Integration](./docs/main_readme/firebase-integration-guide.md) - Firebase configuration
-- [State Management](./docs/main_readme/state-management-guide.md) - State management patterns
-- [Firebase Data Access](./docs/main_readme/firebase-data-access-patterns.md) - Data access patterns
+
+### UI and Network
 - [UI Components](./docs/main_readme/ui-component-library.md) - UI component library documentation
-- [Optimistic Updates](./docs/patterns/optimistic-updates.md) - Optimistic UI update patterns
-- [Documentation Guide](./docs/structure/documentation-guide.md) - Guidelines for maintaining documentation
+- [Network Connectivity](./docs/network/connectivity.md) - Network requirements and offline handling
+
+### Maintenance
 - [Project Cleanup](./docs/project-cleanup-summary.md) - Project organization and maintenance
 
 ## Project Maintenance
@@ -111,7 +127,7 @@ cd packages/hours
 pnpm dev
 ```
 
-See [Environment Setup](./docs/env/setup.md) for detailed instructions.
+See [Project Setup](./docs/project-setup.md) and [Environment Setup](./docs/env/setup.md) for detailed instructions.
 
 ## License
 

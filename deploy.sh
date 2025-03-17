@@ -45,6 +45,33 @@ fi
 
 echo -e "\n${BLUE}🚀 Starting deployment process...${NC}\n"
 
+# Clean up the project first
+show_progress "Running project cleanup..."
+export CI=true  # Set CI environment variable to ensure proper cleanup behavior
+pnpm run cleanup > cleanup_log.txt 2>&1
+CLEANUP_STATUS=$?
+if [ $CLEANUP_STATUS -ne 0 ]; then
+  ERROR_MSG=$(cat cleanup_log.txt)
+  rm cleanup_log.txt
+  show_status $CLEANUP_STATUS "Failed to clean up project" "$ERROR_MSG"
+else
+  rm -f cleanup_log.txt
+  show_status $CLEANUP_STATUS "Project cleaned up successfully" ""
+fi
+
+# Run build process
+show_progress "Building project..."
+NODE_ENV=production pnpm run build:all > build_log.txt 2>&1
+BUILD_STATUS=$?
+if [ $BUILD_STATUS -ne 0 ]; then
+  ERROR_MSG=$(cat build_log.txt)
+  rm build_log.txt
+  show_status $BUILD_STATUS "Failed to build project" "$ERROR_MSG"
+else
+  rm -f build_log.txt
+  show_status $BUILD_STATUS "Project built successfully" ""
+fi
+
 # Add all changes
 show_progress "Adding files to staging area..."
 git add .
@@ -68,5 +95,18 @@ else
   show_status $PUSH_STATUS "Changes pushed to remote repository" ""
 fi
 
+# Run firebase deployment
+show_progress "Deploying to Firebase..."
+firebase deploy > firebase_deploy_log.txt 2>&1
+DEPLOY_STATUS=$?
+if [ $DEPLOY_STATUS -ne 0 ]; then
+  ERROR_MSG=$(cat firebase_deploy_log.txt)
+  rm firebase_deploy_log.txt
+  show_status $DEPLOY_STATUS "Failed to deploy to Firebase" "$ERROR_MSG"
+else
+  rm -f firebase_deploy_log.txt
+  show_status $DEPLOY_STATUS "Deployed to Firebase successfully" ""
+fi
+
 echo -e "${GREEN}🎉 Deployment completed successfully!${NC}"
-echo -e "${BLUE}CI/CD pipeline has been triggered on GitHub.${NC}" 
+echo -e "${BLUE}The application has been deployed and is now live.${NC}" 

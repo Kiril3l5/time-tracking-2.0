@@ -36,7 +36,7 @@ export const Page: React.FC = () => {
         <ul>
           <li>
             Use a higher-level connected component. Storybook helps you compose such data from the
-            "args" of child component stories
+            &quot;args&quot; of child component stories
           </li>
           <li>
             Assemble data in the page component from your services. You can mock these services out
@@ -67,6 +67,11 @@ export const Page: React.FC = () => {
           </svg>
           Viewports addon in the toolbar
         </div>
+        <p>
+          The Time Tracking System is a modern web application for tracking work hours and managing
+          time entries. This component library provides a consistent design system for both the
+          &quot;Admin&quot; and &quot;Hours&quot; portals.
+        </p>
       </section>
     </article>
   );

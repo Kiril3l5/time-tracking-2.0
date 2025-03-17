@@ -1,4 +1,5 @@
 import { TimeEntry } from '../types/TimeEntry';
+import { logInfo } from '../utils/logging';
 
 /**
  * Time Entries API - Abstracts Firebase implementation details
@@ -10,7 +11,7 @@ export const timeEntriesApi = {
    */
   async create(entry: Omit<TimeEntry, 'id' | 'createdAt' | 'updatedAt'>): Promise<string> {
     // Temporary implementation
-    console.log('Creating time entry', entry);
+    logInfo('Creating time entry', entry);
     return 'temp-' + Date.now();
   },
 
@@ -19,7 +20,7 @@ export const timeEntriesApi = {
    */
   async getById(id: string): Promise<TimeEntry | null> {
     // Temporary implementation
-    console.log('Getting time entry', id);
+    logInfo('Getting time entry', id);
     return null;
   },
 
@@ -28,7 +29,7 @@ export const timeEntriesApi = {
    */
   async update(id: string, data: Partial<TimeEntry>): Promise<void> {
     // Temporary implementation
-    console.log('Updating time entry', id, data);
+    logInfo('Updating time entry', { id, data });
   },
 
   /**
@@ -40,7 +41,7 @@ export const timeEntriesApi = {
     endDate: string
   ): Promise<TimeEntry[]> {
     // Temporary implementation
-    console.log('Getting time entries', userId, startDate, endDate);
+    logInfo('Getting time entries', { userId, startDate, endDate });
     return [];
   },
 
@@ -51,10 +52,10 @@ export const timeEntriesApi = {
     userId: string,
     startDate: string,
     endDate: string,
-    callback: (entries: TimeEntry[]) => void
+    _callback: (entries: TimeEntry[]) => void
   ): () => void {
     // Temporary implementation
-    console.log('Subscribing to time entries', userId, startDate, endDate);
+    logInfo('Subscribing to time entries', { userId, startDate, endDate });
     return () => {};
   },
 };

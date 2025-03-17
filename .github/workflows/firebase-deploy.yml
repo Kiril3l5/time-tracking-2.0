@@ -38,6 +38,15 @@ jobs:
       - name: Test
         run: pnpm run test
       
+      - name: Project Cleanup
+        run: |
+          echo "Performing project cleanup before build..."
+          # Set CI environment variable to ensure proper cleanup behavior
+          export CI=true
+          # On CI we use the node script which will select the right platform script
+          pnpm run cleanup
+          echo "Cleanup completed."
+      
       - name: Build packages
         run: |
           echo "Building packages..."

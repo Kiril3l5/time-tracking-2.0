@@ -39,5 +39,5 @@ module.exports = {
         version: 'detect',
       },
     },
-    ignorePatterns: ['dist', 'node_modules', 'coverage', '.firebase', '.storybook'],
+    ignorePatterns: ['dist', 'node_modules', 'coverage', '.firebase', '.storybook', '**/*.css'],
   };

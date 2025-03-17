@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { timeEntriesApi } from '../../../api/time-entries';
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useAuth } from '../../../hooks/useAuth';
 import { TimeEntry } from '../../../types/TimeEntry';
 
@@ -12,8 +12,11 @@ export function useTimeEntriesForDateRange(startDate: string, endDate: string) {
   const userId = user?.id;
   const queryClient = useQueryClient();
 
-  // Query key for this data
-  const queryKey = ['timeEntries', userId, startDate, endDate];
+  // Query key for this data - wrapped in useMemo to avoid dependency array changes
+  const queryKey = useMemo(
+    () => ['timeEntries', userId, startDate, endDate],
+    [userId, startDate, endDate]
+  );
 
   // Set up the query
   const query = useQuery({

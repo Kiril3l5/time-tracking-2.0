@@ -361,6 +361,9 @@ jobs:
 For situations requiring manual deployment:
 
 ```bash
+# Clean the project (ensures a fresh build environment)
+pnpm project:cleanup
+
 # Build the project
 pnpm build
 
@@ -489,15 +492,20 @@ firebase hosting:clone previous-version:live hours
    - Deploy to staging first, verify, then to production
    - Use feature flags for gradual feature rollout
 
-2. **Deployment Windows**
+2. **Clean Before Building**
+   - Always run cleanup before building to ensure a fresh environment
+   - The project:cleanup script removes old artifacts and temporary files
+   - This prevents stale files from affecting the build or deployment
+
+3. **Deployment Windows**
    - Schedule deployments during low-traffic periods
    - Avoid deploying on Fridays or before holidays
 
-3. **Monitoring During Deployment**
+4. **Monitoring During Deployment**
    - Monitor error rates during and after deployment
    - Have team members available for emergency rollbacks
 
-4. **Firestore Security Rules**
+5. **Firestore Security Rules**
    - Test security rules before deployment
    - Verify access patterns in the emulator
    - Validate rules with security tests

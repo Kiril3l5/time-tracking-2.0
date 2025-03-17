@@ -1,4 +1,5 @@
 import { useState, useEffect, createContext, useContext } from 'react';
+import { logInfo } from '../utils/logging';
 
 // Define the shape of the user object
 interface User {
@@ -46,11 +47,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<Error | null>(null);
 
   // Mock login function
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, _password: string) => {
     setLoading(true);
     try {
       // This would actually call Firebase auth
-      console.log('Login attempt with:', email, password);
+      logInfo('Login attempt with:', { email });
 
       // Mock successful login
       setUser({
@@ -74,7 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     try {
       // This would actually call Firebase auth
-      console.log('Logout attempt');
+      logInfo('Logout attempt');
       setUser(null);
       setError(null);
     } catch (err) {
@@ -89,7 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     try {
       // This would actually call Firebase auth
-      console.log('Register attempt with:', email, password, displayName);
+      logInfo('Register attempt with:', { email, password: '********', displayName });
 
       // Mock successful registration
       setUser({
@@ -113,7 +114,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     try {
       // This would actually call Firebase auth
-      console.log('Reset password attempt for:', email);
+      logInfo('Reset password attempt for:', { email });
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Unknown error'));
