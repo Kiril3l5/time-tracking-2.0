@@ -32,6 +32,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install
       
+      - name: Fix TypeScript configuration for tests
+        run: |
+          echo "Updating tsconfig.json to include test files..."
+          sed -i 's/"exclude": \[\s*"node_modules",\s*"\*\*\/\*\.spec\.ts",\s*"\*\*\/\*\.test\.ts",\s*"\*\*\/\*\.test\.tsx"\s*\]/"exclude": \["node_modules"\]/' tsconfig.json
+          sed -i 's/"include": \[\s*"packages\/\*\/src\/\*\*\/\*\.ts",\s*"packages\/\*\/src\/\*\*\/\*\.tsx"\s*\]/"include": \["packages\/\*\/src\/\*\*\/\*\.ts","packages\/\*\/src\/\*\*\/\*\.tsx","packages\/\*\/src\/\*\*\/\*\.test\.ts","packages\/\*\/src\/\*\*\/\*\.test\.tsx","packages\/\*\/tests\/\*\*\/\*\.ts","packages\/\*\/tests\/\*\*\/\*\.tsx","packages\/\*\/src\/tests\/\*\*\/\*\.ts","packages\/\*\/src\/tests\/\*\*\/\*\.tsx"\]/' tsconfig.json
+          cat tsconfig.json
+      
       - name: Lint
         run: pnpm run lint
       

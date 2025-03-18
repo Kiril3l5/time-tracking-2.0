@@ -1,0 +1,9 @@
+node_modules
+dist
+build
+coverage
+.firebase
+*.d.ts
+*.js.map
+**/*.js.map
+**/vite-env.d.ts 
