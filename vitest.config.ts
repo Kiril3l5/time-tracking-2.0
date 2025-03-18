@@ -43,10 +43,10 @@ export default defineConfig({
       reportsDirectory: './coverage'
     },
     deps: {
-      // Fix for deprecated deps.inline - use the optimizer.web.include property instead
+      // Fix for the n.endsWith issue - use string arrays instead of RegExp
       optimizer: {
         web: {
-          include: [/^react(-dom)?$/, 'react/jsx-runtime', 'react/jsx-dev-runtime']
+          include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime']
         }
       }
     }

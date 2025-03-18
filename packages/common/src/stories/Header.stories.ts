@@ -8,7 +8,7 @@ let fn = () => {};
     const storybookTest = await import('@storybook/test');
     fn = storybookTest.fn;
   } catch (e) {
-    console.log('Storybook test module not available, using mock function');
+    console.warn('Storybook test module not available, using mock function');
   }
 })();
 

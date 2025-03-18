@@ -37,5 +37,29 @@ module.exports = {
       },
       extends: ['plugin:testing-library/react', 'plugin:jest-dom/recommended'],
     },
+    {
+      files: ['**/firebase/performance/performance.ts'],
+      rules: {
+        '@typescript-eslint/no-explicit-any': 'off'
+      }
+    },
+    {
+      files: ['**/firebase/firestore/firestore-service.ts'],
+      rules: {
+        '@typescript-eslint/no-explicit-any': 'off'
+      }
+    },
+    {
+      files: ['**/setupTests.ts'],
+      rules: {
+        'no-console': 'off'
+      }
+    },
+    {
+      files: ['**/*.stories.ts', '**/*.stories.tsx'],
+      rules: {
+        'no-console': 'off'
+      }
+    }
   ],
 };

@@ -182,6 +182,39 @@ We created a dedicated script to fix module resolution issues that can occur wit
    pnpm run build:hours
    ```
 
+## Validating Changes Before Pushing
+
+To avoid CI pipeline failures after pushing to GitHub, we've created a comprehensive preview script that validates your changes against all CI checks:
+
+1. Run the preview validation script before pushing:
+   ```bash
+   pnpm run preview
+   ```
+
+2. This script will:
+   - Fix module syntax issues
+   - Check test dependencies
+   - Run linting checks
+   - Perform TypeScript type checking
+   - Run all unit tests
+   - Build all packages in sequence
+   - Provide detailed output for each step
+   - Give clear pass/fail indication
+
+3. Only push to GitHub when all checks pass to avoid build failures
+
+If you prefer to run individual checks:
+   ```bash
+   # Run only linting
+   pnpm run lint
+   
+   # Run only tests
+   pnpm run test
+   
+   # Run only build
+   pnpm run build:all
+   ```
+
 ## Next Steps
 
 1. Fix the Vite build issues:

@@ -42,7 +42,9 @@
     "test:watch": "pnpm run fix:test-deps && vitest",
     "test:coverage": "pnpm run fix:test-deps && vitest run --coverage",
     "precommit": "pnpm run project:audit && pnpm run lint && pnpm run test",
-    "edit:fix-typescript": "node scripts/fix-typescript.js"
+    "edit:fix-typescript": "node scripts/fix-typescript.js",
+    "preview:all": "pnpm run fix:all && pnpm run lint && pnpm run test && pnpm run build:all",
+    "preview": "node scripts/preview-check.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",

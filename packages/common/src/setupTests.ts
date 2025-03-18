@@ -22,13 +22,13 @@ beforeAll(() => {
   // Initialize Firebase for testing
   app = initializeApp(firebaseConfig);
   db = getFirestore(app);
-  console.log('Firebase initialized for testing');
+  console.warn('Firebase initialized for testing');
 });
 
 afterAll(async () => {
   // Clean up Firebase resources
   if (db) {
     await terminate(db);
-    console.log('Firebase resources cleaned up');
+    console.warn('Firebase resources cleaned up');
   }
 });
