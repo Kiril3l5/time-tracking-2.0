@@ -22,6 +22,7 @@ This document outlines the modernization process for the Time Tracking 2.0 appli
 - [x] Add `.eslintignore` file for better linting performance
 - [x] Fix cleanup script for better CI/CD compatibility
 - [x] Create comprehensive TypeScript and linting guidelines
+- [x] Fix React JSX runtime issues in test environment
 
 ## Current Status
 
@@ -38,11 +39,10 @@ The project has been significantly modernized with:
 - Clean TypeScript compilation with no errors
 - Build fix script for package resolution issues
 - Documented TypeScript and linting guidelines for AI-assisted development
+- Reliable test environment with JSX runtime support
 
 ## Remaining Tasks
 
-- [ ] Fix DOM testing imports (still has some Jest-DOM compatibility issues)
-- [ ] Run the build fix script to resolve immer/zustand resolution issues
 - [ ] Update remaining class components to function components
 - [ ] Ensure all components follow best practices
 
@@ -105,6 +105,24 @@ Running `pnpm run modernize:components` generated a report indicating:
 
 **Problem**: TailwindCSS v4 requires @tailwindcss/postcss instead of direct usage
 **Solution**: Updated PostCSS configuration to use the proper plugin
+
+### React JSX Runtime Missing
+
+**Problem**: Tests failing with error: "ENOENT: no such file or directory, open 'node_modules/react/jsx-runtime.js'"
+**Solution**: Added a `fix:test-deps` script that:
+1. Detects missing JSX runtime files
+2. Reinstalls React if needed
+3. Creates a fallback JSX runtime from jsx-dev-runtime.js if available
+4. Updates Vitest configuration to properly resolve React JSX runtime
+
+To fix this issue:
+```bash
+# Run the fix script directly
+pnpm run fix:test-deps
+
+# Alternatively, the test commands now automatically run this fix
+pnpm test
+```
 
 ### Immer/Zustand Build Issues
 
