@@ -17,6 +17,8 @@ import {
   onSnapshot,
   QuerySnapshot,
   where,
+  SnapshotOptions,
+  DocumentSnapshot
 } from 'firebase/firestore';
 import { db } from '../core/firebase';
 import { TimeEntry, User, Company, UserStats } from '../../types/firestore';
@@ -32,35 +34,51 @@ function createCollection<T extends DocumentData>(
   return collection(db, collectionName).withConverter(converter);
 }
 
+// Define interface for objects that can contain Date fields
+interface DateFields {
+  [key: string]: any;
+}
+
 // Date converter to handle Firestore timestamps
 const dateConverter = {
-  toFirestore: (data: any) => {
-    const result = { ...data };
+  toFirestore: <T extends DateFields>(data: T): DocumentData => {
+    // Create a copy to avoid direct modification
+    const result: Record<string, any> = { ...data };
+    
     Object.keys(data).forEach(key => {
-      if (data[key] instanceof Date) {
-        result[key] = Timestamp.fromDate(data[key]);
+      const value = data[key];
+      if (value instanceof Date) {
+        result[key] = Timestamp.fromDate(value);
       }
     });
+    
     return result;
   },
-  fromFirestore: (snapshot: any, options: any) => {
-    const data = snapshot.data(options);
-    Object.keys(data).forEach(key => {
-      if (data[key] instanceof Timestamp) {
-        data[key] = data[key].toDate();
+  fromFirestore: <T extends DateFields>(
+    snapshot: DocumentSnapshot<DocumentData>,
+    options: SnapshotOptions
+  ): T => {
+    // Create a copy to avoid direct modification
+    const result: Record<string, any> = { ...snapshot.data(options) };
+    
+    Object.keys(result).forEach(key => {
+      const value = result[key];
+      if (value instanceof Timestamp) {
+        result[key] = value.toDate();
       }
     });
-    return data;
+    
+    return result as T;
   },
 };
 
 // TimeEntry collection
 const timeEntriesConverter: FirestoreDataConverter<TimeEntry> = {
   toFirestore: (timeEntry: TimeEntry) => {
-    return dateConverter.toFirestore(timeEntry);
+    return dateConverter.toFirestore<TimeEntry>(timeEntry);
   },
   fromFirestore: (snapshot, options) => {
-    return dateConverter.fromFirestore(snapshot, options) as TimeEntry;
+    return dateConverter.fromFirestore<TimeEntry>(snapshot, options || {});
   },
 };
 
@@ -72,10 +90,10 @@ export const timeEntriesCollection = createCollection<TimeEntry>(
 // Users collection
 const usersConverter: FirestoreDataConverter<User> = {
   toFirestore: (user: User) => {
-    return dateConverter.toFirestore(user);
+    return dateConverter.toFirestore<User>(user);
   },
   fromFirestore: (snapshot, options) => {
-    return dateConverter.fromFirestore(snapshot, options) as User;
+    return dateConverter.fromFirestore<User>(snapshot, options || {});
   },
 };
 
@@ -84,10 +102,10 @@ export const usersCollection = createCollection<User>('users', usersConverter);
 // Companies collection
 const companiesConverter: FirestoreDataConverter<Company> = {
   toFirestore: (company: Company) => {
-    return dateConverter.toFirestore(company);
+    return dateConverter.toFirestore<Company>(company);
   },
   fromFirestore: (snapshot, options) => {
-    return dateConverter.fromFirestore(snapshot, options) as Company;
+    return dateConverter.fromFirestore<Company>(snapshot, options || {});
   },
 };
 
@@ -96,10 +114,10 @@ export const companiesCollection = createCollection<Company>('companies', compan
 // UserStats collection
 const userStatsConverter: FirestoreDataConverter<UserStats> = {
   toFirestore: (userStats: UserStats) => {
-    return dateConverter.toFirestore(userStats);
+    return dateConverter.toFirestore<UserStats>(userStats);
   },
   fromFirestore: (snapshot, options) => {
-    return dateConverter.fromFirestore(snapshot, options) as UserStats;
+    return dateConverter.fromFirestore<UserStats>(snapshot, options || {});
   },
 };
 
@@ -152,10 +170,12 @@ export async function updateDocument<T extends { id: string }>(
   data: Partial<T>
 ): Promise<void> {
   const docRef = doc(collection, id) as DocumentReference<T>;
-  await updateDoc(docRef, {
+  // Use a properly typed object for the update
+  const updateData: DocumentData = {
     ...data,
     updatedAt: serverTimestamp(),
-  } as any);
+  };
+  await updateDoc(docRef, updateData);
 }
 
 // Delete a document

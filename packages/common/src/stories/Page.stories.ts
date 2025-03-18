@@ -5,13 +5,17 @@ let within = (_: any) => ({
   getByRole: async (_name: string, _options: any) => document.createElement('button'),
 });
 
-try {
-  const storybookTest = require('@storybook/test');
-  userEvent = storybookTest.userEvent;
-  within = storybookTest.within;
-} catch (e) {
-  console.log('Storybook test module not available, using mock functions');
-}
+// Use a try-catch with dynamic import instead
+(async () => {
+  try {
+    // Using dynamic import instead of require
+    const storybookTest = await import('@storybook/test');
+    userEvent = storybookTest.userEvent;
+    within = storybookTest.within;
+  } catch (e) {
+    console.log('Storybook test module not available, using mock functions');
+  }
+})();
 
 import { Page } from './Page';
 

@@ -1,12 +1,16 @@
 import type { Meta, StoryObj } from '@storybook/react';
 // Optional import for build environments without @storybook/test
 let fn = () => {};
-try {
-  const storybookTest = require('@storybook/test');
-  fn = storybookTest.fn;
-} catch (e) {
-  console.log('Storybook test module not available, using mock function');
-}
+
+// Use dynamic import for storybook test
+(async () => {
+  try {
+    const storybookTest = await import('@storybook/test');
+    fn = storybookTest.fn;
+  } catch (e) {
+    console.log('Storybook test module not available, using mock function');
+  }
+})();
 
 import { Button } from './Button';
 

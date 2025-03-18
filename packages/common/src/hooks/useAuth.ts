@@ -5,8 +5,9 @@ import {
   signInWithEmailAndPassword, 
   signOut as firebaseSignOut,
   onAuthStateChanged,
-  User as FirebaseUser
+  User as FirebaseUser,
 } from 'firebase/auth';
+import { FirebaseError } from 'firebase/app';
 
 export type User = {
   uid: string;
@@ -34,9 +35,9 @@ export function useAuth() {
         }
         setLoading(false);
       },
-      (err) => {
-        console.error('Auth state change error:', err);
-        setError(err.message);
+      (error) => {
+        console.error('Auth state change error:', error);
+        setError(error.message);
         setLoading(false);
       }
     );
@@ -51,8 +52,9 @@ export function useAuth() {
       const auth = getAuth();
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       return userCredential.user;
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const firebaseErr = err as FirebaseError;
+      setError(firebaseErr.message);
       throw err;
     } finally {
       setLoading(false);
@@ -66,8 +68,9 @@ export function useAuth() {
       const auth = getAuth();
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       return userCredential.user;
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const firebaseErr = err as FirebaseError;
+      setError(firebaseErr.message);
       throw err;
     } finally {
       setLoading(false);
@@ -79,8 +82,9 @@ export function useAuth() {
     try {
       const auth = getAuth();
       await firebaseSignOut(auth);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const firebaseErr = err as FirebaseError;
+      setError(firebaseErr.message);
       throw err;
     }
   };

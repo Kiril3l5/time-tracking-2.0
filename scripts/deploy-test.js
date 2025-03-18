@@ -49,20 +49,13 @@ async function deploy() {
     console.log(`${colors.magenta}Step 2: Creating empty builds if needed${colors.reset}`);
     runCommand('pnpm run create:empty-builds', { ignoreError: true });
     
-    // Step 3: Deploy to Firebase hosting preview channel
-    console.log(`${colors.magenta}Step 3: Deploying to Firebase preview channel${colors.reset}`);
+    // Step 3: Deploy to Firebase hosting
+    console.log(`${colors.magenta}Step 3: Deploying to Firebase hosting${colors.reset}`);
     
-    // Generate a unique preview channel name based on timestamp
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const channelName = `preview-${timestamp}`;
+    // Deploy both admin and hours apps
+    runCommand('firebase deploy --only hosting');
     
-    // Deploy admin and hours apps to separate preview channels
-    runCommand(`firebase hosting:channel:deploy ${channelName}-admin --only hosting:admin`);
-    runCommand(`firebase hosting:channel:deploy ${channelName}-hours --only hosting:hours`);
-    
-    console.log(`${colors.green}=== Test deployment completed successfully! ===${colors.reset}`);
-    console.log(`${colors.yellow}Preview URLs will be displayed above.${colors.reset}`);
-    console.log(`${colors.yellow}These preview deployments will be available for 7 days.${colors.reset}`);
+    console.log(`${colors.green}=== Deployment completed successfully! ===${colors.reset}`);
     
   } catch (error) {
     console.error(`${colors.red}Deployment failed: ${error.message}${colors.reset}`);
