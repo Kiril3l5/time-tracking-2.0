@@ -26,6 +26,7 @@
     "fix:query-types": "node scripts/fix-query-types.js",
     "fix:build": "node scripts/fix-build.js",
     "fix:test-deps": "node scripts/fix-test-deps.js",
+    "fix:module-syntax": "node scripts/fix-module-syntax.js",
     "modernize": "node scripts/modernize-project.js",
     "modernize:components": "node scripts/modernize-components.js",
     "cleanup": "node scripts/cleanup.js",

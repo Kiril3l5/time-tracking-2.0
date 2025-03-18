@@ -23,6 +23,8 @@ This document outlines the modernization process for the Time Tracking 2.0 appli
 - [x] Fix cleanup script for better CI/CD compatibility
 - [x] Create comprehensive TypeScript and linting guidelines
 - [x] Fix React JSX runtime issues in test environment
+- [x] Create JavaScript module guide to prevent module syntax errors
+- [x] Implement automatic module syntax fixer for scripts
 
 ## Current Status
 
@@ -40,6 +42,8 @@ The project has been significantly modernized with:
 - Build fix script for package resolution issues
 - Documented TypeScript and linting guidelines for AI-assisted development
 - Reliable test environment with JSX runtime support
+- Consistent ES Module syntax across all JavaScript files
+- Automated tools for fixing module syntax errors
 
 ## Remaining Tasks
 
@@ -95,6 +99,23 @@ Running `pnpm run modernize:components` generated a report indicating:
 
 **Problem**: ESM/CJS compatibility issues
 **Solution**: Updated import/export syntax and configuration
+
+### JavaScript Module Syntax Issues
+
+**Problem**: Scripts failing with `require is not defined in ES module scope` error
+**Solution**: All JavaScript files must use ES Module syntax because of `"type": "module"` in package.json
+
+The project uses ES Modules exclusively. Never use CommonJS `require()` in `.js` files:
+
+```javascript
+// ❌ INCORRECT: This will cause runtime errors
+const { execSync } = require('child_process');
+
+// ✅ CORRECT: Use ES Module imports
+import { execSync } from 'child_process';
+```
+
+Refer to `docs/javascript-module-guide.md` for detailed guidance.
 
 ### JSX in Tests Issues
 
@@ -182,6 +203,19 @@ We've created comprehensive TypeScript and linting guidelines for the project. S
 - Testing guidelines with proper TypeScript integration
 - Code examples of good and bad practices
 - CI/CD integration details
+
+## JavaScript Module Guidelines
+
+For detailed guidance on using JavaScript modules in this project, see `docs/javascript-module-guide.md`. This guide covers:
+
+- ES Module vs CommonJS syntax
+- How to properly import modules in ES Module files
+- Getting `__dirname` and `__filename` in ES modules
+- Common errors and their solutions  
+- Converting between module formats
+- Testing ES Module scripts
+
+This guide is essential to avoid errors like `require is not defined in ES module scope` which can occur because this project uses `"type": "module"` in package.json.
 
 ## Progress Updates
 

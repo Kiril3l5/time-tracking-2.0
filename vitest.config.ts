@@ -43,9 +43,11 @@ export default defineConfig({
       reportsDirectory: './coverage'
     },
     deps: {
-      inline: [/^react(-dom)?$/],  // Inline React and React DOM
-      optimizeDeps: {
-        include: ['react', 'react-dom', 'react/jsx-runtime']
+      // Fix for deprecated deps.inline - use the optimizer.web.include property instead
+      optimizer: {
+        web: {
+          include: [/^react(-dom)?$/, 'react/jsx-runtime', 'react/jsx-dev-runtime']
+        }
       }
     }
   },

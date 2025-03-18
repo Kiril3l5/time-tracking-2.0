@@ -67,7 +67,9 @@ async function main() {
   const scripts = [
     'scripts/fix-query-types.js',
     'scripts/fix-dependencies.js',
-    'scripts/fix-jest-dom.js'
+    'scripts/fix-jest-dom.js',
+    'scripts/fix-module-syntax.js',
+    'scripts/fix-test-deps.js'
   ];
   
   scripts.forEach(script => {
@@ -78,25 +80,33 @@ async function main() {
     }
   });
   
-  // Step 1: Install dependencies
-  log.title('Step 1: Installing Dependencies');
+  // Step 1: Fix Module Syntax (CommonJS to ESM)
+  log.title('Step 1: Fixing Module Syntax');
+  runCommand('node scripts/fix-module-syntax.js');
+  
+  // Step 2: Install dependencies
+  log.title('Step 2: Installing Dependencies');
   runCommand('pnpm install');
   
-  // Step 2: Fix Jest-DOM issues
-  log.title('Step 2: Fixing Jest-DOM');
+  // Step 3: Fix Jest-DOM issues
+  log.title('Step 3: Fixing Jest-DOM');
   runCommand('node scripts/fix-jest-dom.js');
   
-  // Step 3: Run React Query type fixes
-  log.title('Step 3: Fixing React Query Types');
+  // Step 4: Run React Query type fixes
+  log.title('Step 4: Fixing React Query Types');
   runCommand('node scripts/fix-query-types.js');
   
-  // Step 4: Fix ESLint configuration
-  log.title('Step 4: Linting and Type Checking');
+  // Step 5: Fix test dependencies
+  log.title('Step 5: Fixing Test Dependencies');
+  runCommand('node scripts/fix-test-deps.js');
+  
+  // Step 6: Fix ESLint configuration
+  log.title('Step 6: Linting and Type Checking');
   runCommand('pnpm exec eslint --fix "packages/**/src/**/*.{ts,tsx}"', { stdio: 'pipe' });
   runCommand('pnpm exec tsc --noEmit');
   
-  // Step 5: Run tests
-  log.title('Step 5: Running Tests');
+  // Step 7: Run tests
+  log.title('Step 7: Running Tests');
   runCommand('pnpm test', { stdio: 'pipe' });
   
   log.title('MODERNIZATION COMPLETE');
