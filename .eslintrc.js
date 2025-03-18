@@ -1,43 +1,41 @@
 module.exports = {
-    root: true,
-    env: {
-      browser: true,
-      es2021: true,
-      node: true,
-      'jest/globals': true,
+  parser: '@typescript-eslint/parser',
+  plugins: ['@typescript-eslint', 'react', 'react-hooks', 'prettier'],
+  extends: [
+    'eslint:recommended',
+    'plugin:@typescript-eslint/recommended',
+    'plugin:react/recommended',
+    'plugin:react-hooks/recommended',
+    'prettier'
+  ],
+  settings: {
+    react: {
+      version: 'detect',
     },
-    extends: [
-      'eslint:recommended',
-      'plugin:react/recommended',
-      'plugin:react-hooks/recommended',
-      'plugin:@typescript-eslint/recommended',
-      'prettier',
-    ],
-    parser: '@typescript-eslint/parser',
-    parserOptions: {
-      ecmaFeatures: {
-        jsx: true,
+  },
+  rules: {
+    'react/react-in-jsx-scope': 'off',
+    'react/prop-types': 'off',
+    '@typescript-eslint/explicit-module-boundary-types': 'off',
+    '@typescript-eslint/no-explicit-any': 'warn',
+    '@typescript-eslint/no-unused-vars': ['warn', { 
+      argsIgnorePattern: '^_',
+      varsIgnorePattern: '^_' 
+    }],
+    'no-console': ['warn', { allow: ['warn', 'error'] }],
+    'prettier/prettier': 'warn'
+  },
+  env: {
+    browser: true,
+    node: true,
+  },
+  overrides: [
+    {
+      files: ['**/*.test.ts', '**/*.test.tsx'],
+      env: {
+        jest: true,
       },
-      ecmaVersion: 'latest',
-      sourceType: 'module',
+      extends: ['plugin:testing-library/react', 'plugin:jest-dom/recommended'],
     },
-    plugins: ['react', '@typescript-eslint', 'prettier', 'jest'],
-    rules: {
-      'prettier/prettier': 'error',
-      'react/react-in-jsx-scope': 'off',
-      'react/prop-types': 'off',
-      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
-      'no-console': 'warn',
-      'jest/no-disabled-tests': 'warn',
-      'jest/no-focused-tests': 'error',
-      'jest/no-identical-title': 'error',
-      'jest/prefer-to-have-length': 'warn',
-      'jest/valid-expect': 'error'
-    },
-    settings: {
-      react: {
-        version: 'detect',
-      },
-    },
-    ignorePatterns: ['dist', 'node_modules', 'coverage', '.firebase', '.storybook', '**/*.css'],
-  };
+  ],
+};

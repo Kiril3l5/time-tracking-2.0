@@ -244,6 +244,24 @@ export const timeEntryService = {
       } as Partial<TimeEntry>);
     }
   },
+
+  // Get time entries for a specific project
+  getProjectEntries: async (projectId: string): Promise<TimeEntry[]> => {
+    return queryDocuments(
+      timeEntriesCollection,
+      where('projectId', '==', projectId)
+    );
+  },
+
+  // Get time entries that need approval for a specific manager
+  getEntriesNeedingApproval: async (managerId: string): Promise<TimeEntry[]> => {
+    return queryDocuments(
+      timeEntriesCollection,
+      where('submitted', '==', true),
+      where('approved', '==', false),
+      where('managerId', '==', managerId)
+    );
+  },
 };
 
 // Company specific operations

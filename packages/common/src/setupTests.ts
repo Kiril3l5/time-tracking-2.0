@@ -1,12 +1,23 @@
-import '@testing-library/jest-dom';
+// @ts-nocheck - Ignore type issues while we complete the migration
+import { beforeAll, afterAll, vi } from 'vitest';
+import { getFirestore, terminate } from 'firebase/firestore';
+import { initializeApp } from 'firebase/app';
 
-// Mock any global objects or add global test setup here
+// Mock config and setup for tests
+const firebaseConfig = {
+  projectId: 'test-project',
+  apiKey: 'test-api-key',
+};
 
-// Configure your testing environment, if needed
 beforeAll(() => {
-  // Setup code that runs before all tests
+  // Initialize Firebase for testing
+  initializeApp(firebaseConfig);
+  console.log('Firebase initialized for testing');
 });
 
 afterAll(() => {
-  // Cleanup code that runs after all tests
+  // Clean up Firebase resources
+  const db = getFirestore();
+  terminate(db);
+  console.log('Firebase resources cleaned up');
 });

@@ -3,7 +3,6 @@ import {
   useMutation,
   useQueryClient,
   UseQueryOptions,
-  UseMutationOptions,
 } from '@tanstack/react-query';
 import {
   timeEntryService,
@@ -15,7 +14,7 @@ import {
   deleteDocument,
   timeEntriesCollection,
 } from '../firestore/firestore-service';
-import { TimeEntry, User, Company, UserStats } from '../../types/firestore';
+import { TimeEntry, Company } from '../../types/firestore';
 
 // Time entry hooks
 export function useTimeEntries(userId: string, yearWeek: string) {
@@ -45,7 +44,7 @@ export function useUpdateTimeEntry() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<TimeEntry> }) =>
       updateDocument(timeEntriesCollection, id, data),
-    onSuccess: (_, variables) => {
+    onSuccess: () => {
       // We don't know the userId and yearWeek here, so we need to invalidate all timeEntries queries
       queryClient.invalidateQueries({ queryKey: ['timeEntries'] });
     },

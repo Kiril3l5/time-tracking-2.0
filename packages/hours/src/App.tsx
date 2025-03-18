@@ -1,21 +1,25 @@
-import React from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { Layout } from './components/Layout';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-const Dashboard = () => (
-  <div className="p-8">
-    <h1 className="text-3xl font-bold text-primary">Hours Portal</h1>
-    <p className="mt-4">Welcome to the Time Tracking System.</p>
-  </div>
-);
+// Create a client
+const queryClient = new QueryClient();
 
-function App() {
+// Placeholder components - replace with actual components
+const Dashboard = () => <div className="p-4">Time Dashboard</div>;
+const TimeEntries = () => <div className="p-4">Time Entries Page</div>;
+const Reports = () => <div className="p-4">Reports Page</div>;
+
+export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-      </Routes>
-    </BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <Router>
+        <Routes>
+          <Route path="/" element={<Layout><Dashboard /></Layout>} />
+          <Route path="/time-entries" element={<Layout><TimeEntries /></Layout>} />
+          <Route path="/reports" element={<Layout><Reports /></Layout>} />
+        </Routes>
+      </Router>
+    </QueryClientProvider>
   );
 }
-
-export default App;

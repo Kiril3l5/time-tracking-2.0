@@ -9,8 +9,6 @@ import {
   query,
   where,
   orderBy,
-  limit,
-  Timestamp,
   serverTimestamp,
   onSnapshot,
   QueryConstraint,
@@ -108,11 +106,8 @@ export const timeEntriesApi = {
    * Hard delete a time entry (only for admins)
    * Note: This is blocked by Firestore rules, but we keep it for admin tools
    */
-  async hardDelete(id: string, currentUser: User): Promise<void> {
-    // This operation should be restricted by Firestore rules
-    // We keep it here for potential admin tooling via Firebase Functions
-    const docRef = doc(db, COLLECTION, id);
-    await deleteDoc(docRef);
+  async hardDelete(id: string): Promise<void> {
+    await deleteDoc(doc(db, 'timeEntries', id));
   },
 
   /**

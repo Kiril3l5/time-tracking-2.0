@@ -24,9 +24,27 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
       '@common': path.resolve(__dirname, '../common/src'),
     },
+    // Force module to be resolved as ESM
+    mainFields: ['module', 'jsnext:main', 'jsnext'],
+  },
+  optimizeDeps: {
+    include: [
+      'immer',
+      'zustand',
+      'zustand/middleware',
+      'zustand/middleware/immer',
+      '@common',
+    ],
+    esbuildOptions: {
+      resolveExtensions: ['.mjs', '.js', '.jsx', '.ts', '.tsx'],
+    },
   },
   build: {
     outDir: 'dist',
     sourcemap: false,
+    commonjsOptions: {
+      include: [/node_modules/],
+      transformMixedEsModules: true,
+    },
   },
 });

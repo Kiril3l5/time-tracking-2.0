@@ -20,11 +20,11 @@ export function log(level: LogLevel, message: string, metadata?: unknown): void 
   // In production, this could be replaced with a proper logging service
   switch (level) {
     case LogLevel.ERROR:
-      // eslint-disable-next-line no-console
+       
       console.error(formattedMessage, metadata);
       break;
     case LogLevel.WARN:
-      // eslint-disable-next-line no-console
+       
       console.warn(formattedMessage, metadata);
       break;
     case LogLevel.INFO:

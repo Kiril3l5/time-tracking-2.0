@@ -86,7 +86,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Mock register function
-  const register = async (email: string, password: string, displayName: string) => {
+  const register = async (email: string, _password: string, displayName: string) => {
     setLoading(true);
     try {
       // This would actually call Firebase auth

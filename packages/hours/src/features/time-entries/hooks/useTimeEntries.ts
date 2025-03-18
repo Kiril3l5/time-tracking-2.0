@@ -77,12 +77,12 @@ export function useCreateTimeEntry() {
         updatedAt: new Date().toISOString(),
       };
 
-      queryClient.setQueryData<TimeEntry[]>(queryKey, [...previousEntries, optimisticEntry]);
+      queryClient.setQueryData(queryKey, [...previousEntries, optimisticEntry]);
 
       // Return context with previous state
       return { previousEntries, tempId };
     },
-    onError: (error, variables, context) => {
+    onError: (_error, variables, context) => {
       // Restore previous state on error
       if (context?.previousEntries) {
         const queryKey = [
@@ -118,8 +118,11 @@ export function useUpdateTimeEntry() {
 
       // Apply optimistic update
       queryClient.setQueriesData<TimeEntry[]>({ queryKey: ['timeEntries'] }, oldData => {
-        if (!oldData) return [];
-        return oldData.map(entry =>
+        if (!oldData || !Array.isArray(oldData)) {
+          return oldData;
+        }
+        
+        return oldData.map((entry: TimeEntry) =>
           entry.id === id ? { ...entry, ...data, updatedAt: new Date().toISOString() } : entry
         );
       });

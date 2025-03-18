@@ -1,4 +1,4 @@
-import { User } from 'firebase/auth';
+import { getAuth } from 'firebase/auth';
 import { TimeEntry } from '../types/firestore';
 
 /**
@@ -16,19 +16,78 @@ interface UserWithRole {
 }
 
 /**
- * Check if the user is an admin
+ * Check if a user is authenticated
+ * @returns Boolean indicating if user is logged in
  */
-export function isAdmin(user: UserWithRole | null): boolean {
+export function isAuthenticated(): boolean {
+  const auth = getAuth();
+  return !!auth.currentUser;
+}
+
+/**
+ * Check if current user has admin role when no user is provided
+ * @returns Boolean indicating if user has admin role
+ */
+export function isAdmin(): boolean;
+/**
+ * Check if the user is an admin
+ * @param user User to check
+ * @returns Boolean indicating if user is admin
+ */
+export function isAdmin(user: UserWithRole | null): boolean;
+export function isAdmin(user?: UserWithRole | null): boolean {
+  if (user === undefined) {
+    // Implementation would typically check claims or roles
+    // For now, we'll return a placeholder
+    return false;
+  }
+  
   if (!user) return false;
   return user.role === 'super-admin' || user.role === 'admin';
 }
 
 /**
- * Check if the user is a manager
+ * Check if current user has manager role when no user is provided
+ * @returns Boolean indicating if user has manager role
  */
-export function isManager(user: UserWithRole | null): boolean {
+export function isManager(): boolean;
+/**
+ * Check if the user is a manager
+ * @param user User to check
+ * @returns Boolean indicating if user is manager
+ */
+export function isManager(user: UserWithRole | null): boolean;
+export function isManager(user?: UserWithRole | null): boolean {
+  if (user === undefined) {
+    // Implementation would typically check claims or roles
+    return false;
+  }
+  
   if (!user) return false;
   return user.role === 'manager';
+}
+
+/**
+ * Check if user can access a specific feature
+ * @param featureId The feature identifier to check
+ * @returns Boolean indicating if user has access to the feature
+ */
+export function canAccessFeature(featureId: string): boolean {
+  // Implementation would check user's permissions
+  // For basic demo, we'll grant access to some features
+  const allowedForAll = ['dashboard', 'profile', 'timesheet'];
+  return allowedForAll.includes(featureId);
+}
+
+/**
+ * Check if user can edit a specific resource
+ * @param resourceType The type of resource
+ * @param resourceId The ID of the resource
+ * @returns Boolean indicating if user can edit the resource
+ */
+export function canEdit(_resourceType: string, _resourceId: string): boolean {
+  // Implementation would check ownership or permissions
+  return isAdmin() || isManager();
 }
 
 /**

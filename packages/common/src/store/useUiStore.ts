@@ -124,8 +124,8 @@ export const useUiStore = create<UiState>()(
         }),
 
       // Toast actions
-      addToast: toast => {
-        const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      addToast: (toast: Omit<UiState['toasts'][0], 'id'>) => {
+        const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
         set(state => {
           state.toasts.push({ ...toast, id });
         });
@@ -134,7 +134,7 @@ export const useUiStore = create<UiState>()(
 
       removeToast: id =>
         set(state => {
-          state.toasts = state.toasts.filter(toast => toast.id !== id);
+          state.toasts = state.toasts.filter((toast: { id: string }) => toast.id !== id);
         }),
 
       clearToasts: () =>
