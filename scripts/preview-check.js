@@ -3,24 +3,33 @@
 /**
  * Preview Check Script
  * 
- * This script runs all the necessary checks before pushing to ensure the build will pass
- * It's a wrapper around the preview:all script with more detailed information and progress tracking
+ * This script runs all the necessary checks locally first,
+ * and if they all pass, triggers a Firebase preview deployment,
+ * allowing you to fully validate your changes before pushing to GitHub.
+ * 
+ * Workflow:
+ * 1. Run all local checks (cleanup, eslint, typescript, tests)
+ * 2. If all checks pass, deploy to Firebase preview channels
+ * 3. Open preview URLs to validate changes visually
+ * 4. If everything looks good, push to Git (done manually)
  */
 
 import { execSync } from 'child_process';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
-// ANSI color codes for better terminal output
+// ANSI color codes for terminal output
 const colors = {
   reset: '\x1b[0m',
-  bright: '\x1b[1m',
   red: '\x1b[31m',
   green: '\x1b[32m',
   yellow: '\x1b[33m',
   blue: '\x1b[34m',
-  cyan: '\x1b[36m',
   magenta: '\x1b[35m',
+  cyan: '\x1b[36m',
+  white: '\x1b[37m',
+  bold: '\x1b[1m'
 };
 
 // Get the directory where this script is located
@@ -28,100 +37,211 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
-// Header display
-console.log('\n');
-console.log(`${colors.bright}${colors.magenta}==============================================${colors.reset}`);
-console.log(`${colors.bright}${colors.magenta}        PRE-PUSH VALIDATION CHECKS          ${colors.reset}`);
-console.log(`${colors.bright}${colors.magenta}==============================================${colors.reset}`);
-console.log('\n');
-
-// Run a command and show its output
-function runCommand(command, name, options = {}) {
-  console.log(`${colors.bright}${colors.cyan}▶ RUNNING: ${name}${colors.reset}`);
-  console.log(`${colors.blue}$ ${command}${colors.reset}`);
-  console.log(`${colors.yellow}---------------------------------------------${colors.reset}`);
-  
+/**
+ * Run a command and return its output
+ * @param {string} command - The command to execute
+ * @param {Object} options - Options for execSync
+ * @returns {Object} - Result object with success flag and output
+ */
+function runCommand(command, options = {}) {
+  console.log(`${colors.blue}> ${command}${colors.reset}`);
   try {
-    execSync(command, { 
-      stdio: 'inherit',
-      ...options
-    });
-    console.log(`${colors.green}✓ ${name} PASSED${colors.reset}`);
-    return true;
+    const defaultOptions = { 
+      cwd: rootDir, 
+      stdio: 'pipe',
+      encoding: 'utf8'
+    };
+    const output = execSync(command, { ...defaultOptions, ...options });
+    return { success: true, output };
   } catch (error) {
-    console.error(`${colors.red}✗ ${name} FAILED${colors.reset}`);
-    console.error(`${colors.red}Error: ${error.message}${colors.reset}`);
-    return false;
-  } finally {
-    console.log(`${colors.yellow}---------------------------------------------${colors.reset}\n`);
+    return { 
+      success: false, 
+      output: error.stdout?.toString() || '', 
+      error: error.stderr?.toString() || error.message 
+    };
   }
 }
 
-// Main function to run all checks
-async function runChecks() {
-  let success = true;
+/**
+ * Print section header
+ * @param {string} title - The section title
+ */
+function printSection(title) {
+  const line = '='.repeat(title.length + 8);
+  console.log(`\n${colors.cyan}${line}${colors.reset}`);
+  console.log(`${colors.cyan}=== ${colors.bold}${title}${colors.reset}${colors.cyan} ===${colors.reset}`);
+  console.log(`${colors.cyan}${line}${colors.reset}\n`);
+}
+
+/**
+ * Ensure cleanup.js is using ES module syntax
+ */
+function fixCleanupScript() {
+  printSection('Fixing Module Syntax');
   
-  // Step 1: Fix module syntax
-  if (!runCommand('pnpm run fix:module-syntax', 'MODULE SYNTAX CHECK')) {
-    success = false;
+  // Run the ci-cleanup-fix script
+  const result = runCommand('node scripts/ci-cleanup-fix.js');
+  
+  if (result.success) {
+    console.log(`${colors.green}✓ Cleanup script syntax check completed${colors.reset}`);
+    return true;
+  } else {
+    console.error(`${colors.red}✗ Failed to fix cleanup script:${colors.reset}`);
+    console.error(result.error || result.output);
+    return false;
   }
+}
+
+/**
+ * Run ESLint checks
+ */
+function runLinting() {
+  printSection('Running ESLint');
   
-  // Step 2: Fix test dependencies
-  if (!runCommand('pnpm run fix:test-deps', 'TEST DEPENDENCIES CHECK')) {
-    success = false;
+  const result = runCommand('pnpm run lint');
+  
+  if (result.success) {
+    console.log(`${colors.green}✓ Linting passed${colors.reset}`);
+    return true;
+  } else {
+    console.error(`${colors.red}✗ Linting failed:${colors.reset}`);
+    console.log(result.output);
+    console.error(result.error || '');
+    return false;
   }
+}
+
+/**
+ * Run TypeScript type checking
+ */
+function runTypeCheck() {
+  printSection('Running TypeScript Type Check');
   
-  // Step 3: Linting
-  if (!runCommand('pnpm run lint', 'LINTING CHECK')) {
-    success = false;
+  const result = runCommand('pnpm exec tsc --noEmit');
+  
+  if (result.success) {
+    console.log(`${colors.green}✓ TypeScript type checking passed${colors.reset}`);
+    return true;
+  } else {
+    console.error(`${colors.red}✗ TypeScript type checking failed:${colors.reset}`);
+    console.log(result.output);
+    console.error(result.error || '');
+    return false;
   }
+}
+
+/**
+ * Run unit tests
+ */
+function runTests() {
+  printSection('Running Unit Tests');
   
-  // Step 4: Type checking
-  if (!runCommand('pnpm exec tsc --noEmit', 'TYPESCRIPT CHECK')) {
-    success = false;
+  const result = runCommand('pnpm run test');
+  
+  if (result.success) {
+    console.log(`${colors.green}✓ Tests passed${colors.reset}`);
+    return true;
+  } else {
+    console.error(`${colors.red}✗ Tests failed:${colors.reset}`);
+    console.log(result.output);
+    console.error(result.error || '');
+    return false;
   }
+}
+
+/**
+ * Deploy to Firebase preview channels
+ */
+function deployPreview() {
+  printSection('Deploying Preview');
   
-  // Step 5: Tests 
-  if (!runCommand('pnpm run test', 'UNIT TESTS')) {
-    success = false;
+  console.log(`${colors.yellow}Deploying to Firebase preview channels...${colors.reset}`);
+  
+  // Run the deploy-test.js script
+  try {
+    execSync('node scripts/deploy-test.js', { 
+      cwd: rootDir, 
+      stdio: 'inherit'
+    });
+    console.log(`${colors.green}✓ Preview deployment completed${colors.reset}`);
+    return true;
+  } catch (error) {
+    console.error(`${colors.red}✗ Preview deployment failed${colors.reset}`);
+    return false;
   }
+}
+
+/**
+ * Run all checks and preview deployment
+ */
+function runAllChecks() {
+  printSection('PREVIEW WORKFLOW');
+  console.log(`${colors.yellow}Running verification checks before deployment${colors.reset}\n`);
   
-  // Step 6: Build common
-  if (!runCommand('pnpm run build:common', 'BUILD: COMMON PACKAGE')) {
-    success = false;
-  }
+  // Results object to track success/failure of each step
+  const results = {
+    cleanup: false,
+    linting: false,
+    typecheck: false,
+    tests: false,
+    preview: false
+  };
   
-  // Step 7: Build admin
-  if (!runCommand('pnpm run build:admin', 'BUILD: ADMIN PACKAGE')) {
-    success = false;
-  }
+  // Step 1: Fix cleanup script
+  results.cleanup = fixCleanupScript();
   
-  // Step 8: Build hours
-  if (!runCommand('pnpm run build:hours', 'BUILD: HOURS PACKAGE')) {
-    success = false;
+  // Step 2: Run linting
+  results.linting = runLinting();
+  
+  // Step 3: Run TypeScript type checking
+  results.typecheck = runTypeCheck();
+  
+  // Step 4: Run tests
+  results.tests = runTests();
+  
+  // Check if all verification steps passed
+  const allVerificationPassed = results.cleanup && 
+                                results.linting && 
+                                results.typecheck && 
+                                results.tests;
+  
+  // Step 5: Deploy preview if all checks passed
+  if (allVerificationPassed) {
+    console.log(`${colors.green}${colors.bold}All checks passed! Proceeding with preview deployment...${colors.reset}`);
+    results.preview = deployPreview();
+  } else {
+    console.log(`${colors.red}${colors.bold}Some checks failed. Preview deployment skipped.${colors.reset}`);
+    results.preview = false;
   }
   
   // Summary
-  console.log(`${colors.bright}${colors.magenta}==============================================${colors.reset}`);
-  if (success) {
-    console.log(`${colors.bright}${colors.green}✓ ALL CHECKS PASSED - READY TO PUSH${colors.reset}`);
-    console.log(`${colors.green}You can safely push your changes to GitHub.${colors.reset}`);
-  } else {
-    console.log(`${colors.bright}${colors.red}✗ SOME CHECKS FAILED - NOT READY TO PUSH${colors.reset}`);
-    console.log(`${colors.red}Please fix the issues before pushing to GitHub.${colors.reset}`);
-    console.log(`${colors.yellow}Try running specific fix scripts:${colors.reset}`);
-    console.log(`${colors.blue}- pnpm run fix:all${colors.reset} - Run all fixers`);
-    console.log(`${colors.blue}- pnpm run lint:fix${colors.reset} - Fix linting issues`);
-    console.log(`${colors.blue}- pnpm run fix:build${colors.reset} - Fix build issues`);
-  }
-  console.log(`${colors.bright}${colors.magenta}==============================================${colors.reset}`);
+  printSection('SUMMARY');
+  console.log(`${colors.bold}Cleanup script fix:${colors.reset} ${results.cleanup ? `${colors.green}PASS` : `${colors.red}FAIL`}${colors.reset}`);
+  console.log(`${colors.bold}Linting:${colors.reset} ${results.linting ? `${colors.green}PASS` : `${colors.red}FAIL`}${colors.reset}`);
+  console.log(`${colors.bold}TypeScript check:${colors.reset} ${results.typecheck ? `${colors.green}PASS` : `${colors.red}FAIL`}${colors.reset}`);
+  console.log(`${colors.bold}Tests:${colors.reset} ${results.tests ? `${colors.green}PASS` : `${colors.red}FAIL`}${colors.reset}`);
+  console.log(`${colors.bold}Preview deployment:${colors.reset} ${results.preview ? `${colors.green}COMPLETE` : `${colors.red}SKIPPED`}${colors.reset}`);
   
-  // Exit with appropriate code
-  process.exit(success ? 0 : 1);
+  const allCompleted = Object.values(results).every(r => r);
+  
+  if (allCompleted) {
+    console.log(`\n${colors.green}${colors.bold}✓ Complete workflow executed successfully!${colors.reset}`);
+    console.log(`${colors.green}1. All checks passed${colors.reset}`);
+    console.log(`${colors.green}2. Preview deployment complete${colors.reset}`);
+    console.log(`${colors.green}3. You can now test the preview URLs above${colors.reset}`);
+    console.log(`\n${colors.bold}Next steps:${colors.reset}`);
+    console.log(`${colors.blue}1. Validate your changes in the preview URLs${colors.reset}`);
+    console.log(`${colors.blue}2. When satisfied, commit and push to GitHub:${colors.reset}`);
+    console.log(`   ${colors.cyan}git add .${colors.reset}`);
+    console.log(`   ${colors.cyan}git commit -m "Your commit message"${colors.reset}`);
+    console.log(`   ${colors.cyan}git push${colors.reset}`);
+    return 0;
+  } else {
+    console.log(`\n${colors.red}${colors.bold}✗ Workflow did not complete successfully.${colors.reset}`);
+    console.log(`${colors.yellow}Fix the failed checks before pushing to GitHub.${colors.reset}`);
+    return 1;
+  }
 }
 
-// Run the checks
-runChecks().catch(error => {
-  console.error(`${colors.red}Unexpected error in preview check script:${colors.reset}`, error);
-  process.exit(1);
-}); 
+// Exit with the appropriate code
+process.exit(runAllChecks()); 

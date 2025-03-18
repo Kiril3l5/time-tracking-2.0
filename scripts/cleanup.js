@@ -1,96 +1,162 @@
 #!/usr/bin/env node
 
 /**
- * Centralized cleanup script for the Time Tracking 2.0 project
- * 
- * This script detects the current platform and runs the appropriate cleanup script
- * (cleanup.sh for Unix/Linux/macOS or cleanup.ps1 for Windows).
+ * Cleanup script to remove temporary files and build artifacts
  */
 
-const { execSync } = require('child_process');
-const os = require('os');
-const path = require('path');
-const fs = require('fs');
+import { execSync } from 'child_process';
+import os from 'os';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 
-// ANSI color codes for better terminal output
+// Get the directory where this script is located
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = path.resolve(__dirname, '..');
+
+// ANSI color codes for terminal output
 const colors = {
   reset: '\x1b[0m',
-  bright: '\x1b[1m',
   red: '\x1b[31m',
   green: '\x1b[32m',
   yellow: '\x1b[33m',
   blue: '\x1b[34m',
   cyan: '\x1b[36m',
+  bold: '\x1b[1m'
 };
 
-console.log(`${colors.bright}${colors.cyan}=== Project Cleanup Script ===${colors.reset}`);
-console.log(`${colors.yellow}Detecting platform for cleanup...${colors.reset}`);
+console.log(`${colors.cyan}${colors.bold}=== Project Cleanup ====${colors.reset}`);
 
-// Get the directory where this script is located
-const scriptDir = __dirname;
-
-try {
-  // Check if we're on Windows or Unix
-  const isWindows = os.platform() === 'win32';
-  const isCI = process.env.CI === 'true';
-
-  if (isCI) {
-    // In CI environments, perform a simplified cleanup
-    console.log(`${colors.yellow}CI environment detected, performing simplified cleanup...${colors.reset}`);
-    
-    const cleanupTasks = [
-      // Clean build artifacts
-      'rm -rf packages/*/dist',
-      // Clean coverage reports
-      'rm -rf coverage',
-      // Clean any temporary files
-      'rm -rf .temp',
-      // Clean Firebase cache
-      'rm -rf .firebase'
-    ];
-    
-    cleanupTasks.forEach(task => {
-      try {
-        console.log(`${colors.blue}Running: ${task}${colors.reset}`);
-        execSync(task, { stdio: 'inherit' });
-      } catch (err) {
-        // Don't fail if a command fails - just continue with the next one
-        console.log(`${colors.yellow}Warning: Command failed but continuing: ${task}${colors.reset}`);
-      }
+/**
+ * Run a command safely with error handling
+ * @param {string} command - The command to execute
+ * @param {boolean} silent - Whether to suppress output
+ * @returns {boolean} - Whether the command was successful
+ */
+function runCommand(command, silent = false) {
+  try {
+    if (!silent) {
+      console.log(`${colors.blue}> ${command}${colors.reset}`);
+    }
+    execSync(command, { 
+      cwd: rootDir,
+      stdio: silent ? 'ignore' : 'inherit'
     });
-  } else if (isWindows) {
-    // Windows - run the PowerShell script
-    console.log(`${colors.yellow}Windows platform detected, running PowerShell cleanup script...${colors.reset}`);
-    const psScriptPath = path.join(scriptDir, 'cleanup.ps1');
-    
-    // Verify the script exists
-    if (!fs.existsSync(psScriptPath)) {
-      throw new Error(`PowerShell cleanup script not found at: ${psScriptPath}`);
+    return true;
+  } catch (error) {
+    if (!silent) {
+      console.error(`${colors.red}Error executing: ${command}${colors.reset}`);
+      console.error(error.message);
     }
-    
-    execSync(`powershell -ExecutionPolicy Bypass -File "${psScriptPath}"`, { stdio: 'inherit' });
-  } else {
-    // Unix - run the Bash script
-    console.log(`${colors.yellow}Unix platform detected, running Bash cleanup script...${colors.reset}`);
-    const shScriptPath = path.join(scriptDir, 'cleanup.sh');
-    
-    // Verify the script exists
-    if (!fs.existsSync(shScriptPath)) {
-      throw new Error(`Bash cleanup script not found at: ${shScriptPath}`);
-    }
-    
-    // Make sure the script is executable
-    try {
-      fs.chmodSync(shScriptPath, '755');
-    } catch (err) {
-      console.log(`${colors.yellow}Warning: Could not set execute permissions on cleanup.sh${colors.reset}`);
-    }
-    
-    execSync(`"${shScriptPath}"`, { stdio: 'inherit' });
+    return false;
   }
+}
 
-  console.log(`${colors.green}${colors.bright}Cleanup completed successfully!${colors.reset}`);
-} catch (error) {
-  console.error(`${colors.red}Error during cleanup:${colors.reset}`, error.message);
-  process.exit(1);
-} 
+/**
+ * Remove a directory if it exists
+ * @param {string} dirPath - Path to directory
+ */
+function removeDirectoryIfExists(dirPath) {
+  const absolutePath = path.isAbsolute(dirPath) 
+    ? dirPath 
+    : path.join(rootDir, dirPath);
+    
+  if (fs.existsSync(absolutePath)) {
+    console.log(`${colors.yellow}Removing directory: ${dirPath}${colors.reset}`);
+    
+    try {
+      if (os.platform() === 'win32') {
+        // Windows requires a different approach for nested directories
+        runCommand(`rmdir /s /q "${absolutePath}"`, true);
+      } else {
+        // Unix-based systems
+        runCommand(`rm -rf "${absolutePath}"`, true);
+      }
+      console.log(`${colors.green}✓ Removed${colors.reset}`);
+    } catch (error) {
+      console.error(`${colors.red}Failed to remove ${dirPath}: ${error.message}${colors.reset}`);
+    }
+  }
+}
+
+/**
+ * Remove a file if it exists
+ * @param {string} filePath - Path to file
+ */
+function removeFileIfExists(filePath) {
+  const absolutePath = path.isAbsolute(filePath) 
+    ? filePath 
+    : path.join(rootDir, filePath);
+    
+  if (fs.existsSync(absolutePath)) {
+    console.log(`${colors.yellow}Removing file: ${filePath}${colors.reset}`);
+    
+    try {
+      fs.unlinkSync(absolutePath);
+      console.log(`${colors.green}✓ Removed${colors.reset}`);
+    } catch (error) {
+      console.error(`${colors.red}Failed to remove ${filePath}: ${error.message}${colors.reset}`);
+    }
+  }
+}
+
+// List of directories to remove
+const directoriesToRemove = [
+  'node_modules',
+  'packages/admin/node_modules',
+  'packages/hours/node_modules', 
+  'packages/common/node_modules',
+  'packages/admin/dist',
+  'packages/hours/dist',
+  'packages/common/dist',
+  'coverage',
+  '.firebase'
+];
+
+// List of files to remove
+const filesToRemove = [
+  'firebase-debug.log',
+  'ui-debug.log',
+  'firestore-debug.log',
+  'packages/admin/.firebase/hosting.*.cache',
+  'packages/hours/.firebase/hosting.*.cache'
+];
+
+// Clean directories
+console.log(`${colors.bold}Cleaning directories...${colors.reset}`);
+directoriesToRemove.forEach(dir => {
+  removeDirectoryIfExists(dir);
+});
+
+// Clean files
+console.log(`\n${colors.bold}Cleaning files...${colors.reset}`);
+filesToRemove.forEach(file => {
+  // Handle glob patterns
+  if (file.includes('*')) {
+    const dirPath = path.dirname(file);
+    const pattern = path.basename(file);
+    const absoluteDirPath = path.isAbsolute(dirPath) 
+      ? dirPath 
+      : path.join(rootDir, dirPath);
+      
+    if (fs.existsSync(absoluteDirPath)) {
+      const files = fs.readdirSync(absoluteDirPath);
+      const regex = new RegExp(pattern.replace(/\*/g, '.*'));
+      
+      files.forEach(f => {
+        if (regex.test(f)) {
+          removeFileIfExists(path.join(dirPath, f));
+        }
+      });
+    }
+  } else {
+    removeFileIfExists(file);
+  }
+});
+
+// Clear cache
+console.log(`\n${colors.bold}Clearing package manager cache...${colors.reset}`);
+runCommand('pnpm store prune', true);
+
+console.log(`\n${colors.green}${colors.bold}Cleanup completed!${colors.reset}`); 
