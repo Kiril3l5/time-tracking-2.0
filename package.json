@@ -25,6 +25,7 @@
     "fix:all": "node scripts/run-all-fixes.js",
     "fix:query-types": "node scripts/fix-query-types.js",
     "fix:build": "node scripts/fix-build.js",
+    "fix:test-deps": "node scripts/fix-test-deps.js",
     "modernize": "node scripts/modernize-project.js",
     "modernize:components": "node scripts/modernize-components.js",
     "cleanup": "node scripts/cleanup.js",
@@ -36,9 +37,9 @@
     "lint": "eslint packages/*/src/**/*.{ts,tsx} --max-warnings=100",
     "lint:fix": "eslint packages/*/src/**/*.{ts,tsx} --fix",
     "format": "prettier --write \"packages/*/src/**/*.{ts,tsx,css,scss,json}\"",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test": "pnpm run fix:test-deps && vitest run",
+    "test:watch": "pnpm run fix:test-deps && vitest",
+    "test:coverage": "pnpm run fix:test-deps && vitest run --coverage",
     "precommit": "pnpm run project:audit && pnpm run lint && pnpm run test",
     "edit:fix-typescript": "node scripts/fix-typescript.js"
   },
@@ -68,6 +69,8 @@
     "vitest": "^0.34.6"
   },
   "dependencies": {
-    "immer": "^10.1.1"
+    "immer": "^10.1.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   }
 }

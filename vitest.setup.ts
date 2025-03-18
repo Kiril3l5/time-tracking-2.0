@@ -7,6 +7,33 @@
 import { expect, vi, afterEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
+import * as React from 'react';
+import fs from 'fs';
+import path from 'path';
+
+// Ensure React is globally available for tests
+global.React = React;
+
+// Fix JSX runtime if needed
+try {
+  const reactDir = path.resolve(process.cwd(), 'node_modules/react');
+  const jsxRuntimePath = path.join(reactDir, 'jsx-runtime.js');
+  const jsxDevRuntimePath = path.join(reactDir, 'jsx-dev-runtime.js');
+  
+  if (!fs.existsSync(jsxRuntimePath) && fs.existsSync(jsxDevRuntimePath)) {
+    console.log('Creating jsx-runtime.js from jsx-dev-runtime.js in setup...');
+    fs.copyFileSync(jsxDevRuntimePath, jsxRuntimePath);
+    
+    // Also copy the .js.map if it exists
+    const jsxDevRuntimeMapPath = path.join(reactDir, 'jsx-dev-runtime.js.map');
+    const jsxRuntimeMapPath = path.join(reactDir, 'jsx-runtime.js.map');
+    if (fs.existsSync(jsxDevRuntimeMapPath)) {
+      fs.copyFileSync(jsxDevRuntimeMapPath, jsxRuntimeMapPath);
+    }
+  }
+} catch (error) {
+  console.warn('Failed to fix JSX runtime in setup:', error.message);
+}
 
 // Clean up after each test
 afterEach(() => {
