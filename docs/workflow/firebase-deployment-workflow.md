@@ -41,7 +41,17 @@ If any of these steps fail, fix the issues before proceeding.
 
 ### 2. Local Preview Deployment
 
-Before pushing to GitHub, deploy to a Firebase preview channel to verify the changes:
+Before pushing to GitHub, you can test your changes locally using our preview script:
+
+```bash
+# Run the preview script with skipping deployment
+pnpm run preview:clean
+
+# To run quality checks and build
+pnpm run preview:quick
+```
+
+Or you can deploy directly to a Firebase preview channel to verify the changes:
 
 ```bash
 # Deploy to a personal development preview channel
@@ -49,8 +59,8 @@ firebase hosting:channel:deploy dev-<your-name>-<feature-name> --expires 1d
 ```
 
 This creates temporary preview URLs for both the admin and hours portals:
-- `https://admin-autonomyhero-2024--dev-<name>-<feature>.web.app`
-- `https://hours-autonomyhero-2024--dev-<name>-<feature>.web.app`
+- `https://admin-autonomyhero-2024--dev-<n>-<feature>.web.app`
+- `https://hours-autonomyhero-2024--dev-<n>-<feature>.web.app`
 
 ### 3. Push Changes & Create Pull Request
 
@@ -161,8 +171,9 @@ If you encounter issues with the deployment workflow:
 
 2. **Build Failures**:
    - Check for TypeScript errors
-   - Verify all dependencies are installed
+   - Verify all dependencies are installed with `pnpm install`
    - Check for environment variables
+   - Try running the build recovery script: `pnpm run fix:build`
 
 ### CI/CD Issues
 

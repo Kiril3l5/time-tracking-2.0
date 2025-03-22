@@ -1,4 +1,5 @@
-import { initializeTestEnvironment, RulesTestEnvironment, RulesTestContext } from '@firebase/rules-unit-testing';
+import { describe, test, expect, beforeAll, afterAll } from 'vitest';
+import { initializeTestEnvironment, RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import * as fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -91,7 +92,7 @@ beforeAll(async () => {
   });
 
   // Set up initial data as admin
-  await testEnv.withSecurityRulesDisabled(async (context) => {
+  await testEnv.withSecurityRulesDisabled(async () => {
     await setupTestData();
   });
 });

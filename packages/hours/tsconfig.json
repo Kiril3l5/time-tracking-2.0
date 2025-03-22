@@ -1,12 +1,20 @@
 {
-    "extends": "../../tsconfig.json",
-    "compilerOptions": {
-      "composite": true,
-      "baseUrl": ".",
-      "paths": {
-        "@/*": ["src/*"],
-        "@common/*": ["../common/src/*"]
-      }
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "src/*"
+      ],
+      "@common/*": [
+        "../common/src/*"
+      ]
     },
-    "include": ["src/**/*", "vite.config.ts"]
-  }
+    "types": []
+  },
+  "include": [
+    "src/**/*",
+    "vite.config.ts"
+  ]
+}

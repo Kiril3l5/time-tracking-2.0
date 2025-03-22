@@ -9,6 +9,9 @@ This document outlines the TypeScript and linting standards for the Time Trackin
 - [x] Updated GitHub workflows to ensure linting runs properly
 - [x] Fixed linting errors in CI/CD pipeline
 - [x] Improved build processes to validate TypeScript compliance
+- [x] Added proper type definitions for Firebase testing utilities
+- [x] Created TypeScript-specific guidelines for test files
+- [x] Enhanced TypeScript auto-fixer to handle duplicate imports cross-platform
 
 ## TypeScript Configuration
 
@@ -39,6 +42,103 @@ Our `tsconfig.json` has been updated to include test files in compilation:
   "packages/*/src/tests/**/*.tsx"
 ]
 ```
+
+## Automated TypeScript Fixes
+
+The project includes a powerful TypeScript auto-fixer that can automatically resolve common TypeScript errors.
+
+### TypeScript Auto-Fixer
+
+The auto-fixer (`scripts/workflow-fix-typescript.js`) can automatically fix:
+
+- **Duplicate Imports**: Multiple import statements from the same package
+- **Unused Imports**: Import statements for types/functions not used in the file
+- **Import-Related Errors**: Other common import-related TypeScript errors
+
+#### Using the Auto-Fixer
+
+To run the auto-fixer:
+
+```bash
+pnpm run fix:typescript
+```
+
+This tool will:
+1. Run the TypeScript checker to find errors
+2. Analyze the error output to identify fixable issues
+3. Apply fixes to resolve duplicate and unused imports
+4. Run TypeScript check again to verify the fixes worked
+
+#### When to Use the Auto-Fixer
+
+The TypeScript checker will recommend using the auto-fixer when it detects errors that might be automatically fixable:
+
+```
+TYPESCRIPT CHECKS FAILED
+...
+Try the automated TypeScript fixer:
+pnpm run fix:typescript
+This tool can automatically fix common TypeScript errors like duplicate imports.
+```
+
+#### Example Fixes
+
+The auto-fixer can handle various error patterns like:
+
+```typescript
+// Before: Multiple duplicate imports
+import type { QueryKey, QueryFunction } from '@tanstack/react-query';
+import type { QueryKey, QueryFunction } from '@tanstack/react-query';
+import type { QueryKey, QueryFunction } from '@tanstack/react-query';
+
+// After: Single import statement
+import type { QueryKey, QueryFunction } from '@tanstack/react-query';
+```
+
+It can also remove unused imports that are flagged with errors like:
+```
+error TS6192: All imports in import declaration are unused.
+```
+
+#### Cross-Platform Support
+
+The auto-fixer has been enhanced to work across different operating systems:
+- Handles Windows and Unix path differences
+- Normalizes file paths for consistent error detection
+- Supports various TypeScript error output formats
+
+## TypeScript and Tests
+
+For detailed guidelines on using TypeScript in test files, especially when working with Firebase tests, refer to our [TypeScript Testing Guide](./testing/typescript-testing-guide.md).
+
+Key lessons we've learned:
+
+1. **Never use `@ts-ignore` or `@ts-nocheck`** - Instead, create proper type definitions
+2. **Create specific type declarations** for third-party libraries like Firebase testing utilities
+3. **Configure Vitest properly** to work with TypeScript without breaking the build process
+4. **Use module augmentation** to extend test library types instead of global declarations
+5. **Don't exclude test files from TypeScript checking** - Fix the types properly instead
+
+### Module Augmentation for Custom Matchers
+
+When adding custom matchers to testing libraries (like our Firebase rule matchers `toAllow` and `toDeny`), use module augmentation:
+
+```typescript
+// src/types/vitest.d.ts
+/// <reference types="vitest" />
+
+interface FirebaseRuleMatchers<R> {
+  toAllow(): R;
+  toDeny(): R;
+}
+
+declare module 'vitest' {
+  interface Assertion<T = any> extends FirebaseRuleMatchers<Assertion<T>> {}
+  interface AsymmetricMatchersContaining extends FirebaseRuleMatchers<void> {}
+}
+```
+
+This approach properly extends the testing library's types without creating global conflicts or requiring type suppression.
 
 ## ESLint Rules
 
@@ -226,6 +326,36 @@ async function fetchUser(id: string): Promise<User> {
    console.warn('Deprecated method used');
    console.error('Failed to process request', error);
    ```
+
+## Firebase Testing Guidelines
+
+For Firebase tests, follow these specific guidelines:
+
+1. **Create proper type definitions** for Firebase testing utilities
+2. **Define custom matchers** for Firebase security rules tests
+3. **Include type definitions** in `tsconfig.json`
+4. **Don't use `any` type** for Firebase objects
+
+Example proper setup:
+
+```typescript
+// src/types/firebase-testing.d.ts
+declare module '@firebase/rules-unit-testing' {
+  export interface RulesTestContext {
+    firestore(): FirebaseFirestore;
+  }
+  
+  export interface RulesTestEnvironment {
+    firestore(): FirebaseFirestore;
+    authenticatedContext(uid: string, options?: Record<string, unknown>): RulesTestContext;
+    unauthenticatedContext(): RulesTestContext;
+    withSecurityRulesDisabled(fn: (context: RulesTestContext) => Promise<void>): Promise<void>;
+    cleanup(): Promise<void>;
+  }
+  
+  // More type definitions...
+}
+```
 
 ## Testing Guidelines
 

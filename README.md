@@ -48,6 +48,7 @@ Detailed documentation is available in the `/docs` directory:
 - [Development Workflow](./docs/workflow/development.md) - Development processes and standards
 - [Development Guide](./docs/main_readme/development-deployment-guide.md) - Development workflow and legacy deployment
 - [Documentation Guide](./docs/structure/documentation-guide.md) - Guidelines for maintaining documentation
+- [**Scripts Organization**](./docs/workflow/preview-deployment-guide.md#technical-architecture) - Guide to the modular script organization
 
 ### Technical Patterns
 - [Testing Strategy](./docs/testing/overview.md) - Testing approach and best practices
@@ -62,6 +63,7 @@ Detailed documentation is available in the `/docs` directory:
 - [Firebase Data Access](./docs/main_readme/firebase-data-access-patterns.md) - Data access patterns
 - [Firestore Security](./docs/security/firestore-rules.md) - Security rules review and recommendations
 - [Security Implementation](./docs/main_readme/security-implementation-guide.md) - Security implementation details
+- [Preview Deployment Guide](./docs/workflow/preview-deployment-guide.md) - Complete guide for creating, managing, and using preview deployments for testing
 
 ### UI and Network
 - [UI Components](./docs/main_readme/ui-component-library.md) - UI component library documentation
@@ -74,10 +76,35 @@ Detailed documentation is available in the `/docs` directory:
 
 This project follows a structured approach to maintenance to ensure it remains lean and manageable:
 
-### Cleanup Scripts
+### Development Scripts
 
-- `scripts/cleanup.sh` - Removes temporary files, build artifacts, and other unnecessary files
-- `scripts/find-duplicates.js` - Identifies potential duplicate documentation
+Our scripts have been reorganized into a modular, maintainable structure:
+
+```
+scripts/
+├── core/          # Core functionality (logging, commands, configuration)
+├── auth/          # Authentication utilities
+├── checks/        # Code quality checks
+├── typescript/    # TypeScript utilities
+│   ├── error-parser.js        # Parse TypeScript errors with cross-platform support
+│   ├── duplicate-import-fix.js # Fix duplicate import statements
+│   ├── unused-import-fix.js   # Remove unused imports
+│   ├── type-validator.js      # Validate TypeScript types
+│   ├── typescript-fixer.js    # Main TypeScript fixing orchestrator
+│   └── query-types-fixer.js   # Fix React Query type imports
+├── test-types/    # Test configuration
+│   ├── firebase-type-def.js   # Firebase testing type definitions
+│   ├── vitest-matchers.js     # Custom test matchers for Vitest
+│   ├── test-setup-manager.js  # Test setup file management
+│   ├── typescript-config.js   # TypeScript configuration for tests
+│   └── test-deps-fixer.js     # Fix test dependencies and JSX runtime
+├── firebase/      # Firebase deployment utilities
+├── build/         # Build process utilities
+├── utils.js       # Main export index
+└── preview.js     # Main orchestration script
+```
+
+For a complete overview of the script organization, see [Scripts Reorganization Plan](./docs/scripts-reorganization-plan.md).
 
 ### Maintenance Guidelines
 
@@ -85,6 +112,10 @@ This project follows a structured approach to maintenance to ensure it remains l
 2. **Documentation First**: All features should be documented according to our [documentation guidelines](./docs/structure/documentation-guide.md)
 3. **Test Coverage**: Maintain high test coverage for all new and modified code
 4. **Quarterly Review**: Perform documentation and code review quarterly to remove outdated content
+5. **Automated Fixes**: Use the TypeScript auto-fixer (`pnpm run fix:typescript`) to resolve common errors
+   - Enhanced TypeScript fixes: `pnpm run fix:typescript:enhanced`
+   - React Query type fixes: `pnpm run fix:query-types:enhanced`
+   - Test dependency fixes: `pnpm run fix:test-deps:enhanced`
 
 ## Implementation Patterns
 
@@ -127,7 +158,61 @@ cd packages/hours
 pnpm dev
 ```
 
-See [Project Setup](./docs/project-setup.md) and [Environment Setup](./docs/env/setup.md) for detailed instructions.
+### Preview Deployments
+
+The project uses a modular script system for creating Firebase preview deployments:
+
+```bash
+# Ensure you're logged in to Firebase
+firebase login
+
+# Create a preview deployment
+pnpm run preview
+```
+
+The preview script (`scripts/preview.js`) performs the following steps:
+1. Verifies Firebase and Git authentication using the `auth` modules
+2. Runs quality checks (linting, type checking, tests) via the `checks` modules
+3. Builds all packages with the `build` utilities
+4. Deploys to Firebase preview channels using the `firebase` utilities
+5. Extracts and displays preview URLs for both admin and hours sites
+
+**Available Options:**
+```
+Quality Checks:
+  --quick               Skip all checks (linting, type checking, tests)
+  --skip-lint           Skip linting checks
+  --skip-typecheck      Skip TypeScript type checking
+  --skip-tests          Skip running tests
+  --skip-build          Skip building the application
+
+Fixing Options:
+  --auto-fix-typescript Auto-fix TypeScript errors when possible
+  --fix-query-types     Fix React Query type imports
+  --fix-test-deps       Fix test dependencies and JSX runtime
+  --dry-run             Preview changes without applying them
+
+Deployment Options:
+  --skip-deploy         Skip deployment (only run checks)
+  --skip-cleanup        Skip cleaning up old preview channels
+
+Logging Options:
+  --save-logs           Save console output to log file
+  --verbose             Enable verbose logging
+```
+
+**Other Preview Commands:**
+- View all active previews: `pnpm run channels` or `pnpm run channels:dashboard`
+- List channels in JSON format: `pnpm run channels:list`
+- Clean up old previews: `pnpm run channels:cleanup`
+- Auto-clean old previews: `pnpm run channels:cleanup:auto`
+- View channel CLI help: `pnpm run channels:help`
+- Fix TypeScript issues: `pnpm run preview:fix-typescript`
+- Fix React Query types: `pnpm run preview:fix-query-types`
+- Fix test dependencies: `pnpm run preview:fix-test-deps`
+- Fix all issues: `pnpm run preview:fix-all`
+
+For detailed instructions, see [Preview Deployment Guide](./docs/workflow/preview-deployment-guide.md).
 
 ## License
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env sh
 . "$(dirname -- "$0")/_/husky.sh"
 
-# Run lint check
-npm run lint
+echo "Running lint check..."
+pnpm run lint
 
-# Run cleanup script to remove build artifacts and temp files
-npm run project:cleanup
+echo "Running project cleanup..."
+pnpm run project:cleanup
 
-# Generate documentation index
-npm run docs:generate-index
+echo "Generating documentation index..."
+pnpm run docs:generate-index
 
-# Notify user of potential maintenance tasks
-echo "Pre-commit checks passed. To find duplicate documentation, run 'npm run docs:find-duplicates'." 
+# Run successful message
+echo "Pre-commit checks passed. To find duplicate documentation, run 'pnpm run docs:find-duplicates'." 

@@ -68,7 +68,7 @@ const defaultFilters = {
  * Manages time entry data and UI state
  */
 export const useTimeEntriesStore = create<TimeEntriesState>()(
-  immer(set => ({
+  immer((set) => ({
     // Initial state
     entries: {},
     selectedDate: null,
@@ -83,24 +83,24 @@ export const useTimeEntriesStore = create<TimeEntriesState>()(
     // Actions
     actions: {
       // Data actions
-      setEntries: entries =>
-        set(state => {
+      setEntries: (entries: TimeEntry[]) =>
+        set((state: TimeEntriesState) => {
           // Reset current entries
           state.entries = {};
 
           // Index entries by ID for faster lookup
-          entries.forEach(entry => {
+          entries.forEach((entry: TimeEntry) => {
             state.entries[entry.id] = entry;
           });
         }),
 
-      addEntry: entry =>
-        set(state => {
+      addEntry: (entry: TimeEntry) =>
+        set((state: TimeEntriesState) => {
           state.entries[entry.id] = entry;
         }),
 
-      updateEntry: (id, data) =>
-        set(state => {
+      updateEntry: (id: string, data: Partial<TimeEntry>) =>
+        set((state: TimeEntriesState) => {
           if (state.entries[id]) {
             state.entries[id] = {
               ...state.entries[id],
@@ -109,52 +109,52 @@ export const useTimeEntriesStore = create<TimeEntriesState>()(
           }
         }),
 
-      removeEntry: id =>
-        set(state => {
+      removeEntry: (id: string) =>
+        set((state: TimeEntriesState) => {
           delete state.entries[id];
         }),
 
       // Selection actions
-      selectDate: date =>
-        set(state => {
+      selectDate: (date: string | null) =>
+        set((state: TimeEntriesState) => {
           state.selectedDate = date;
         }),
 
-      selectEntry: id =>
-        set(state => {
+      selectEntry: (id: string | null) =>
+        set((state: TimeEntriesState) => {
           state.selectedEntryId = id;
         }),
 
       // Filter actions
-      setDateRange: (startDate, endDate) =>
-        set(state => {
+      setDateRange: (startDate: string | null, endDate: string | null) =>
+        set((state: TimeEntriesState) => {
           state.filters.startDate = startDate;
           state.filters.endDate = endDate;
         }),
 
-      setUserFilter: userId =>
-        set(state => {
+      setUserFilter: (userId: string | null) =>
+        set((state: TimeEntriesState) => {
           state.filters.userId = userId;
         }),
 
-      setStatusFilter: status =>
-        set(state => {
+      setStatusFilter: (status: string | null) =>
+        set((state: TimeEntriesState) => {
           state.filters.status = status;
         }),
 
       resetFilters: () =>
-        set(state => {
+        set((state: TimeEntriesState) => {
           state.filters = { ...defaultFilters };
         }),
 
       // Loading state actions
-      setCreating: isCreating =>
-        set(state => {
+      setCreating: (isCreating: boolean) =>
+        set((state: TimeEntriesState) => {
           state.loading.creating = isCreating;
         }),
 
-      setUpdating: (id, isUpdating) =>
-        set(state => {
+      setUpdating: (id: string, isUpdating: boolean) =>
+        set((state: TimeEntriesState) => {
           state.loading.updating[id] = isUpdating;
 
           // Clean up if not updating
@@ -163,8 +163,8 @@ export const useTimeEntriesStore = create<TimeEntriesState>()(
           }
         }),
 
-      setDeleting: (id, isDeleting) =>
-        set(state => {
+      setDeleting: (id: string, isDeleting: boolean) =>
+        set((state: TimeEntriesState) => {
           state.loading.deleting[id] = isDeleting;
 
           // Clean up if not deleting
@@ -178,26 +178,26 @@ export const useTimeEntriesStore = create<TimeEntriesState>()(
 
 // Selector hooks for better performance
 export const useTimeEntries = () => {
-  const entries = useTimeEntriesStore(state => state.entries);
+  const entries = useTimeEntriesStore((state: TimeEntriesState) => state.entries);
   return Object.values(entries);
 };
 
 export const useTimeEntry = (id: string | null) => {
-  return useTimeEntriesStore(state => (id ? state.entries[id] : null));
+  return useTimeEntriesStore((state: TimeEntriesState) => (id ? state.entries[id] : null));
 };
 
 export const useSelectedEntry = () => {
-  const selectedId = useTimeEntriesStore(state => state.selectedEntryId);
+  const selectedId = useTimeEntriesStore((state: TimeEntriesState) => state.selectedEntryId);
   return useTimeEntry(selectedId);
 };
 
-export const useTimeEntriesFilters = () => useTimeEntriesStore(state => state.filters);
+export const useTimeEntriesFilters = () => useTimeEntriesStore((state: TimeEntriesState) => state.filters);
 
 export const useFilteredTimeEntries = () => {
   const entries = useTimeEntries();
   const filters = useTimeEntriesFilters();
 
-  return entries.filter(entry => {
+  return entries.filter((entry: TimeEntry) => {
     // Filter by date range
     if (filters.startDate && entry.date < filters.startDate) {
       return false;
@@ -223,11 +223,11 @@ export const useFilteredTimeEntries = () => {
 
 // Loading state selectors
 export const useTimeEntryLoadingState = (id: string) => {
-  return useTimeEntriesStore(state => ({
+  return useTimeEntriesStore((state: TimeEntriesState) => ({
     isUpdating: !!state.loading.updating[id],
     isDeleting: !!state.loading.deleting[id],
   }));
 };
 
 // Action hooks
-export const useTimeEntriesActions = () => useTimeEntriesStore(state => state.actions);
+export const useTimeEntriesActions = () => useTimeEntriesStore((state: TimeEntriesState) => state.actions);
