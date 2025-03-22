@@ -61,13 +61,13 @@ interface UiState {
  * Manages global UI state like sidebar, theme, modals, and toasts
  */
 export const useUiStore = create<UiState>()(
-  immer(set => ({
+  immer((set) => ({
     // Initial state
     sidebar: {
       isOpen: true,
       width: 260,
     },
-    theme: 'system',
+    theme: 'system' as const,
     isMobileMenuOpen: false,
     modals: {},
     toasts: [],
@@ -76,69 +76,69 @@ export const useUiStore = create<UiState>()(
     actions: {
       // Sidebar actions
       toggleSidebar: () =>
-        set(state => {
+        set((state: UiState) => {
           state.sidebar.isOpen = !state.sidebar.isOpen;
         }),
 
-      setSidebarOpen: isOpen =>
-        set(state => {
+      setSidebarOpen: (isOpen: boolean) =>
+        set((state: UiState) => {
           state.sidebar.isOpen = isOpen;
         }),
 
-      setSidebarWidth: width =>
-        set(state => {
+      setSidebarWidth: (width: number) =>
+        set((state: UiState) => {
           state.sidebar.width = width;
         }),
 
       // Theme actions
-      setTheme: theme =>
-        set(state => {
+      setTheme: (theme: UiState['theme']) =>
+        set((state: UiState) => {
           state.theme = theme;
         }),
 
       // Mobile menu actions
       toggleMobileMenu: () =>
-        set(state => {
+        set((state: UiState) => {
           state.isMobileMenuOpen = !state.isMobileMenuOpen;
         }),
 
-      setMobileMenuOpen: isOpen =>
-        set(state => {
+      setMobileMenuOpen: (isOpen: boolean) =>
+        set((state: UiState) => {
           state.isMobileMenuOpen = isOpen;
         }),
 
       // Modal actions
-      openModal: modalId =>
-        set(state => {
+      openModal: (modalId: string) =>
+        set((state: UiState) => {
           state.modals[modalId] = true;
         }),
 
-      closeModal: modalId =>
-        set(state => {
+      closeModal: (modalId: string) =>
+        set((state: UiState) => {
           state.modals[modalId] = false;
         }),
 
-      toggleModal: modalId =>
-        set(state => {
+      toggleModal: (modalId: string) =>
+        set((state: UiState) => {
           state.modals[modalId] = !state.modals[modalId];
         }),
 
       // Toast actions
       addToast: (toast: Omit<UiState['toasts'][0], 'id'>) => {
         const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-        set(state => {
+        set((state: UiState) => {
           state.toasts.push({ ...toast, id });
         });
         return id;
       },
 
-      removeToast: id =>
-        set(state => {
+      removeToast: (id: string) =>
+        set((state: UiState) => {
           state.toasts = state.toasts.filter((toast: { id: string }) => toast.id !== id);
         }),
 
       clearToasts: () =>
-        set(state => {
+        set((state: UiState) => {
           state.toasts = [];
         }),
     },
@@ -146,39 +146,39 @@ export const useUiStore = create<UiState>()(
 );
 
 // Selector hooks for better performance
-export const useSidebar = () => useUiStore(state => state.sidebar);
-export const useTheme = () => useUiStore(state => state.theme);
-export const useModals = () => useUiStore(state => state.modals);
-export const useToasts = () => useUiStore(state => state.toasts);
+export const useSidebar = () => useUiStore((state: UiState) => state.sidebar);
+export const useTheme = () => useUiStore((state: UiState) => state.theme);
+export const useModals = () => useUiStore((state: UiState) => state.modals);
+export const useToasts = () => useUiStore((state: UiState) => state.toasts);
 
 // Action hooks
 export const useSidebarActions = () =>
-  useUiStore(state => ({
+  useUiStore((state: UiState) => ({
     toggleSidebar: state.actions.toggleSidebar,
     setSidebarOpen: state.actions.setSidebarOpen,
     setSidebarWidth: state.actions.setSidebarWidth,
   }));
 
 export const useThemeActions = () =>
-  useUiStore(state => ({
+  useUiStore((state: UiState) => ({
     setTheme: state.actions.setTheme,
   }));
 
 export const useMobileMenuActions = () =>
-  useUiStore(state => ({
+  useUiStore((state: UiState) => ({
     toggleMobileMenu: state.actions.toggleMobileMenu,
     setMobileMenuOpen: state.actions.setMobileMenuOpen,
   }));
 
 export const useModalActions = () =>
-  useUiStore(state => ({
+  useUiStore((state: UiState) => ({
     openModal: state.actions.openModal,
     closeModal: state.actions.closeModal,
     toggleModal: state.actions.toggleModal,
   }));
 
 export const useToastActions = () =>
-  useUiStore(state => ({
+  useUiStore((state: UiState) => ({
     addToast: state.actions.addToast,
     removeToast: state.actions.removeToast,
     clearToasts: state.actions.clearToasts,

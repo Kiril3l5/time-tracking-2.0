@@ -161,7 +161,39 @@ pnpm lint:fix
 pnpm format
 ```
 
-#### 4. Working with Firestore
+#### 4. Building the Application
+
+Build all packages in the monorepo:
+
+```bash
+# Build all packages
+pnpm run build:all
+
+# Build specific packages
+pnpm run build:common
+pnpm run build:admin
+pnpm run build:hours
+
+# Fix build issues that may occur
+pnpm run fix:build
+```
+
+#### 5. Preview Deployment
+
+Test your changes with the preview script before pushing:
+
+```bash
+# Run the full preview workflow (build + quality checks)
+pnpm run preview
+
+# Run a quick preview (skipping some checks)
+pnpm run preview:quick
+
+# Run preview without deploying to Firebase
+pnpm run preview:clean
+```
+
+#### 6. Working with Firestore
 
 Development uses the Firebase emulator for Firestore. The emulator data is isolated from production:
 
@@ -175,7 +207,7 @@ pnpm emulators:import
 
 For testing with different user roles, use the Firebase Authentication emulator UI (http://localhost:4000/auth) to create test users with different roles.
 
-#### 5. Debugging Cloud Functions
+#### 7. Debugging Cloud Functions
 
 Cloud Functions can be debugged locally:
 

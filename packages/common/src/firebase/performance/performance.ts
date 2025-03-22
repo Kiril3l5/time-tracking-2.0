@@ -58,19 +58,19 @@ export function measurePerformance<T extends (...args: any[]) => any>(
       // Handle promises
       if (result instanceof Promise) {
         return result
-          .then(value => {
+          .then((value) => {
             perfTrace.stopTrace();
             return value;
           })
-          .catch(error => {
+          .catch((error) => {
             perfTrace.putAttribute('error', 'true');
             perfTrace.stopTrace();
             throw error;
-          }) as ReturnType<T>;
+          }) as unknown as ReturnType<T>;
       }
 
       perfTrace.stopTrace();
-      return result;
+      return result as ReturnType<T>;
     } catch (error) {
       perfTrace.putAttribute('error', 'true');
       perfTrace.stopTrace();

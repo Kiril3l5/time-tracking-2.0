@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@common": ["packages/common/src"],
+      "@common/*": ["packages/common/src/*"],
+      "@admin/*": ["packages/admin/src/*"],
+      "@hours/*": ["packages/hours/src/*"]
+    }
+  }
+} 

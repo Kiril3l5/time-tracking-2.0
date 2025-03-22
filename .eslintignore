@@ -3,6 +3,7 @@ dist
 build
 coverage
 .firebase
+scripts/
 *.d.ts
 *.js.map
 **/*.js.map

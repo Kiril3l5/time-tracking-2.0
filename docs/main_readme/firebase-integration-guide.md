@@ -333,6 +333,56 @@ This Firebase integration works seamlessly with other aspects of the application
 - **UI Components**: Provides data to render in the UI component library
 - **Time Entry Workflow**: Powers the time entry lifecycle process
 
+## Deployment Process
+
+### Preview Deployments
+
+The Time Tracking System supports Firebase preview deployments for testing changes before they go to production.
+
+#### Using the Preview Script
+
+```bash
+# Run a full preview (with all quality checks)
+pnpm run preview
+
+# Run a preview without deploying to Firebase
+pnpm run preview:clean
+
+# Run a quick preview (skip linting, type checking, tests)
+pnpm run preview:quick
+
+# Get help on preview options
+pnpm run preview:help
+```
+
+#### Manual Preview Deployment
+
+You can also manually deploy to Firebase preview channels:
+
+```bash
+# Deploy to a preview channel
+firebase hosting:channel:deploy <channel-name> --project=<project-id>
+
+# List all preview channels
+pnpm run channels:list
+
+# Clean up old preview channels
+pnpm run channels:cleanup:auto
+```
+
+### Production Deployment
+
+For production deployments, use:
+
+```bash
+# Deploy to production
+pnpm run app:deploy
+
+# Deploy only specific hosting targets
+pnpm run deploy:admin  # Deploy only admin portal
+pnpm run deploy:hours  # Deploy only hours portal
+```
+
 ## Conclusion
 
 This Firebase integration structure provides a robust, type-safe foundation for the Time Tracking System. By centralizing Firebase logic in the common package with a service-based architecture, it ensures consistency across both portals while enforcing best practices for security, performance, and developer experience. 

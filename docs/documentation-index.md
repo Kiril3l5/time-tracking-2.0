@@ -2,7 +2,7 @@
 
 This document provides an index of all documentation files in the project.
 
-Generated on: 2025-03-16T22:49:06.325Z
+Generated on: 2025-05-20T14:30:00.000Z
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ Generated on: 2025-03-16T22:49:06.325Z
 
 | Document | Last Modified | Size | Lines | Summary |
 |----------|---------------|------|-------|--------|
-| [Documentation Index](./documentation-index.md) | 2025-03-16 | 5 KB | 103 | This document provides an index of all documentation files in the project. |
+| [Documentation Index](./documentation-index.md) | 2025-05-20 | 5.2 KB | 104 | This document provides an index of all documentation files in the project. |
 | [Project Cleanup and Organization Summary](./project-cleanup-summary.md) | 2025-03-16 | 2.9 KB | 74 | (No summary available) |
 
 ## architecture
@@ -99,4 +99,4 @@ Generated on: 2025-03-16T22:49:06.325Z
 | Document | Last Modified | Size | Lines | Summary |
 |----------|---------------|------|-------|--------|
 | [Development Workflow](./workflow/development.md) | 2025-03-16 | 4 KB | 157 | (No summary available) |
-
+| [Preview Deployment Guide](./workflow/preview-deployment-guide.md) | 2025-03-16 | 25 KB | 640 | Comprehensive guide to Firebase preview deployment workflow, covering both technical architecture and user instructions for creating, managing, and troubleshooting preview deployments. |
