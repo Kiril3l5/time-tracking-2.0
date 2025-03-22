@@ -66,11 +66,8 @@ jobs:
           # Use the script from package.json
           pnpm run build:all
       
-      # Authentication for main branch deployment using Workload Identity Federation
-      # This is the recommended secure way to authenticate to Google Cloud from GitHub Actions
-      # It uses short-lived tokens instead of long-lived service account keys
+      # Authentication for any GitHub action (both main branch and PRs)
       - name: Authenticate to Google Cloud
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: auth
         uses: google-github-actions/auth@v1
         with:
@@ -78,21 +75,16 @@ jobs:
           service_account: 'github-actions-sa@autonomy-heroes.iam.gserviceaccount.com'
       
       # Production deployment - only runs when pushing to main branch
-      # Uses the Workload Identity Federation authentication from the previous step
       - name: Deploy to Firebase Hosting and Rules
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           pnpm add -g firebase-tools
           firebase deploy --only hosting,firestore:rules
       
-      # Preview deployment for pull requests
-      # Uses FirebaseExtended/action-hosting-deploy which handles authentication via service account
+      # Preview deployment for pull requests - using the same authentication
       # Creates a PR-specific channel that can be used for review
       - name: Deploy PR Preview
         if: github.event_name == 'pull_request'
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: '${{ secrets.GITHUB_TOKEN }}'
-          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
-          projectId: 'autonomy-heroes'
-          channelId: 'pr-${{ github.event.number }}'
+        run: |
+          pnpm add -g firebase-tools
+          firebase hosting:channel:deploy pr-${{ github.event.number }} --json
