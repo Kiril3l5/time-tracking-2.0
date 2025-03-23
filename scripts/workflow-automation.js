@@ -185,13 +185,11 @@ function showWorkflowProgress(stepId) {
   const step = WORKFLOW_STEPS.find(s => s.id === stepId);
   if (!step) return;
   
-  const totalSteps = WORKFLOW_STEPS.length;
-  
   // Update terminal title with current step
-  updateTerminalTitle(`Step ${stepId}/${totalSteps}: ${step.name}`);
+  updateTerminalTitle(`${step.name}`);
   
   console.log('\n');
-  console.log(`STEP ${stepId}/${totalSteps}: ${step.name}`);
+  console.log(`${step.name}`);
   console.log('='.repeat(50));
   console.log(`${step.description}`);
 }

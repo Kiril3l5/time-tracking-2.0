@@ -118,7 +118,18 @@ export function startStep(title) {
   stepStartTime = Date.now();
   
   // Format step counter
-  const stepCounter = `Step ${currentStep}${totalSteps ? '/' + totalSteps : ''}`;
+  let displayStep = currentStep;
+  
+  // If current step exceeds total steps, log a debug message but cap display value
+  if (totalSteps > 0 && currentStep > totalSteps) {
+    // Debug log if available
+    if (typeof logger.debug === 'function') {
+      logger.debug(`Warning: Current step (${currentStep}) exceeds total steps (${totalSteps})`);
+    }
+    displayStep = totalSteps;
+  }
+  
+  const stepCounter = `Step ${displayStep}${totalSteps ? '/' + totalSteps : ''}`;
   const stepInfo = styled.bold(`${colors.magenta}${stepCounter}:${colors.reset}`);
   
   // Print step header
@@ -182,11 +193,12 @@ export function completeStep(success = true, message) {
   const statusIcon = success ? styled.success('✓') : styled.error('✗');
   const timeText = styled.cyan(`(${elapsedSec}s)`);
   
+  // Display a cleaner output
   if (message) {
     logger.info(`  ${statusIcon} ${message} ${timeText}`);
   } else {
-    const status = success ? 'Completed' : 'Failed';
-    logger.info(`  ${statusIcon} Step ${status} ${timeText}`);
+    // If no message is provided, just show a simple status indicator with time
+    logger.info(`  ${statusIcon} ${timeText}`);
   }
   
   return elapsed;

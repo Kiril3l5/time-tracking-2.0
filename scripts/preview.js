@@ -293,63 +293,71 @@ export default async function main(args) {
     // Clean up temp directory at the start of the workflow
     cleanupTempDirectory();
     
-    // Initialize a step counter
-    let stepCounter = 0;
+    // Initialize a step counter - use a flat numbering approach
+    let totalSteps = 0;
     
-    // Count core steps that are always included
-    const skipDependencyCheck = args['skip-dep-check'] === true;
-    const authSteps = skipDependencyCheck ? 1 : 2; // Authentication only or Dependency+Authentication
-    stepCounter += authSteps;
+    // Create a list of steps that will run, to ensure proper sequential numbering
+    const steps = [];
     
-    // Count quality checks as one step if not all are skipped
-    const skipAllQualityChecks = args['skip-all-quality-checks'] === true;
-    const qualityChecksWillRun = !skipAllQualityChecks;
-    if (qualityChecksWillRun) stepCounter += 1;
+    // Dependency check step
+    if (!args['skip-dep-check']) {
+      steps.push('Dependency verification');
+    }
     
-    // Count build step if not skipped
-    const buildWillRun = !args['skip-build'];
-    if (buildWillRun) stepCounter += 1;
+    // Authentication step (always runs)
+    steps.push('Firebase authentication');
     
-    // Count additional quality checks
-    let additionalChecksCount = 0;
-    if (!args['skip-module-syntax']) additionalChecksCount++;
-    if (!args['skip-bundle-analysis']) additionalChecksCount++;
-    if (!args['skip-dependency-scan']) additionalChecksCount++;
-    if (!args['skip-dead-code']) additionalChecksCount++;
-    if (!args['skip-doc-quality']) additionalChecksCount++;
-    if (!args['skip-workflow-validation']) additionalChecksCount++;
+    // Quality checks are one step in the main flow 
+    if (!args['skip-all-quality-checks']) {
+      steps.push('Quality checks');
+    }
     
-    stepCounter += additionalChecksCount;
+    // Build step
+    if (!args['skip-build']) {
+      steps.push('Building application');
+    }
     
-    // Count deployment step if not skipped
-    const deployWillRun = !args['skip-deploy'];
-    if (deployWillRun) stepCounter += 1;
+    // Additional quality checks, each as its own step
+    if (!args['skip-module-syntax']) steps.push('Module syntax check');
+    if (!args['skip-bundle-analysis']) steps.push('Bundle size analysis');
+    if (!args['skip-dependency-scan']) steps.push('Dependency scanning');
+    if (!args['skip-dead-code']) steps.push('Dead code detection');
+    if (!args['skip-doc-quality']) steps.push('Documentation quality');
+    if (!args['skip-workflow-validation']) steps.push('Workflow validation');
     
-    // Add one step for consolidated report generation
-    stepCounter += 1;
+    // Deployment step
+    if (!args['skip-deploy']) {
+      steps.push('Deploying to Firebase');
+    }
+    
+    // Report generation (always runs)
+    steps.push('Generating reports');
+    
+    // Set total steps based on the number of operations we'll perform
+    totalSteps = steps.length;
     
     // Log skipped steps
     let skippedMessage = '';
-    if (skipDependencyCheck) skippedMessage += 'dependency check, ';
+    if (args['skip-dep-check']) skippedMessage += 'dependency check, ';
     if (args['skip-build']) skippedMessage += 'build step, ';
     if (args['skip-deploy']) skippedMessage += 'deploy step, ';
-    if (skipAllQualityChecks) skippedMessage += 'all quality checks, ';
+    if (args['skip-all-quality-checks']) skippedMessage += 'all quality checks, ';
     
     if (skippedMessage) {
       logger.info(`Skipping ${skippedMessage.slice(0, -2)}`);
     }
     
-    logger.info(`Workflow will execute ${stepCounter} steps in total`);
+    logger.info(`Workflow will execute ${totalSteps} steps in total`);
     
     logger.sectionHeader('PREVIEW DEPLOYMENT');
     
     const errorTracker = new ErrorAggregator();
     
     // Initialize progress tracker with the total steps
-    progressTracker.initProgress(stepCounter, 'PREVIEW DEPLOYMENT');
+    progressTracker.initProgress(totalSteps, 'PREVIEW DEPLOYMENT');
     
     // Step 1: Verify dependencies (if not skipped)
-    if (!skipDependencyCheck) {
+    if (!args['skip-dep-check']) {
       progressTracker.startStep('Verifying Dependencies');
       const depsResult = await runDependencyVerification({
         ...args,
@@ -543,7 +551,7 @@ export default async function main(args) {
     logger.info('\nWorkflow completed successfully!');
     
     // If we made it here, print a success message
-    if (deployWillRun) {
+    if (!args['skip-deploy']) {
       logger.success(`
 Preview deployment is complete!
 Preview dashboard is available at preview-dashboard.html
