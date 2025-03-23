@@ -48,6 +48,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { fileURLToPath } from 'url';
+import * as child_process from 'child_process';
 
 /* global process, global, Buffer, setTimeout, clearTimeout */
 
@@ -301,16 +302,14 @@ export async function runCommandAsync(command, options = {}) {
         cwd,
         env,
         stdio,
-        shell: shell || (process.platform === 'win32' && command.includes('&&'))
+        shell: true // Use shell: true for cross-platform compatibility
       };
       
       await new Promise((resolve, reject) => {
-        const childProcess = exec(
-          // On Windows with shell: false, first arg should be command
-          // On other platforms or with shell: true, it should be the full command line
-          spawnOptions.shell ? 'sh' : command.split(' ')[0],
-          // Args only used if shell: false and not on windows
-          spawnOptions.shell ? ['-c', command] : command.split(' ').slice(1),
+        // Use shell: true for all platforms to ensure commands work properly
+        const childProcess = child_process.spawn(
+          command,
+          [],
           spawnOptions
         );
         
