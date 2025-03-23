@@ -59,26 +59,29 @@ function processFile(filePath, options = {}) {
       }
     }
 
-    // Add type declarations if using React Query hooks
-    if (
-      content.includes('useQuery') ||
-      content.includes('useMutation') ||
-      content.includes('useInfiniteQuery')
-    ) {
-      // Check if we need to add type imports
-      if (!content.includes('@tanstack/react-query-types')) {
-        // Find the last import statement
-        const importRegex = /import\s+[^;]+;/g;
-        let lastImportIndex = -1;
-        let match;
+    // Add type declarations if they're actually used in the code
+    // Instead of blindly adding them when hooks are present
+    const needsQueryKeyType = content.includes('QueryKey') && !content.includes("QueryKey } from '@tanstack/react-query'");
+    const needsQueryFunctionType = content.includes('QueryFunction') && !content.includes("QueryFunction } from '@tanstack/react-query'");
+    
+    if (needsQueryKeyType || needsQueryFunctionType) {
+      // Find the last import statement
+      const importRegex = /import\s+[^;]+;/g;
+      let lastImportIndex = -1;
+      let match;
+      
+      while ((match = importRegex.exec(content)) !== null) {
+        lastImportIndex = match.index + match[0].length;
+      }
+      
+      if (lastImportIndex !== -1) {
+        // Only add types that are needed
+        const typesToAdd = [];
+        if (needsQueryKeyType) typesToAdd.push('QueryKey');
+        if (needsQueryFunctionType) typesToAdd.push('QueryFunction');
         
-        while ((match = importRegex.exec(content)) !== null) {
-          lastImportIndex = match.index + match[0].length;
-        }
-        
-        if (lastImportIndex !== -1) {
-          // Add type import after the last import
-          const typeImport = "\nimport type { QueryKey, QueryFunction } from '@tanstack/react-query';";
+        if (typesToAdd.length > 0) {
+          const typeImport = `\nimport type { ${typesToAdd.join(', ')} } from '@tanstack/react-query';`;
           content = content.slice(0, lastImportIndex) + typeImport + content.slice(lastImportIndex);
           modified = true;
         }
