@@ -79,7 +79,24 @@ After branch selection:
 The workflow now automatically:
 - Checks if your `.gitignore` file has the proper entries for temporary files
 - Updates `.gitignore` to ignore preview-specific files that shouldn't be committed
-- Helps prevent issues with uncommitted temporary files during PR creation
+- Helps prevent issues with uncommitted changes during PR creation
+- **Automatically commits changes** made to Git tracking of temporary files
+- Prevents PR creation failures due to temporary file tracking changes
+
+When the gitignore fixer removes temporary files from Git tracking, the workflow will automatically commit these changes for you with a standardized commit message. This ensures a smooth transition from preview deployment to PR creation without any manual intervention required.
+
+#### Intelligent Handling of Mixed Changes
+
+The workflow tool is smart about handling changes:
+
+- **Temporary Files Only**: If all uncommitted changes are from temporary files being removed from Git tracking, they'll be automatically committed with a standardized message.
+
+- **Mixed Changes**: If you have both temporary file changes and other meaningful changes:
+  - The tool will automatically commit *only* the temporary file removals
+  - Your other changes will remain uncommitted
+  - You'll be prompted to commit your remaining changes or use `--auto-commit`
+  
+This prevents temporary files from blocking your workflow while still giving you control over your meaningful changes.
 
 ### 4. Preview Deployment
 

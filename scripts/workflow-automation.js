@@ -231,6 +231,66 @@ async function fixGitignoreIssues() {
 }
 
 /**
+ * Check for and commit gitignore-related changes
+ * This ensures that temporary files removed from git tracking are committed
+ * before proceeding with PR creation
+ */
+async function commitGitignoreChanges() {
+  // Check if there are uncommitted changes
+  if (hasUncommittedChanges()) {
+    // Get status to see what kind of changes we have
+    const statusResult = executeCommand('git status --porcelain');
+    const changes = statusResult.output.trim().split('\n');
+    
+    // Filter for temp file deletions
+    const tempFileChanges = changes.filter(change => {
+      // Look for deletions (lines starting with D)
+      if (!change.startsWith('D')) return false;
+      
+      // Extract filename
+      const filename = change.substring(2).trim();
+      
+      // Check if it's a temporary file
+      return filename === '.env.build' || 
+             filename === 'preview-dashboard.html' || 
+             filename.startsWith('temp/');
+    });
+    
+    // If we have temp file changes, commit them automatically
+    if (tempFileChanges.length > 0) {
+      // If there are other changes, we need to stage only the temp files
+      if (tempFileChanges.length !== changes.length) {
+        logger.info("Auto-committing only temporary file tracking changes...");
+        
+        // Stage only the temporary files for deletion
+        for (const change of tempFileChanges) {
+          const filename = change.substring(2).trim();
+          executeCommand(`git add -u "${filename}"`, { suppressErrors: true });
+        }
+        
+        // Commit only the staged changes
+        executeCommand('git commit -m "chore: Update gitignore and remove temporary files from tracking"');
+        
+        logger.success("Temporary file changes committed automatically");
+        logger.info("Note: Other uncommitted changes were left untouched");
+      } else {
+        // All changes are temp files, can commit everything
+        logger.info("Auto-committing temporary file tracking changes...");
+        
+        // Commit the changes
+        executeCommand('git add .');
+        executeCommand('git commit -m "chore: Update gitignore and remove temporary files from tracking"');
+        
+        logger.success("Temporary file changes committed automatically");
+      }
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
  * Create PR with better error handling
  */
 async function createPullRequest(title, description) {
@@ -576,10 +636,13 @@ async function runWorkflow() {
       logger.info("No uncommitted changes detected.");
     }
     
-    // New Step: Fix gitignore issues
+    // Step 3: Fix gitignore issues
     await fixGitignoreIssues();
     
-    // Step 3: Run preview deployment
+    // New Step: Auto-commit any changes made by gitignore fixer
+    await commitGitignoreChanges();
+    
+    // Step 4: Run preview deployment
     logger.sectionHeader('RUNNING PREVIEW DEPLOYMENT');
     logger.info("Starting preview deployment. This may take a few minutes...");
     
@@ -608,7 +671,7 @@ async function runWorkflow() {
         }
       }
       
-      // Step 4: Offer to create a PR
+      // Step 5: Offer to create a PR
       const shouldCreatePR = await prompt("Would you like to create a pull request? (Y/n): ");
       if (shouldCreatePR.toLowerCase() !== 'n') {
         // Generate PR title and description suggestions
