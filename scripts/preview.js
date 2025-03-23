@@ -584,33 +584,51 @@ async function verifyAuthentication() {
     // If token is older than 12 hours, force reauthentication
     if (tokenAge >= 12) {
       logger.info(`Firebase token might be expired (last auth was ${Math.round(tokenAge)} hours ago)`);
-      logger.info('Initiating Firebase reauthentication...');
       
-      try {
-        const reAuthResult = await commandRunner.runCommandAsync('firebase login --reauth', {
-          timeout: 120000, // 2 minute timeout
-          shell: true
+      // First, try regular authentication check without reauthentication
+      const initialAuthResult = await authManager.verifyAllAuth();
+      
+      // If Firebase authentication is already valid, no need to reauthenticate
+      if (initialAuthResult.success && initialAuthResult.services.firebase.authenticated) {
+        logger.success('Firebase authentication is still valid despite age');
+        // Update the last authentication time
+        _saveAuthTokens({
+          ...authTokens,
+          lastAuthenticated: currentTime
         });
+      } else {
+        // Authentication failed, need to reauthenticate
+        logger.info('Initiating Firebase reauthentication...');
+        logger.info('This will open a browser window. Please complete the login process.');
         
-        if (reAuthResult.success) {
-          logger.success('Firebase reauthentication successful');
-          // Update the last authentication time
-          _saveAuthTokens({
-            ...authTokens,
-            lastAuthenticated: currentTime
+        try {
+          // Use regular login instead of --reauth which may not work correctly in all environments
+          const reAuthResult = await commandRunner.runCommandAsync('firebase login', {
+            timeout: 180000, // 3 minute timeout
+            shell: true,
+            stdio: 'inherit' // Use inherit to allow interactive prompts
           });
-        } else {
-          logger.error('Firebase reauthentication failed');
-          logger.error(reAuthResult.error || 'Unknown error during reauthentication');
+          
+          if (reAuthResult.success) {
+            logger.success('Firebase reauthentication successful');
+            // Update the last authentication time
+            _saveAuthTokens({
+              ...authTokens,
+              lastAuthenticated: currentTime
+            });
+          } else {
+            logger.error('Firebase reauthentication failed');
+            logger.error(reAuthResult.error || 'Unknown error during reauthentication');
+            logger.info('Please try manually running: firebase login');
+            progressTracker.completeStep(false, 'Firebase reauthentication failed');
+            return false;
+          }
+        } catch (error) {
+          logger.error(`Error during Firebase reauthentication: ${error.message}`);
           logger.info('Please try manually running: firebase login');
-          progressTracker.completeStep(false, 'Firebase reauthentication failed');
+          progressTracker.completeStep(false, 'Error during Firebase reauthentication');
           return false;
         }
-      } catch (error) {
-        logger.error(`Error during Firebase reauthentication: ${error.message}`);
-        logger.info('Please try manually running: firebase login');
-        progressTracker.completeStep(false, 'Error during Firebase reauthentication');
-        return false;
       }
     }
     
@@ -1243,6 +1261,14 @@ async function deployPreview(args) {
   logger.startStep('Deploying preview');
   
   try {
+    // Verify Firebase authentication first
+    const authResult = await verifyAuthentication();
+    if (!authResult) {
+      logger.error('Authentication failed. Cannot proceed with deployment.');
+      progressTracker.completeStep(false, 'Deployment aborted due to authentication failure');
+      return false;
+    }
+    
     // Generate channel ID
     const channelId = generateChannelId();
     
@@ -1285,7 +1311,7 @@ async function deployPreview(args) {
       logger.success(`Deployment successful!`);
       
       // Extract and process the preview URLs
-      const urls = extractPreviewUrlsFromOutput(deployResult.output);
+      const urls = extractPreviewUrlsFromOutput(deployResult.rawOutput || deployResult.output);
       
       if (urls && Object.keys(urls).length > 0) {
         logger.success('Successfully extracted preview URLs:');
@@ -1302,12 +1328,23 @@ async function deployPreview(args) {
       return true;
     } else {
       logger.error(`Deployment failed: ${deployResult.error}`);
+      if (deployResult.deployOutput) {
+        logger.debug('Deployment output:');
+        logger.debug(deployResult.deployOutput);
+      }
+      if (deployResult.deployError) {
+        logger.error('Deployment error details:');
+        logger.error(deployResult.deployError);
+      }
+      
       progressTracker.completeStep(false, 'Deployment failed');
       return false;
     }
   } catch (error) {
     // Don't collect metrics, just throw the error
     handleError(error);
+    progressTracker.completeStep(false, `Deployment failed with error: ${error.message}`);
+    return false;
   } finally {
     // Instead of: await metrics.endStage('deployment');
   }
