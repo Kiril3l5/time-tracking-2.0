@@ -15,7 +15,6 @@ import {
   timeEntriesCollection,
 } from '../firestore/firestore-service';
 import { TimeEntry, Company } from '../../types/firestore';
-import type { QueryKey, QueryFunction } from '@tanstack/react-query';
 
 // Time entry hooks
 export function useTimeEntries(userId: string, yearWeek: string) {

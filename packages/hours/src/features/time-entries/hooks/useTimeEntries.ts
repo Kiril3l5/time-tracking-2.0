@@ -3,7 +3,6 @@ import { timeEntriesApi } from '../../../api/time-entries';
 import { useEffect, useMemo } from 'react';
 import { useAuth } from '../../../hooks/useAuth';
 import { TimeEntry } from '../../../types/TimeEntry';
-import type { QueryKey, QueryFunction } from '@tanstack/react-query';
 
 /**
  * Hook to fetch time entries for a date range
