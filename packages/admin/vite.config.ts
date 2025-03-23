@@ -5,9 +5,14 @@ import path from 'path';
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  // Load env file based on `mode` in the current directory.
-  // Set the third parameter to '' to load all env regardless of the `VITE_` prefix.
-  const env = loadEnv(mode, process.cwd(), '');
+  const rootDir = path.resolve(__dirname, '../..');
+  
+  // Load env file based on `mode` from both the current dir and the root dir
+  // This ensures we find .env files in the project root
+  const env = {
+    ...loadEnv(mode, process.cwd(), ''),
+    ...loadEnv(mode, rootDir, '')
+  };
   
   return {
     plugins: [
