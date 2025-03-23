@@ -670,24 +670,108 @@ async function runWorkflow() {
     logger.sectionHeader('RUNNING PREVIEW DEPLOYMENT');
     logger.info("Starting preview deployment. This may take a few minutes...");
     
-    // Run the preview workflow
+    // Run the preview workflow with better error handling
     const previewCommand = 'pnpm run preview';
     logger.info("\nRunning preview deployment workflow...");
     
     // Track overall workflow success
     let workflowSuccess = true;
+    let previewUrls = null;
     
     try {
-      const previewResult = executeCommand(previewCommand);
+      // Execute the preview command
+      const previewResult = executeCommand(previewCommand, { 
+        stdio: 'pipe',
+        suppressErrors: true 
+      });
       
       if (!previewResult.success) {
-        logger.error("Preview deployment failed");
-        logger.error("Command failed: pnpm run preview");
-        workflowSuccess = false;
+        logger.error("Preview deployment encountered errors");
+        
+        // Save the output to a log file for URL extraction
+        const tempDir = path.join(process.cwd(), 'temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+        
+        const logFilePath = path.join(tempDir, 'preview-deploy-error.log');
+        fs.writeFileSync(logFilePath, previewResult.output || '');
+        
+        // Check if deployment actually completed despite errors
+        logger.info("Checking for preview URLs in deployment output...");
+        
+        try {
+          // Attempt to extract URLs from the output
+          // Import report collector functions dynamically
+          const reportModule = await import('./reports/report-collector.js');
+          
+          // Try to extract URLs from the error output
+          previewUrls = reportModule.extractPreviewUrls(tempDir);
+          
+          if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
+            logger.success("Found preview URLs despite deployment errors!");
+            
+            // Display the URLs
+            if (previewUrls.admin) {
+              logger.info(`Admin Dashboard URL: ${previewUrls.admin}`);
+            }
+            
+            if (previewUrls.hours) {
+              logger.info(`Hours App URL: ${previewUrls.hours}`);
+            }
+            
+            // Mark as partial success
+            logger.warn("Deployment completed with warnings. Preview URLs are available.");
+            workflowSuccess = true;
+          } else {
+            logger.error("Could not find valid preview URLs. Deployment likely failed.");
+            workflowSuccess = false;
+          }
+        } catch (extractError) {
+          logger.error(`Error extracting preview URLs: ${extractError.message}`);
+          workflowSuccess = false;
+        }
+      } else {
+        logger.success("Preview deployment command completed successfully!");
+        
+        // Import report collector functions dynamically
+        const reportModule = await import('./reports/report-collector.js');
+        
+        // Extract URLs from the command output
+        const tempDir = path.join(process.cwd(), 'temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+        
+        // Save output to a log file for URL extraction
+        const logFilePath = path.join(tempDir, 'preview-deploy.log');
+        fs.writeFileSync(logFilePath, previewResult.output || '');
+        
+        // Extract URLs from the logs
+        previewUrls = reportModule.extractPreviewUrls(tempDir);
+        
+        if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
+          logger.success("Preview URLs extracted successfully!");
+          
+          // Display the URLs
+          if (previewUrls.admin) {
+            logger.info(`Admin Dashboard URL: ${previewUrls.admin}`);
+          }
+          
+          if (previewUrls.hours) {
+            logger.info(`Hours App URL: ${previewUrls.hours}`);
+          }
+          
+          workflowSuccess = true;
+        } else {
+          logger.warn("Could not extract preview URLs from deployment logs.");
+          logger.warn("Deployment may have succeeded, but no URLs were found.");
+          workflowSuccess = true; // Command succeeded, but URL extraction failed
+        }
       }
       
       if (!workflowSuccess) {
-        logger.warn("The workflow encountered errors. Please address them before continuing.");
+        logger.warn("The preview deployment encountered errors. Please address them before continuing.");
         logger.info("You might need to run 'firebase login' to refresh your authentication.");
         
         const shouldContinue = await prompt("Would you still like to continue with the workflow? (y/N): ");
@@ -696,8 +780,6 @@ async function runWorkflow() {
           rl.close();
           return;
         }
-      } else {
-        logger.success("Preview deployment successful!");
       }
     } catch (error) {
       logger.error(`Error running preview: ${error.message}`);

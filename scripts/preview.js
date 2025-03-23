@@ -1177,10 +1177,94 @@ function generateChannelId() {
 }
 
 /**
- * Format and save preview URLs
+ * Extract preview URLs from deployment output
  * 
- * @param {Object} urls - Object containing preview URLs
- * @returns {boolean} - Success or failure
+ * @param {string} output - Deployment output
+ * @returns {Object|null} - Object with admin and hours URLs or null
+ */
+function extractPreviewUrlsFromOutput(output) {
+  if (!output) return null;
+  
+  const urls = {};
+  let allUrls = [];
+  
+  // Try multiple patterns to extract URLs
+  const urlPatterns = [
+    // Firebase CLI v13.34.0 format with dash prefix
+    {
+      pattern: /(?:^|\s)-\s+(https:\/\/[^\s]+\.web\.app)/gm,
+      matchGroup: 1
+    },
+    // Look for labeled URLs in our custom format
+    {
+      pattern: /ADMIN:?\s+(https:\/\/[^\s,]+)/i,
+      matchGroup: 1,
+      target: 'admin'
+    },
+    {
+      pattern: /HOURS:?\s+(https:\/\/[^\s,]+)/i,
+      matchGroup: 1,
+      target: 'hours'
+    },
+    // Firebase CLI v9+ hosting URL format
+    {
+      pattern: /(?:Channel URL|Hosting URL|Live URL|Preview URL)(?:\s*\([^)]*\))?:\s+(https:\/\/[^\s]+)/gi,
+      matchGroup: 1
+    },
+    // Standard Firebase hosting URL patterns
+    {
+      pattern: /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.web\.app/g,
+      matchGroup: 0
+    },
+    {
+      pattern: /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.firebaseapp\.com/g,
+      matchGroup: 0
+    }
+  ];
+  
+  // Extract URLs using all patterns
+  for (const { pattern, matchGroup, target } of urlPatterns) {
+    let match;
+    while ((match = pattern.exec(output)) !== null) {
+      const url = match[matchGroup].trim();
+      
+      if (target) {
+        // Direct assignment for patterns with specific targets
+        urls[target] = url;
+      } else {
+        // Add to general list for categorization later
+        allUrls.push(url);
+      }
+    }
+  }
+  
+  // If we have collected general URLs, categorize them
+  if (allUrls.length > 0) {
+    for (const url of allUrls) {
+      if (url.includes('admin') && !urls.admin) {
+        urls.admin = url;
+      } else if (url.includes('hours') && !urls.hours) {
+        urls.hours = url;
+      } else if (!urls.admin) {
+        urls.admin = url;
+      } else if (!urls.hours) {
+        urls.hours = url;
+      }
+    }
+  }
+  
+  // If we have any URLs that weren't categorized, store them as generic URLs
+  if (allUrls.length > 0 && !urls.admin && !urls.hours) {
+    urls.urls = allUrls;
+  }
+  
+  return Object.keys(urls).length > 0 ? urls : null;
+}
+
+/**
+ * Save preview URLs to file
+ * @param {Object} urls - URLs to save
+ * @returns {boolean} - Whether save was successful
  */
 function savePreviewUrls(urls) {
   if (!urls || Object.keys(urls).length === 0) {
@@ -1196,6 +1280,15 @@ function savePreviewUrls(urls) {
     const filePath = path.join(tempDir, 'preview-urls.json');
     fs.writeFileSync(filePath, JSON.stringify(urls, null, 2));
     logger.success(`Preview URLs saved to ${filePath}`);
+    
+    // Also log them clearly for immediate visibility
+    logger.info('Preview URLs:');
+    if (urls.admin) logger.info(`- ADMIN: ${urls.admin}`);
+    if (urls.hours) logger.info(`- HOURS: ${urls.hours}`);
+    if (urls.urls) {
+      urls.urls.forEach(url => logger.info(`- ${url}`));
+    }
+    
     return true;
   } catch (error) {
     logger.error(`Failed to save preview URLs: ${error.message}`);
@@ -1300,53 +1393,6 @@ async function deployPreview(args) {
   } finally {
     // Instead of: await metrics.endStage('deployment');
   }
-}
-
-/**
- * Extract preview URLs from deployment output
- * 
- * @param {string} output - Deployment output
- * @returns {Object|null} - Object with admin and hours URLs or null
- */
-function extractPreviewUrlsFromOutput(output) {
-  if (!output) return null;
-  
-  const urls = {};
-  
-  // Look for labeled URLs first (our custom format)
-  const adminMatch = output.match(/ADMIN:?\s+(https:\/\/[^\s,]+)/i);
-  if (adminMatch && adminMatch[1]) {
-    urls.admin = adminMatch[1].trim();
-  }
-  
-  const hoursMatch = output.match(/HOURS:?\s+(https:\/\/[^\s,]+)/i);
-  if (hoursMatch && hoursMatch[1]) {
-    urls.hours = hoursMatch[1].trim();
-  }
-  
-  // If not found, try to extract Firebase hosting URLs
-  if (!urls.admin || !urls.hours) {
-    const firebaseUrlPattern = /(?:Project Console|Hosting URL|Web app URL|Preview URL):\s+(https:\/\/[^\s,]+)/gi;
-    const urlMatches = [...output.matchAll(firebaseUrlPattern)];
-    
-    if (urlMatches.length > 0) {
-      // Try to differentiate between admin and hours URLs
-      for (const match of urlMatches) {
-        const url = match[1].trim();
-        if (url.includes('admin') && !urls.admin) {
-          urls.admin = url;
-        } else if (url.includes('hours') && !urls.hours) {
-          urls.hours = url;
-        } else if (!urls.admin) {
-          urls.admin = url;
-        } else if (!urls.hours) {
-          urls.hours = url;
-        }
-      }
-    }
-  }
-  
-  return Object.keys(urls).length > 0 ? urls : null;
 }
 
 /**
@@ -1695,6 +1741,161 @@ async function runDependencyVerification(args) {
     logger.error('Dependency verification failed');
     logger.info('Run with --auto-install-deps to attempt automatic installation');
     return false;
+  }
+}
+
+/**
+ * Deploy the project to Firebase
+ * 
+ * @param {string} channel - The Firebase Hosting preview channel to deploy to
+ * @returns {Promise<Object>} Result object with deployment success and URLs
+ */
+export async function deployToFirebase(channel) {
+  const tempDir = path.join(process.cwd(), 'temp');
+  ensureDirExists(tempDir);
+
+  const logFilePath = path.join(tempDir, 'firebase-deploy.log');
+  
+  // Generate a unique channel name if one wasn't provided
+  const targetChannel = channel || `preview-${Date.now()}`;
+  
+  logger.info(`Deploying to Firebase preview channel: ${targetChannel}`);
+  
+  try {
+    // Use the Firebase Hosting preview feature to deploy to a temporary URL
+    const command = `firebase hosting:channel:deploy ${targetChannel} --json`;
+    
+    // Display the command being run
+    logger.info(`Running: ${command}`);
+    
+    // Run the command and capture output
+    const result = await commandRunner.runCommandAsync(command, {
+      stdio: 'pipe',
+      captureOutput: true
+    });
+    
+    // Save the output to a log file for debugging
+    fs.writeFileSync(logFilePath, result.output);
+    logger.info(`Deployment log saved to: ${logFilePath}`);
+    
+    // Extract preview URLs from the command output
+    const urls = extractPreviewUrlsFromOutput(result.output);
+    
+    if (!urls || (!urls.admin && !urls.hours)) {
+      logger.warn('No preview URLs were found in the deployment output.');
+      logger.debug('Checking for URLs in the deployment log file...');
+      
+      // Try to extract URLs from the saved log file as a backup method
+      if (fs.existsSync(logFilePath)) {
+        const logContent = fs.readFileSync(logFilePath, 'utf8');
+        const urlsFromLog = extractPreviewUrlsFromOutput(logContent);
+        
+        if (urlsFromLog && (urlsFromLog.admin || urlsFromLog.hours)) {
+          logger.info('Found preview URLs in the deployment log file.');
+          
+          // Save the URLs to a file for later reference
+          savePreviewUrls(urlsFromLog);
+          
+          return {
+            success: true,
+            urls: urlsFromLog
+          };
+        }
+      }
+      
+      // Check for URLs in other command logs
+      logger.debug('Searching for URLs in recent command logs...');
+      const recentLogs = commandRunner.getRecentCommandLogs();
+      
+      for (const log of recentLogs) {
+        const urlsFromLog = extractPreviewUrlsFromOutput(log.output);
+        
+        if (urlsFromLog && (urlsFromLog.admin || urlsFromLog.hours)) {
+          logger.info('Found preview URLs in command logs.');
+          
+          // Save the URLs to a file for later reference
+          savePreviewUrls(urlsFromLog);
+          
+          return {
+            success: true,
+            urls: urlsFromLog
+          };
+        }
+      }
+      
+      // Check for URLs in deployment logs
+      logger.debug('Searching for URLs in deployment logs...');
+      const deploymentLogs = commandRunner.findDeploymentLogs();
+      
+      for (const logFile of deploymentLogs) {
+        if (fs.existsSync(logFile)) {
+          const logContent = fs.readFileSync(logFile, 'utf8');
+          const urlsFromLog = extractPreviewUrlsFromOutput(logContent);
+          
+          if (urlsFromLog && (urlsFromLog.admin || urlsFromLog.hours)) {
+            logger.info(`Found preview URLs in deployment log: ${logFile}`);
+            
+            // Save the URLs to a file for later reference
+            savePreviewUrls(urlsFromLog);
+            
+            return {
+              success: true,
+              urls: urlsFromLog
+            };
+          }
+        }
+      }
+      
+      logger.error('Could not extract preview URLs from any logs. Deployment may have failed or URLs format changed.');
+      return {
+        success: false,
+        urls: null
+      };
+    }
+    
+    // Save the URLs to a file for later reference
+    savePreviewUrls(urls);
+    
+    return {
+      success: true,
+      urls
+    };
+  } catch (error) {
+    logger.error(`Error deploying to Firebase: ${error.message}`);
+    
+    // Check if we can extract URLs from the error output
+    if (error.stdout) {
+      const urls = extractPreviewUrlsFromOutput(error.stdout);
+      
+      if (urls && (urls.admin || urls.hours)) {
+        logger.info('Found preview URLs in the error output.');
+        
+        // Save the URLs to a file for later reference
+        savePreviewUrls(urls);
+        
+        return {
+          success: true,
+          urls
+        };
+      }
+    }
+    
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Ensures that a directory exists, creating it if necessary
+ * 
+ * @param {string} dirPath - The directory path to ensure exists
+ */
+function ensureDirExists(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+    logger.debug(`Created directory: ${dirPath}`);
   }
 }
 

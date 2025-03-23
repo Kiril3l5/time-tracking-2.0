@@ -77,86 +77,166 @@ export function cleanupTempDirectory() {
 /**
  * Extract preview URLs from files and logs
  * 
+ * @param {Object} options - Options for URL extraction
  * @returns {Object|null} - Preview URLs object or null if not found
  */
-function extractPreviewUrls() {
+export function extractPreviewUrls(options = {}) {
+  const tempDir = options.tempDir || path.join(process.cwd(), 'temp');
+  
   try {
-    // First try to read from the dedicated preview URLs file
-    if (fs.existsSync(REPORT_PATHS.PREVIEW_URLS)) {
-      logger.info(`Reading preview URLs from ${REPORT_PATHS.PREVIEW_URLS}`);
-      const urlsData = JSON.parse(fs.readFileSync(REPORT_PATHS.PREVIEW_URLS, 'utf8'));
-      return urlsData;
-    }
-    
-    // If dedicated file doesn't exist, try to find URLs in firebase logs
-    const logFiles = fs.readdirSync(TEMP_DIR)
-      .filter(file => file.includes('firebase-deploy-log') && file.endsWith('.txt'))
-      .map(file => path.join(TEMP_DIR, file));
-    
-    if (logFiles.length === 0) {
-      logger.warn('No Firebase deployment logs found to extract preview URLs');
-      return null;
-    }
-    
-    // Get the most recent log file
-    const mostRecentLog = logFiles.sort((a, b) => {
-      return fs.statSync(b).mtime.getTime() - fs.statSync(a).mtime.getTime();
-    })[0];
-    
-    logger.info(`Trying to extract preview URLs from ${mostRecentLog}`);
-    const logContent = fs.readFileSync(mostRecentLog, 'utf8');
-    
-    // Extract URLs using regex
-    const urlsObj = {};
-    
-    // Match patterns like "ADMIN: https://..."
-    const adminMatch = logContent.match(/ADMIN:?\s+(https:\/\/[^\s,]+)/i);
-    if (adminMatch && adminMatch[1]) {
-      urlsObj.admin = adminMatch[1].trim();
-    }
-    
-    // Match patterns like "HOURS: https://..."
-    const hoursMatch = logContent.match(/HOURS:?\s+(https:\/\/[^\s,]+)/i);
-    if (hoursMatch && hoursMatch[1]) {
-      urlsObj.hours = hoursMatch[1].trim();
-    }
-    
-    // If no labeled URLs found, try to find generic Firebase hosting URLs
-    if (!urlsObj.admin && !urlsObj.hours) {
-      const firebaseUrlPattern = /(?:Project Console|Hosting URL|Web app URL):\s+(https:\/\/[^\s,]+)/gi;
-      const urlMatches = [...logContent.matchAll(firebaseUrlPattern)];
+    // First check if we have a dedicated preview URLs file (most reliable)
+    const previewUrlFile = path.join(tempDir, 'preview-urls.json');
+    if (fs.existsSync(previewUrlFile)) {
+      logger.info(`Reading preview URLs from ${previewUrlFile}`);
+      const urlsData = JSON.parse(fs.readFileSync(previewUrlFile, 'utf8'));
       
-      if (urlMatches.length > 0) {
-        // If we found generic URLs, try to differentiate between admin and hours
-        // based on URL patterns or fallback to using them as generic URLs
-        for (const match of urlMatches) {
-          const url = match[1].trim();
-          if (url.includes('admin') && !urlsObj.admin) {
+      // Check if the data is valid (has at least one URL)
+      if (urlsData && (urlsData.admin || urlsData.hours || (urlsData.urls && urlsData.urls.length > 0))) {
+        logger.success(`Successfully loaded preview URLs from ${previewUrlFile}`);
+        return urlsData;
+      } else {
+        logger.warn(`Preview URL file exists but contains no valid URLs`);
+      }
+    }
+    
+    // Second, check for the deployment log
+    const deployLogFile = path.join(tempDir, 'firebase-deploy.log');
+    if (fs.existsSync(deployLogFile)) {
+      logger.info(`Extracting preview URLs from deployment log: ${deployLogFile}`);
+      const logContent = fs.readFileSync(deployLogFile, 'utf8');
+      
+      // Use the enhanced URL extraction for modern Firebase CLI format
+      // This pattern looks for: - https://site-name--channel-id-xxxxx.web.app
+      const urlsObj = {};
+      const dashPrefixPattern = /(?:^|\s)-\s+(https:\/\/[^\s]+\.web\.app)/gm;
+      let match;
+      let allUrls = [];
+      
+      while ((match = dashPrefixPattern.exec(logContent)) !== null) {
+        allUrls.push(match[1]);
+      }
+      
+      // Try Firebase CLI v9+ hosting URL format
+      if (allUrls.length === 0) {
+        const hostingUrlPattern = /(?:Channel URL|Hosting URL|Live URL)(?:\s*\([^)]*\))?:\s+(https:\/\/[^\s]+)/gi;
+        while ((match = hostingUrlPattern.exec(logContent)) !== null) {
+          allUrls.push(match[1]);
+        }
+      }
+      
+      // If we found URLs, categorize them
+      if (allUrls.length > 0) {
+        // Try to identify admin and hours URLs based on URL parts
+        for (const url of allUrls) {
+          if (url.includes('admin')) {
             urlsObj.admin = url;
-          } else if (url.includes('hours') && !urlsObj.hours) {
+          } else if (url.includes('hours')) {
             urlsObj.hours = url;
           } else if (!urlsObj.admin) {
+            // Default assignment if we can't identify the purpose
             urlsObj.admin = url;
           } else if (!urlsObj.hours) {
             urlsObj.hours = url;
           }
         }
+        
+        // If we couldn't categorize, just store as a list
+        if (Object.keys(urlsObj).length === 0) {
+          urlsObj.urls = allUrls;
+        }
+        
+        // Save for future use
+        try {
+          fs.writeFileSync(previewUrlFile, JSON.stringify(urlsObj, null, 2));
+          logger.success(`Extracted and saved ${allUrls.length} preview URLs to ${previewUrlFile}`);
+        } catch (err) {
+          logger.warn(`Could not save extracted preview URLs to file: ${err.message}`);
+        }
+        
+        return urlsObj;
+      } else {
+        logger.warn(`No preview URLs found in deployment log file`);
       }
+    } else {
+      logger.warn(`Deployment log file not found at ${deployLogFile}`);
     }
     
-    if (Object.keys(urlsObj).length > 0) {
-      // Save the extracted URLs for future use
-      try {
-        fs.writeFileSync(REPORT_PATHS.PREVIEW_URLS, JSON.stringify(urlsObj, null, 2));
-        logger.success(`Preview URLs extracted and saved to ${REPORT_PATHS.PREVIEW_URLS}`);
-      } catch (err) {
-        logger.warn(`Could not save preview URLs to file: ${err.message}`);
+    // Third, search for any log files that might contain URL information
+    const potentialLogFiles = fs.readdirSync(tempDir)
+      .filter(file => file.includes('firebase') || file.includes('deploy') || file.includes('preview'))
+      .filter(file => file.endsWith('.log') || file.endsWith('.txt'))
+      .map(file => path.join(tempDir, file));
+    
+    if (potentialLogFiles.length > 0) {
+      logger.info(`Searching ${potentialLogFiles.length} log files for preview URLs...`);
+      
+      for (const logFile of potentialLogFiles) {
+        try {
+          const content = fs.readFileSync(logFile, 'utf8');
+          const urlsObj = {};
+          let allUrls = [];
+          
+          // Try all URL patterns
+          const patterns = [
+            /(?:^|\s)-\s+(https:\/\/[^\s]+\.web\.app)/gm,
+            /(?:Channel URL|Hosting URL|Live URL)(?:\s*\([^)]*\))?:\s+(https:\/\/[^\s]+)/gi,
+            /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.web\.app/g,
+            /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.firebaseapp\.com/g
+          ];
+          
+          // Extract URLs using all patterns
+          for (const pattern of patterns) {
+            let match;
+            while ((match = pattern.exec(content)) !== null) {
+              const url = pattern.toString().includes('Channel URL') ? match[1] : match[0];
+              allUrls.push(url.trim());
+            }
+          }
+          
+          allUrls = [...new Set(allUrls)]; // Remove duplicates
+          
+          if (allUrls.length > 0) {
+            logger.success(`Found ${allUrls.length} preview URLs in ${path.basename(logFile)}`);
+            
+            // Categorize URLs
+            for (const url of allUrls) {
+              if (url.includes('admin')) {
+                urlsObj.admin = url;
+              } else if (url.includes('hours')) {
+                urlsObj.hours = url;
+              } else if (!urlsObj.admin) {
+                urlsObj.admin = url;
+              } else if (!urlsObj.hours) {
+                urlsObj.hours = url;
+              }
+            }
+            
+            // If we couldn't categorize, just store as a list
+            if (Object.keys(urlsObj).length === 0) {
+              urlsObj.urls = allUrls;
+            }
+            
+            // Save for future use
+            try {
+              fs.writeFileSync(previewUrlFile, JSON.stringify(urlsObj, null, 2));
+              logger.success(`Extracted and saved preview URLs to ${previewUrlFile}`);
+            } catch (err) {
+              logger.warn(`Could not save preview URLs to file: ${err.message}`);
+            }
+            
+            return urlsObj;
+          }
+        } catch (err) {
+          logger.debug(`Error processing ${logFile}: ${err.message}`);
+        }
       }
       
-      return urlsObj;
+      logger.warn(`No preview URLs found in any log files`);
+    } else {
+      logger.warn(`No potential log files found in ${tempDir}`);
     }
     
-    logger.warn('No preview URLs found in logs');
+    logger.warn('No Firebase deployment logs found to extract preview URLs');
     return null;
   } catch (error) {
     logger.error(`Error extracting preview URLs: ${error.message}`);
@@ -223,7 +303,7 @@ async function collectAndGenerateReport(options = {}) {
     }
     
     // Extract preview URLs
-    previewUrls = extractPreviewUrls();
+    previewUrls = extractPreviewUrls(options);
     
     // Generate consolidated report
     const consolidatedReportPath = outputPath || reportPath;

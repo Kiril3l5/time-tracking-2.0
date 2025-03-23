@@ -44,123 +44,199 @@
 import { exec, execSync } from 'child_process';
 import { promisify } from 'util';
 import * as logger from './logger.js';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { fileURLToPath } from 'url';
 
-/* global process */
+/* global process, global, Buffer, setTimeout, clearTimeout */
 
 // Promisify exec for async/await usage
 const execAsync = promisify(exec);
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = path.resolve(__dirname, '../..');
+
+// Global cache for command outputs
+// This allows access to command outputs from anywhere in the codebase
+if (!global.__commandOutputs) {
+  global.__commandOutputs = [];
+}
+
+// Maximum size of the output cache
+const MAX_CACHE_SIZE = 100;
+
+// Directory for storing command logs
+const COMMAND_LOGS_DIR = path.join(rootDir, 'temp', 'command-logs');
+
+// Ensure command logs directory exists
+function ensureCommandLogsDir() {
+  try {
+    if (!fs.existsSync(COMMAND_LOGS_DIR)) {
+      fs.mkdirSync(COMMAND_LOGS_DIR, { recursive: true });
+    }
+  } catch (error) {
+    logger.warn(`Failed to create command logs directory: ${error.message}`);
+  }
+}
+
+// Save command output to cache and file
+function saveCommandOutput(command, output, error, success, startTime, endTime) {
+  const commandRecord = {
+    command,
+    output: output || '',
+    error: error || '',
+    success,
+    timestamp: new Date().toISOString(),
+    duration: endTime - startTime,
+  };
+  
+  // Add to global cache, limiting size
+  global.__commandOutputs.unshift(commandRecord);
+  if (global.__commandOutputs.length > MAX_CACHE_SIZE) {
+    global.__commandOutputs.splice(MAX_CACHE_SIZE);
+  }
+  
+  // Save to file if it contains 'firebase' and 'deploy' (likely a deployment command)
+  if ((command.includes('firebase') && command.includes('deploy')) || 
+      command.includes('channel') ||
+      command.includes('preview')) {
+    try {
+      ensureCommandLogsDir();
+      const timestamp = new Date().toISOString().replace(/:/g, '-');
+      const sanitizedCommand = command.replace(/[^a-zA-Z0-9]/g, '-').substring(0, 50);
+      const logFile = path.join(COMMAND_LOGS_DIR, `${timestamp}-${sanitizedCommand}.log`);
+      
+      fs.writeFileSync(logFile, `COMMAND: ${command}\n` +
+        `TIMESTAMP: ${commandRecord.timestamp}\n` +
+        `DURATION: ${commandRecord.duration}ms\n` +
+        `SUCCESS: ${success}\n\n` +
+        `OUTPUT:\n${output || 'No output'}\n\n` +
+        `ERROR:\n${error || 'No error'}\n`);
+      
+      logger.debug(`Command output saved to ${logFile}`);
+    } catch (error) {
+      logger.warn(`Failed to save command output to file: ${error.message}`);
+    }
+  }
+  
+  return commandRecord;
+}
+
+// Get recent command outputs
+export function getRecentCommandOutputs(filter = null) {
+  if (!filter) {
+    return global.__commandOutputs;
+  }
+  
+  return global.__commandOutputs.filter(record => {
+    if (typeof filter === 'function') {
+      return filter(record);
+    } else if (typeof filter === 'string') {
+      return record.command.includes(filter);
+    } else if (filter instanceof RegExp) {
+      return filter.test(record.command);
+    }
+    return false;
+  });
+}
+
+// Find deployment logs
+export function findDeploymentLogs() {
+  ensureCommandLogsDir();
+  
+  try {
+    const files = fs.readdirSync(COMMAND_LOGS_DIR)
+      .filter(file => file.includes('firebase') || file.includes('deploy') || file.includes('channel'))
+      .map(file => path.join(COMMAND_LOGS_DIR, file))
+      .sort((a, b) => fs.statSync(b).mtime.getTime() - fs.statSync(a).mtime.getTime());
+    
+    return files;
+  } catch (error) {
+    logger.warn(`Failed to find deployment logs: ${error.message}`);
+    return [];
+  }
+}
+
 /**
  * Run a command synchronously
  * 
- * @function runCommand
- * @param {string} command - The command to execute
- * @param {Object} [options] - Command options
- * @param {boolean} [options.ignoreError=false] - Whether to ignore errors (don't exit the process)
- * @param {string} [options.stdio='inherit'] - Standard IO handling:
- *   - 'inherit': Show output in the terminal (default)
- *   - 'pipe': Capture output and return it
- *   - 'ignore': Discard all output
- * @param {number} [options.timeout] - Timeout in milliseconds before the command is killed
- * @param {boolean} [options.verbose=false] - Whether to show verbose output
- * @returns {Object} - Command result object containing:
+ * @param {string} command - Command to run
+ * @param {Object} [options] - Options for command execution
+ * @param {string} [options.cwd] - Working directory for command
+ * @param {Object} [options.env] - Environment variables
+ * @param {boolean} [options.ignoreError=false] - Don't throw on non-zero exit code
+ * @param {string} [options.stdio='inherit'] - stdio option for child_process
+ * @returns {Object} Command result object with:
  *   - success {boolean}: Whether the command completed successfully
- *   - output {string|null}: Command output if stdio is 'pipe', otherwise null
- *   - error {string|undefined}: Error message if the command failed
- *   - code {number|undefined}: Exit code if the command failed
- *   - stderr {string|undefined}: Standard error output if the command failed
- * @description Executes a shell command synchronously, with configurable output handling 
- * and error management. By default, outputs directly to the terminal and exits the process
- * if the command fails. When using this function, be aware that it will block the JavaScript
- * event loop until the command completes.
- * @example
- * // Basic command execution showing output in terminal
- * runCommand('npm install');
- * 
- * // Capture command output and handle errors
- * const result = runCommand('git status --porcelain', {
- *   stdio: 'pipe',
- *   ignoreError: true,
- *   verbose: true
- * });
- * 
- * if (result.success) {
- *   if (result.output.trim() === '') {
- *     console.log('Working directory is clean');
- *   } else {
- *     console.log('Uncommitted changes detected');
- *   }
- * } else {
- *   console.error(`Git error (code ${result.code}): ${result.error}`);
- * }
+ *   - output {string}: Command output (if stdio is not 'inherit')
+ *   - error {string}: Error message if command failed
  */
 export function runCommand(command, options = {}) {
   const {
+    cwd = process.cwd(),
+    env = process.env,
     ignoreError = false,
     stdio = 'inherit',
-    timeout,
-    verbose = false
+    captureOutput = false
   } = options;
   
-  if (verbose) {
-    logger.info(`Running command: ${command}`);
-  } else {
-    logger.debug(`Running command: ${command}`);
-  }
+  const startTime = Date.now();
+  let output = '';
+  let error = '';
+  let success = false;
   
   try {
-    const execOptions = {
-      stdio,
-      timeout,
-      windowsHide: true
-    };
+    const captureStdio = stdio === 'pipe' || captureOutput;
     
-    if (stdio === 'pipe') {
-      execOptions.encoding = 'utf8';
+    if (captureStdio) {
+      const result = execSync(command, {
+        cwd,
+        env,
+        stdio: 'pipe',
+        encoding: 'utf8'
+      });
+      output = result || '';
+      success = true;
+    } else {
+      execSync(command, {
+        cwd,
+        env,
+        stdio
+      });
+      success = true;
     }
     
-    const output = execSync(command, execOptions);
-    
-    if (verbose && stdio === 'pipe' && output) {
-      logger.debug(`Command output: ${output}`);
-    }
-    
-    return {
+    const endTime = Date.now();
+    const result = {
       success: true,
-      output: stdio === 'pipe' ? output : null
+      output
     };
-  } catch (error) {
-    const errorMessage = `Command failed: ${command}`;
+    
+    // Save command output to cache and file
+    saveCommandOutput(command, output, error, success, startTime, endTime);
+    
+    return result;
+  } catch (err) {
+    const endTime = Date.now();
+    error = err.message || 'Unknown error';
+    output = err.stdout ? err.stdout.toString() : '';
+    const stderr = err.stderr ? err.stderr.toString() : '';
+    
+    // Save command output to cache and file
+    saveCommandOutput(command, output, stderr || error, false, startTime, endTime);
     
     if (ignoreError) {
-      logger.warn(`${errorMessage} (ignored)`);
       return {
         success: false,
-        error: error.message,
-        code: error.code,
-        output: error.stdout,
-        stderr: error.stderr
+        output,
+        error: stderr || error,
+        errorCode: err.status || 1
       };
+    } else {
+      throw err;
     }
-    
-    logger.error(errorMessage);
-    logger.error(`Exit code: ${error.code}`);
-    
-    if (error.stderr) {
-      logger.error(`Error output: ${error.stderr}`);
-    }
-    
-    if (!ignoreError) {
-      process.exit(1);
-    }
-    
-    return {
-      success: false,
-      error: error.message,
-      code: error.code,
-      output: error.stdout,
-      stderr: error.stderr
-    };
   }
 }
 
@@ -168,110 +244,164 @@ export function runCommand(command, options = {}) {
  * Run a command asynchronously
  * 
  * @async
- * @function runCommandAsync
- * @param {string} command - The command to execute
- * @param {Object} [options] - Command options
- * @param {boolean} [options.ignoreError=false] - Whether to ignore errors (don't exit the process)
- * @param {boolean} [options.verbose=false] - Whether to show verbose output
- * @param {number} [options.timeout] - Timeout in milliseconds before the command is killed
- * @returns {Promise<Object>} - Promise resolving to a command result object containing:
+ * @param {string} command - Command to run
+ * @param {Object} [options] - Options for command execution
+ * @param {string} [options.cwd] - Working directory for command
+ * @param {Object} [options.env] - Environment variables
+ * @param {boolean} [options.ignoreError=false] - Don't throw on non-zero exit code
+ * @param {string} [options.stdio='inherit'] - stdio option for child_process
+ * @param {number} [options.timeout] - Timeout in milliseconds
+ * @returns {Promise<Object>} Command result object with:
  *   - success {boolean}: Whether the command completed successfully
- *   - output {string}: Standard output from the command
- *   - stderr {string}: Standard error output from the command
- *   - error {string|undefined}: Error message if the command failed
- *   - code {number|undefined}: Exit code if the command failed
- * @description Executes a shell command asynchronously, returning a Promise that resolves
- * when the command completes. Unlike runCommand, this function doesn't block the JavaScript
- * event loop, making it suitable for use in async functions and when you need to maintain
- * responsiveness. All command output is captured and returned in the result object.
- * @example
- * // Basic asynchronous command execution
- * async function buildProject() {
- *   const result = await runCommandAsync('npm run build', { verbose: true });
- *   
- *   if (result.success) {
- *     console.log('Build completed successfully!');
- *     return true;
- *   } else {
- *     console.error('Build failed:', result.error);
- *     console.error('Build output:', result.stderr);
- *     return false;
- *   }
- * }
- * 
- * // Using with timeout for commands that might hang
- * async function fetchRemote() {
- *   return await runCommandAsync('git fetch origin', {
- *     timeout: 30000, // 30 seconds
- *     ignoreError: true
- *   });
- * }
+ *   - output {string}: Command output (if stdio is not 'inherit')
+ *   - error {string}: Error message if command failed
  */
 export async function runCommandAsync(command, options = {}) {
   const {
+    cwd = process.cwd(),
+    env = process.env,
     ignoreError = false,
-    verbose = false,
-    timeout
+    stdio = 'inherit',
+    timeout = 0,
+    shell = false,
+    captureOutput = false
   } = options;
   
-  if (verbose) {
-    logger.info(`Running command: ${command}`);
-  } else {
-    logger.debug(`Running command: ${command}`);
-  }
+  const startTime = Date.now();
+  let output = '';
+  let error = '';
+  let success = false;
   
   try {
-    const execOptions = {
-      timeout,
-      windowsHide: true
-    };
+    const captureStdio = stdio === 'pipe' || captureOutput;
     
-    const { stdout, stderr } = await execAsync(command, execOptions);
-    
-    if (verbose && stdout) {
-      logger.debug(`Command output: ${stdout}`);
+    if (captureStdio) {
+      // For capturing stdout/stderr, use exec
+      const execOptions = {
+        cwd,
+        env,
+        encoding: 'utf8',
+        maxBuffer: 5 * 1024 * 1024 // 5 MB buffer for large outputs
+      };
+      
+      if (timeout > 0) {
+        execOptions.timeout = timeout;
+      }
+      
+      if (shell) {
+        execOptions.shell = true;
+      }
+      
+      const result = await execAsync(command, execOptions);
+      output = result.stdout || '';
+      success = true;
+    } else {
+      // For inheriting stdio, use spawn
+      const spawnOptions = {
+        cwd,
+        env,
+        stdio,
+        shell: shell || (process.platform === 'win32' && command.includes('&&'))
+      };
+      
+      await new Promise((resolve, reject) => {
+        const childProcess = exec(
+          // On Windows with shell: false, first arg should be command
+          // On other platforms or with shell: true, it should be the full command line
+          spawnOptions.shell ? 'sh' : command.split(' ')[0],
+          // Args only used if shell: false and not on windows
+          spawnOptions.shell ? ['-c', command] : command.split(' ').slice(1),
+          spawnOptions
+        );
+        
+        let stdoutChunks = [];
+        let stderrChunks = [];
+        
+        if (childProcess.stdout) {
+          childProcess.stdout.on('data', (data) => {
+            if (captureOutput) {
+              stdoutChunks.push(data);
+            }
+          });
+        }
+        
+        if (childProcess.stderr) {
+          childProcess.stderr.on('data', (data) => {
+            if (captureOutput) {
+              stderrChunks.push(data);
+            }
+          });
+        }
+        
+        let timeoutId;
+        if (timeout > 0) {
+          timeoutId = setTimeout(() => {
+            childProcess.kill();
+            const err = new Error(`Command timed out after ${timeout}ms: ${command}`);
+            err.code = 'TIMEOUT';
+            reject(err);
+          }, timeout);
+        }
+        
+        childProcess.on('close', (code) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          
+          if (captureOutput) {
+            output = Buffer.concat(stdoutChunks).toString('utf8');
+            error = Buffer.concat(stderrChunks).toString('utf8');
+          }
+          
+          if (code === 0) {
+            success = true;
+            resolve();
+          } else if (ignoreError) {
+            resolve();
+          } else {
+            const err = new Error(`Command failed with exit code ${code}: ${command}`);
+            err.code = code;
+            reject(err);
+          }
+        });
+        
+        childProcess.on('error', (err) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          reject(err);
+        });
+      });
+      
+      success = true;
     }
     
-    return {
+    const endTime = Date.now();
+    const result = {
       success: true,
-      output: stdout,
-      stderr
+      output
     };
-  } catch (error) {
-    const errorMessage = `Command failed: ${command}`;
+    
+    // Save command output to cache and file
+    saveCommandOutput(command, output, error, success, startTime, endTime);
+    
+    return result;
+  } catch (err) {
+    const endTime = Date.now();
+    error = err.message || 'Unknown error';
+    output = err.stdout || '';
+    const stderr = err.stderr || error;
+    
+    // Save command output to cache and file
+    saveCommandOutput(command, output, stderr, false, startTime, endTime);
     
     if (ignoreError) {
-      logger.warn(`${errorMessage} (ignored)`);
       return {
         success: false,
-        error: error.message,
-        code: error.code || -1,
-        output: error.stdout,
-        stderr: error.stderr
+        output,
+        stderr,
+        error,
+        errorCode: err.code || 1
       };
+    } else {
+      throw err;
     }
-    
-    logger.error(errorMessage);
-    
-    if (error.code) {
-      logger.error(`Exit code: ${error.code}`);
-    }
-    
-    if (error.stderr) {
-      logger.error(`Error output: ${error.stderr}`);
-    }
-    
-    if (!ignoreError) {
-      process.exit(1);
-    }
-    
-    return {
-      success: false,
-      error: error.message,
-      code: error.code || -1,
-      output: error.stdout,
-      stderr: error.stderr
-    };
   }
 }
 
@@ -334,5 +464,7 @@ export function extractFromCommand(command, extractPattern, options = {}) {
 export default {
   runCommand,
   runCommandAsync,
-  extractFromCommand
+  extractFromCommand,
+  getRecentCommandOutputs,
+  findDeploymentLogs
 }; 
