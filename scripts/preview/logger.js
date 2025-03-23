@@ -35,6 +35,16 @@ let totalSteps = 0;
 let stepStartTime = 0;
 let startTime = Date.now();
 
+// Define warning levels with icons and colors
+const WARNING_LEVELS = {
+  INFO: { prefix: '[INFO]', icon: 'ℹ️', color: '\x1b[36m' },     // Cyan for info
+  MINOR: { prefix: '[WARNING]', icon: '⚠️', color: '\x1b[33m' },  // Yellow for minor warnings
+  MAJOR: { prefix: '[CRITICAL]', icon: '🛑', color: '\x1b[31m' }  // Red for major warnings
+};
+
+// Reset color code
+const RESET_COLOR = '\x1b[0m';
+
 /**
  * Set verbose logging mode
  * @param {boolean} isVerbose - Whether to enable verbose logging
@@ -157,19 +167,34 @@ export function success(message) {
 }
 
 /**
- * Log a warning message (yellow)
- * @param {string} message - The message to log
+ * Log a warning message with specified severity
+ * @param {string} message - The warning message to log
+ * @param {string} level - The warning level: 'INFO', 'MINOR', or 'MAJOR'
+ * @returns {Object} - Warning metadata
  */
-export function warn(message) {
-  console.warn(`${colors.styled.warning('WARNING:')} ${message}`);
+export function warningWithLevel(message, level = 'MINOR') {
+  const warningLevel = WARNING_LEVELS[level] || WARNING_LEVELS.MINOR;
+  const formattedMessage = `${warningLevel.color}${warningLevel.icon} ${warningLevel.prefix} ${message}${RESET_COLOR}`;
+  console.warn(formattedMessage);
+  return { message, level, timestamp: new Date().toISOString() };
 }
 
 /**
- * Log an error message (red)
- * @param {string} message - The message to log
+ * Log an informational warning (low severity)
+ * @param {string} message - The warning message to log
+ * @returns {Object} - Warning metadata
  */
-export function error(message) {
-  console.error(`${colors.styled.error('ERROR:')} ${message}`);
+export function infoWarning(message) {
+  return warningWithLevel(message, 'INFO');
+}
+
+/**
+ * Log a critical warning (high severity)
+ * @param {string} message - The warning message to log
+ * @returns {Object} - Warning metadata
+ */
+export function criticalWarning(message) {
+  return warningWithLevel(message, 'MAJOR');
 }
 
 /**
@@ -257,8 +282,8 @@ export default {
   log,
   info,
   success,
-  warn,
-  error,
+  warn: warningWithLevel,
+  error: warningWithLevel,
   debug,
   section,
   setSteps,

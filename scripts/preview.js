@@ -1369,6 +1369,7 @@ async function checkDocumentationQuality(args) {
   }
 
   logger.sectionHeader('Checking Documentation Quality');
+  progressTracker.startStep("Documentation quality");
   
   try {
     // Define report paths
@@ -1378,50 +1379,121 @@ async function checkDocumentationQuality(args) {
     logger.info(`Will save doc quality JSON to: ${jsonReportPath}`);
     logger.info(`Will save doc quality HTML to: ${htmlReportPath}`);
     
-    const result = await docQuality.checkDocQuality({
-      docsDir: 'docs',
-      outputFile: htmlReportPath,
-      similarityThreshold: 0.6,
-      requiredDocs: [
-        'setup',
-        'deployment',
-        'preview',
-        'configuration',
-        'architecture'
-      ],
-      ignoreDirectories: [
-        'node_modules',
-        'dist',
-        'build'
-      ],
-      generateIndex: true
-    });
-    
-    // Explicitly save JSON report
-    createJsonReport(result, jsonReportPath);
-    logger.info(`Documentation quality results saved to ${jsonReportPath}`);
-    
-    if (result.duplicates && result.duplicates.length > 0) {
-      logger.warn(`Found ${result.duplicates.length} potential documentation duplicates`);
-      logger.info(`See ${htmlReportPath} for details`);
-    } else {
-      logger.success('No documentation duplicates detected');
+    try {
+      const result = await docQuality.checkDocQuality({
+        docsDir: 'docs',
+        outputFile: htmlReportPath,
+        similarityThreshold: 0.6,
+        requiredDocs: [
+          'setup',
+          'deployment',
+          'preview',
+          'configuration',
+          'architecture'
+        ],
+        ignoreDirectories: [
+          'node_modules',
+          'dist',
+          'build'
+        ],
+        generateIndex: true
+      });
+      
+      // Validate result object before trying to access properties
+      if (!result) {
+        logger.warn("Documentation analyzer returned no results");
+        // Create a placeholder result
+        const fallbackResult = {
+          error: "No analysis results returned",
+          missingDocs: [],
+          duplicates: []
+        };
+        
+        // Save fallback result to JSON
+        createJsonReport(fallbackResult, jsonReportPath);
+        
+        progressTracker.completeStep(true, "Documentation quality check completed with warnings");
+        return true;
+      }
+      
+      // Explicitly save JSON report
+      createJsonReport(result, jsonReportPath);
+      logger.info(`Documentation quality results saved to ${jsonReportPath}`);
+      
+      if (result.duplicates && result.duplicates.length > 0) {
+        logger.warn(`Found ${result.duplicates.length} potential documentation duplicates`);
+        logger.info(`See ${htmlReportPath} for details`);
+      } else {
+        logger.success('No documentation duplicates detected');
+      }
+      
+      if (result.missingDocs && result.missingDocs.length > 0) {
+        logger.warn(`Missing ${result.missingDocs.length} key documentation files`);
+        logger.info(`See ${htmlReportPath} for details`);
+      } else {
+        logger.success('All required documentation present');
+      }
+      
+      // Documentation quality is informational and should not fail the build
+      progressTracker.completeStep(true, "Documentation quality check passed");
+      return true;
+    } catch (analysisError) {
+      logger.error(`Error analyzing documentation: ${analysisError.message}`);
+      
+      // Create a fallback result for error case
+      const errorResult = {
+        error: analysisError.message,
+        timestamp: new Date().toISOString(),
+        success: false
+      };
+      
+      // Save error information to JSON
+      createJsonReport(errorResult, jsonReportPath);
+      
+      // Create a simple HTML report for error case
+      generateBasicErrorReport(htmlReportPath, "Documentation Analysis Error", analysisError.message);
+      
+      // Don't fail the build for documentation issues
+      progressTracker.completeStep(true, "Documentation quality check completed with errors");
+      return true;
     }
-    
-    if (result.missingDocs && result.missingDocs.length > 0) {
-      logger.warn(`Missing ${result.missingDocs.length} key documentation files`);
-      logger.info(`See ${htmlReportPath} for details`);
-    } else {
-      logger.success('All required documentation present');
-    }
-    
-    // Documentation quality is informational and should not fail the build
-    return true;
   } catch (error) {
     logger.error('Error during documentation quality check: ' + error.message);
     // Don't fail the workflow for documentation issues
+    progressTracker.completeStep(true, "Documentation quality check failed");
     return true;
   }
+}
+
+/**
+ * Generate a basic HTML error report
+ * @param {string} filePath - Path to save the HTML report
+ * @param {string} title - Report title
+ * @param {string} errorMessage - Error message to display
+ */
+function generateBasicErrorReport(filePath, title, errorMessage) {
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>${title}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; }
+    .error { color: #d32f2f; padding: 20px; background-color: #ffebee; border-radius: 4px; }
+    h1 { color: #333; }
+  </style>
+</head>
+<body>
+  <h1>${title}</h1>
+  <div class="error">
+    <p>${errorMessage}</p>
+    <p>This error occurred during the documentation quality analysis process. The build will continue, but you may want to investigate this issue.</p>
+  </div>
+  <p>Generated on: ${new Date().toLocaleString()}</p>
+</body>
+</html>`;
+
+  logger.info(`Generating HTML report at: ${filePath}`);
+  fs.writeFileSync(filePath, html);
 }
 
 /**
@@ -1666,11 +1738,26 @@ async function deployPreview(args) {
   // Instead of: await metrics.startStage('deployment');
   logger.startStep('Deploying preview');
   
+  // Enhanced warning functions for this deployment
+  const logWarningWithLevel = (message, level) => {
+    const levels = {
+      info: { prefix: '[INFO]', color: '\x1b[36m' },         // Cyan for info
+      warning: { prefix: '[WARNING]', color: '\x1b[33m' },    // Yellow for minor warnings
+      critical: { prefix: '[CRITICAL]', color: '\x1b[31m' }   // Red for major warnings
+    };
+    
+    const style = levels[level] || levels.warning;
+    const resetColor = '\x1b[0m';
+    const icon = level === 'critical' ? '🛑' : level === 'info' ? 'ℹ️' : '⚠️';
+    
+    console.warn(`${style.color}${icon} ${style.prefix} ${message}${resetColor}`);
+  };
+  
   try {
     // Verify Firebase authentication first
     const authResult = await verifyAuthentication();
     if (!authResult) {
-      logger.error('Authentication failed. Cannot proceed with deployment.');
+      logWarningWithLevel('Authentication failed. Cannot proceed with deployment.', 'critical');
       progressTracker.completeStep(false, 'Deployment aborted due to authentication failure');
       return false;
     }
@@ -1698,7 +1785,7 @@ async function deployPreview(args) {
       try {
         commitMessage = gitAuth.getLatestCommitMessage();
       } catch (err) {
-        logger.warn(`Could not get latest commit message: ${err.message}`);
+        logWarningWithLevel(`Could not get latest commit message: ${err.message}`, 'info');
       }
     }
     
@@ -1713,11 +1800,28 @@ async function deployPreview(args) {
       message
     });
     
-    if (deployResult.success) {
+    // Enhanced result analysis for deprecation warnings
+    let deploymentSuccess = deployResult.success;
+    let deploymentWarningsOnly = false;
+    
+    // Check if the only errors are deprecation warnings
+    if (!deploymentSuccess && 
+        deployResult.rawOutput && 
+        deployResult.rawOutput.includes('[DEP0040]') && 
+        deployResult.rawOutput.includes('punycode') && 
+        !deployResult.rawOutput.includes('Error:') && 
+        !deployResult.rawOutput.includes('Command failed with exit code')) {
+      logWarningWithLevel('Firebase CLI reported a Node.js deprecation warning, but this does not indicate a deployment failure', 'info');
+      logger.info('This is a benign warning about the punycode module being deprecated in Node.js');
+      deploymentWarningsOnly = true;
+      deploymentSuccess = true;
+    }
+    
+    if (deploymentSuccess) {
       logger.success(`Deployment successful!`);
       
       // Extract and process the preview URLs
-      const urls = extractPreviewUrlsFromOutput(deployResult.rawOutput || deployResult.output);
+      const urls = extractPreviewUrlsFromOutput(deployResult.rawOutput || deployResult.output, deploymentSuccess);
       
       if (urls && Object.keys(urls).length > 0) {
         logger.success('Successfully extracted preview URLs:');
@@ -1726,21 +1830,26 @@ async function deployPreview(args) {
         
         // Save the URLs for use in the dashboard
         savePreviewUrls(urls);
+        
+        // Display URLs with appropriate context
+        displayPreviewUrls(urls);
       } else {
-        logger.warn('No preview URLs found in deployment output');
+        logWarningWithLevel('No preview URLs found in deployment output', 'warning');
       }
       
-      progressTracker.completeStep(true, 'Deployment completed successfully');
+      progressTracker.completeStep(true, deploymentWarningsOnly ? 
+        'Deployment completed with warnings' : 
+        'Deployment completed successfully');
       return true;
     } else {
-      logger.error(`Deployment failed: ${deployResult.error}`);
+      logWarningWithLevel(`Deployment failed: ${deployResult.error}`, 'critical');
       if (deployResult.deployOutput) {
         logger.debug('Deployment output:');
         logger.debug(deployResult.deployOutput);
       }
       if (deployResult.deployError) {
-        logger.error('Deployment error details:');
-        logger.error(deployResult.deployError);
+        logWarningWithLevel('Deployment error details:', 'critical');
+        logWarningWithLevel(deployResult.deployError, 'critical');
       }
       
       progressTracker.completeStep(false, 'Deployment failed');
@@ -1749,6 +1858,7 @@ async function deployPreview(args) {
   } catch (error) {
     // Don't collect metrics, just throw the error
     handleError(error);
+    logWarningWithLevel(`Deployment failed with error: ${error.message}`, 'critical');
     progressTracker.completeStep(false, `Deployment failed with error: ${error.message}`);
     return false;
   } finally {
@@ -1848,9 +1958,10 @@ function generateChannelId() {
  * Extract preview URLs from deployment output
  * 
  * @param {string} output - Deployment output
+ * @param {boolean} deploymentSuccess - Whether the deployment was successful
  * @returns {Object|null} - Object with admin and hours URLs or null
  */
-function extractPreviewUrlsFromOutput(output) {
+function extractPreviewUrlsFromOutput(output, deploymentSuccess = true) {
   if (!output) return null;
   
   const urls = {};
@@ -1926,41 +2037,110 @@ function extractPreviewUrlsFromOutput(output) {
     urls.urls = allUrls;
   }
   
+  // Add deployment status metadata
+  if (Object.keys(urls).length > 0) {
+    urls.deploymentStatus = deploymentSuccess ? 'success' : 'failed';
+    urls.timestamp = new Date().toISOString();
+    
+    // If deployment failed, add warning to URLs object
+    if (!deploymentSuccess) {
+      urls.warning = "Deployment reported errors - these URLs may not be functional";
+    }
+  }
+  
   return Object.keys(urls).length > 0 ? urls : null;
 }
 
 /**
  * Save preview URLs to file
- * @param {Object} urls - URLs to save
- * @returns {boolean} - Whether save was successful
+ * @param {Object} urls - Preview URLs
+ * @returns {void}
  */
 function savePreviewUrls(urls) {
-  if (!urls || Object.keys(urls).length === 0) {
-    return false;
-  }
-
+  if (!urls) return;
+  
   try {
     const tempDir = path.join(process.cwd(), 'temp');
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
-
-    const filePath = path.join(tempDir, 'preview-urls.json');
-    fs.writeFileSync(filePath, JSON.stringify(urls, null, 2));
-    logger.success(`Preview URLs saved to ${filePath}`);
     
-    // Also log them clearly for immediate visibility
-    logger.info('Preview URLs:');
-    if (urls.admin) logger.info(`- ADMIN: ${urls.admin}`);
-    if (urls.hours) logger.info(`- HOURS: ${urls.hours}`);
-    if (urls.urls) {
-      urls.urls.forEach(url => logger.info(`- ${url}`));
-    }
-    
-    return true;
+    const previewUrlsPath = path.join(tempDir, 'preview-urls.json');
+    fs.writeFileSync(previewUrlsPath, JSON.stringify(urls, null, 2));
+    logger.success(`Extracted and saved preview URLs to ${previewUrlsPath}`);
   } catch (error) {
     logger.error(`Failed to save preview URLs: ${error.message}`);
-    return false;
+  }
+}
+
+/**
+ * Get stored preview URLs
+ * @returns {Object|null} - Preview URLs or null
+ */
+function getPreviewUrls() {
+  try {
+    const tempDir = path.join(process.cwd(), 'temp');
+    const previewUrlsPath = path.join(tempDir, 'preview-urls.json');
+    
+    if (fs.existsSync(previewUrlsPath)) {
+      logger.info(`Reading preview URLs from ${previewUrlsPath}`);
+      const content = fs.readFileSync(previewUrlsPath, 'utf8');
+      const urls = JSON.parse(content);
+      logger.success(`Successfully loaded preview URLs from ${previewUrlsPath}`);
+      return urls;
+    }
+  } catch (error) {
+    logger.error(`Failed to read preview URLs: ${error.message}`);
+  }
+  
+  return null;
+}
+
+/**
+ * Display preview URLs to the user with deployment status context
+ * @param {Object} urlData - Preview URL data with potential status information
+ */
+function displayPreviewUrls(urlData) {
+  if (!urlData || (!urlData.admin && !urlData.hours && (!urlData.urls || !urlData.urls.length))) {
+    logger.warn("No preview URLs available");
+    return;
+  }
+  
+  // Display clear warning if deployment has issues
+  if (urlData.deploymentStatus === 'failed' || urlData.warning) {
+    console.log(); // Empty line for readability
+    logger.error("⚠️  DEPLOYMENT REPORTED ERRORS - THESE URLS MAY NOT BE FUNCTIONAL ⚠️");
+    logger.warn("The URLs below were extracted from logs but the deployment process reported errors.");
+    logger.warn("They are provided for reference but may not work correctly.");
+    console.log(); // Empty line for readability
+  }
+  
+  // Display the URLs with appropriate labels
+  console.log(); // Empty line for readability
+  logger.info(urlData.deploymentStatus === 'failed' ? "EXTRACTED URLs:" : "PREVIEW URLs:");
+  
+  if (urlData.admin) {
+    logger.info(`ADMIN: ${urlData.admin}`);
+  }
+  
+  if (urlData.hours) {
+    logger.info(`HOURS: ${urlData.hours}`);
+  }
+  
+  // Display any additional URLs
+  if (urlData.urls && urlData.urls.length > 0) {
+    urlData.urls.forEach((url, index) => {
+      logger.info(`URL ${index + 1}: ${url}`);
+    });
+  }
+  
+  // Additional guidance if deployment failed
+  if (urlData.deploymentStatus === 'failed') {
+    console.log(); // Empty line for readability
+    logger.info("To fix deployment issues:");
+    logger.info("1. Check Firebase CLI authentication: 'firebase login'");
+    logger.info("2. Verify project configuration in firebase.json");
+    logger.info("3. Check build output for missing files");
   }
 }
 
@@ -2149,26 +2329,6 @@ async function generateReports(args) {
     logger.error(`Error generating reports: ${error.message}`);
     return false;
   }
-}
-
-/**
- * Get saved preview URLs
- * @returns {Object|null} - Saved preview URLs or null
- */
-function getPreviewUrls() {
-  try {
-    const tempDir = path.join(process.cwd(), 'temp');
-    const filePath = path.join(tempDir, 'preview-urls.json');
-    
-    if (fs.existsSync(filePath)) {
-      const data = fs.readFileSync(filePath, 'utf8');
-      return JSON.parse(data);
-    }
-  } catch (error) {
-    logger.debug(`Failed to read preview URLs: ${error.message}`);
-  }
-  
-  return null;
 }
 
 /**
