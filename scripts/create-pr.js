@@ -136,7 +136,95 @@ async function createPR() {
       logger.warn('You have uncommitted changes:');
       console.log(status);
       
-      if (options.autoCommit) {
+      // Check if all changes are related to temporary files
+      const changes = status.split('\n');
+      const tempFileChanges = changes.filter(change => {
+        // Look for deletions (lines starting with D)
+        if (!change.startsWith('D')) return false;
+        
+        // Extract filename
+        const filename = change.substring(2).trim();
+        
+        // Check if it's a temporary file
+        return filename === '.env.build' || 
+               filename === 'preview-dashboard.html' || 
+               filename.startsWith('temp/');
+      });
+      
+      // Handle temp file changes intelligently
+      if (tempFileChanges.length > 0) {
+        logger.info('Detected temporary file tracking changes from gitignore updates.');
+        
+        // If there are other non-temp changes, only commit the temp files
+        if (tempFileChanges.length !== changes.length) {
+          logger.info('Will auto-commit only the temporary file changes, leaving other changes untouched.');
+          
+          if (!options.dryRun && !options.test) {
+            try {
+              // Add only the temp files for deletion
+              for (const change of tempFileChanges) {
+                const filename = change.substring(2).trim();
+                execSync(`git add -u "${filename}"`, { stdio: 'pipe' });
+              }
+              
+              execSync(`git commit -m "chore: Remove temporary files from Git tracking"`, { stdio: 'inherit' });
+              logger.success('Temporary file changes committed automatically.');
+              logger.info('Note: You still have other uncommitted changes that need handling.');
+              
+              // Show remaining changes
+              const remainingStatus = execSync('git status --short', { encoding: 'utf8' }).trim();
+              if (remainingStatus) {
+                logger.info('Remaining uncommitted changes:');
+                console.log(remainingStatus);
+                
+                if (options.autoCommit) {
+                  logger.info('Auto-commit option detected, also committing remaining changes...');
+                  const commitMessage = title || `Auto-commit changes for PR from ${branch}`;
+                  
+                  execSync('git add .', { stdio: 'inherit' });
+                  execSync(`git commit -m "${commitMessage}"`, { stdio: 'inherit' });
+                  logger.success('All changes committed successfully.');
+                } else {
+                  logger.error('Please commit your remaining changes before creating PR:');
+                  logger.info('Tip: Run the following commands to commit your changes:');
+                  logger.info('  git add .');
+                  logger.info('  git commit -m "Your commit message"');
+                  logger.info('');
+                  logger.info('Alternatively, use --auto-commit to commit all changes automatically:');
+                  logger.info('  node scripts/create-pr.js --auto-commit "Your PR title"');
+                  return 1;
+                }
+              }
+            } catch (error) {
+              logger.error(`Failed to commit temporary file changes: ${error.message}`);
+              return 1;
+            }
+          } else {
+            logger.info(`DRY RUN: Would auto-commit only temporary file changes`);
+            logger.warn('DRY RUN: Would still need to handle other uncommitted changes');
+          }
+        }
+        // If all changes are temp files, commit everything
+        else {
+          logger.info('These changes will be auto-committed for convenience.');
+          
+          const commitMessage = "chore: Remove temporary files from Git tracking";
+          
+          if (!options.dryRun && !options.test) {
+            try {
+              execSync('git add .', { stdio: 'inherit' });
+              execSync(`git commit -m "${commitMessage}"`, { stdio: 'inherit' });
+              logger.success('Temporary file changes committed automatically.');
+            } catch (error) {
+              logger.error(`Failed to commit temporary file changes: ${error.message}`);
+              return 1;
+            }
+          } else {
+            logger.info(`DRY RUN: Would auto-commit temporary file changes with message: "${commitMessage}"`);
+          }
+        }
+      }
+      else if (options.autoCommit) {
         logger.info('Auto-commit option detected, committing changes...');
         const commitMessage = title || `Auto-commit changes for PR from ${branch}`;
         

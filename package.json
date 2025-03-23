@@ -103,7 +103,13 @@
     "pr:dry-run": "node scripts/create-pr.js --dry-run",
     "pr:auto-commit": "node scripts/create-pr.js --auto-commit",
     "pr:help": "node scripts/create-pr.js --help",
-    "preview-and-auto-pr": "pnpm run preview && pnpm run pr:auto-commit"
+    "preview-and-auto-pr": "pnpm run preview && pnpm run pr:auto-commit",
+    "workflow": "node scripts/workflow-automation.js",
+    "workflow:start": "node scripts/workflow-automation.js",
+    "workflow:new": "git checkout main && git pull && node scripts/workflow-automation.js",
+    "dev": "node scripts/workflow-automation.js",
+    "sync-main": "node scripts/sync-main.js",
+    "fix-gitignore": "node scripts/fix-gitignore.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",

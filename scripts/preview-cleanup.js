@@ -42,7 +42,7 @@ import * as config from './core/config.js';
 import * as firebaseAuth from './auth/firebase-auth.js';
 import readline from 'readline';
 
-/* global process */
+/* global process, console */
 
 /**
  * Parse command line arguments
