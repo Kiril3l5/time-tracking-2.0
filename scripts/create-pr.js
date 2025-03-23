@@ -97,6 +97,33 @@ function executeCommand(command, options = {}) {
 }
 
 /**
+ * Save preview URLs to a file for later use
+ * 
+ * @param {Object} urls - Object containing preview URLs
+ * @returns {boolean} - Success or failure
+ */
+function savePreviewUrls(urls) {
+  if (!urls || Object.keys(urls).length === 0) {
+    return false;
+  }
+
+  try {
+    const tempDir = path.join(process.cwd(), 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const filePath = path.join(tempDir, 'preview-urls.json');
+    fs.writeFileSync(filePath, JSON.stringify(urls, null, 2));
+    logger.success(`Preview URLs saved to ${filePath}`);
+    return true;
+  } catch (error) {
+    logger.error(`Failed to save preview URLs: ${error.message}`);
+    return false;
+  }
+}
+
+/**
  * Main function to create the PR
  */
 async function createPR() {
@@ -283,102 +310,139 @@ async function createPR() {
     const prTitle = title || `Deploy ${branch} to production`;
     const prDescription = description || 'This PR has been tested with preview deployment and is ready for review.';
     
-    // Extract preview URLs
-    let previewUrls = '';
-    let previewDashboardPath = '';
+    // Look for preview URLs
+    logger.info('Looking for preview URLs...');
+    let foundPreviewUrls = false;
     
-    if (!options.skipUrlCheck) {
-      logger.info('Looking for preview URLs from recent deployments...');
+    // Try to find preview URLs from recent deployments
+    const previewUrls = {};
+    
+    try {
+      // Check for preview dashboard file
+      const previewDashboardFile = 'preview-dashboard.html';
+      if (fs.existsSync(previewDashboardFile)) {
+        logger.info(`Found preview dashboard at ${previewDashboardFile}`);
+        foundPreviewUrls = true;
+      }
       
-      try {
-        // First check if dashboard exists
-        previewDashboardPath = path.join(rootDir, 'preview-dashboard.html');
-        let dashboardExists = fs.existsSync(previewDashboardPath);
+      // Check for preview URL in temp directory
+      const tempDir = path.join(process.cwd(), 'temp');
+      if (fs.existsSync(tempDir)) {
+        // Look for reports with URLs
+        const reportFiles = fs.readdirSync(tempDir)
+          .filter(file => file.endsWith('.json') || file.endsWith('.txt'));
         
-        // Next check temp directory
-        const tempDir = path.join(rootDir, 'temp');
-        if (fs.existsSync(tempDir)) {
-          const files = fs.readdirSync(tempDir);
-          
-          // Look for JSON reports that might contain URLs
-          const reportFiles = files.filter(f => f.endsWith('.json'));
-          
-          if (reportFiles.length > 0) {
-            // Try to find preview URLs in reports
-            for (const file of reportFiles) {
+        for (const file of reportFiles) {
+          try {
+            const filePath = path.join(tempDir, file);
+            const content = fs.readFileSync(filePath, 'utf8');
+            
+            // First check if it's a JSON file with URL info
+            if (file.endsWith('.json')) {
               try {
-                const content = fs.readFileSync(path.join(tempDir, file), 'utf8');
-                const data = JSON.parse(content);
-                
-                // Different reports may store URLs in different places
-                // This is a simplified example - enhance based on your actual report structure
-                if (data.previewUrls || data.urls) {
-                  const urls = data.previewUrls || data.urls;
-                  if (urls.admin && urls.hours) {
-                    previewUrls = `\n\n## Preview URLs\n- Admin: ${urls.admin}\n- Hours: ${urls.hours}`;
-                    logger.success('Found preview URLs in reports!');
-                    break;
+                const jsonData = JSON.parse(content);
+                // Check if it contains URL properties
+                if (jsonData.previewUrl || jsonData.url || jsonData.adminUrl || 
+                    jsonData.hoursUrl || jsonData.admin || jsonData.hours) {
+                  // Extract and store URLs
+                  if (jsonData.admin || jsonData.adminUrl) previewUrls.admin = jsonData.admin || jsonData.adminUrl;
+                  if (jsonData.hours || jsonData.hoursUrl) previewUrls.hours = jsonData.hours || jsonData.hoursUrl;
+                  if (jsonData.previewUrl) {
+                    // If there's a generic preview URL, use it as a fallback
+                    if (!previewUrls.admin) previewUrls.admin = jsonData.previewUrl;
+                    if (!previewUrls.hours) previewUrls.hours = jsonData.previewUrl;
                   }
+                  foundPreviewUrls = true;
                 }
               } catch (e) {
-                // Continue if one report has issues
-                continue;
+                // Not a valid JSON file, will try regex instead
               }
             }
-          }
-          
-          // If URLs not found in reports, try log files
-          if (!previewUrls) {
-            const logFiles = files.filter(f => f.endsWith('.log'));
-            if (logFiles.length > 0) {
-              // Get most recent log file
-              const latestLog = logFiles.sort().reverse()[0];
-              const content = fs.readFileSync(path.join(tempDir, latestLog), 'utf8');
+            
+            // If we don't have URLs yet, try to extract them with regex
+            if (!previewUrls.admin || !previewUrls.hours) {
+              // Look for labeled URLs
+              const adminMatch = content.match(/ADMIN:?\s+(https:\/\/[^\s,]+)/i);
+              if (adminMatch && adminMatch[1]) {
+                previewUrls.admin = adminMatch[1].trim();
+                foundPreviewUrls = true;
+              }
               
-              // Extract URLs using regex
-              const adminMatch = content.match(/ADMIN:\s*(https:\/\/admin-autonomyhero.*?\.web\.app)/);
-              const hoursMatch = content.match(/HOURS:\s*(https:\/\/hours-autonomyhero.*?\.web\.app)/);
+              const hoursMatch = content.match(/HOURS:?\s+(https:\/\/[^\s,]+)/i);
+              if (hoursMatch && hoursMatch[1]) {
+                previewUrls.hours = hoursMatch[1].trim();
+                foundPreviewUrls = true;
+              }
               
-              if (adminMatch && hoursMatch) {
-                previewUrls = `\n\n## Preview URLs\n- Admin: ${adminMatch[1]}\n- Hours: ${hoursMatch[1]}`;
-                logger.success('Found preview URLs in logs!');
+              // If still no labeled URLs, look for generic Firebase URLs
+              if (!previewUrls.admin || !previewUrls.hours) {
+                const genericUrlRegex = /(?:Project Console|Hosting URL|Web app URL):\s+(https:\/\/[^\s,]+)/gi;
+                const urlMatches = [...content.matchAll(genericUrlRegex)];
+                
+                if (urlMatches.length > 0) {
+                  // Process the URLs and try to distinguish between admin and hours
+                  for (const match of urlMatches) {
+                    const url = match[1].trim();
+                    if (url.includes('admin') && !previewUrls.admin) {
+                      previewUrls.admin = url;
+                      foundPreviewUrls = true;
+                    } else if (url.includes('hours') && !previewUrls.hours) {
+                      previewUrls.hours = url;
+                      foundPreviewUrls = true;
+                    } else if (!previewUrls.admin) {
+                      previewUrls.admin = url;
+                      foundPreviewUrls = true;
+                    } else if (!previewUrls.hours) {
+                      previewUrls.hours = url;
+                      foundPreviewUrls = true;
+                    }
+                  }
+                }
               }
             }
+          } catch (error) {
+            logger.debug(`Error processing file ${file}: ${error.message}`);
           }
         }
-        
-        // If no URLs found but dashboard exists, reference it
-        if (!previewUrls && dashboardExists) {
-          previewUrls = `\n\n## Preview Information\nA preview dashboard has been generated locally. Check the 'preview-dashboard.html' file in the project root.`;
-          logger.info('No specific URLs found, but preview dashboard exists.');
-        }
-        
-        if (!previewUrls) {
-          logger.warn('Could not find any preview URLs.');
-          logger.info('You may need to run the preview deployment first:');
-          logger.info('  pnpm run preview');
-          
-          if (!options.test && !options.dryRun) {
-            // Ask for confirmation
-            logger.info('\nDo you want to continue without preview URLs? (y/N)');
-            const response = await getUserInput();
-            if (response.toLowerCase() !== 'y') {
-              logger.info('Cancelled. Please run a preview deployment first.');
-              return 1;
-            }
-          } else {
-            logger.info('In test mode, skipping confirmation and continuing.');
-          }
-        }
-      } catch (e) {
-        logger.warn('Could not extract preview URLs, continuing without them');
       }
-    } else {
-      logger.info('Skipping preview URL check (--skip-url-check specified)');
+      
+      // If we found any preview URLs, save them
+      if (Object.keys(previewUrls).length > 0) {
+        logger.success('Found preview URLs:');
+        if (previewUrls.admin) logger.info(`ADMIN: ${previewUrls.admin}`);
+        if (previewUrls.hours) logger.info(`HOURS: ${previewUrls.hours}`);
+        
+        // Save the URLs for use in the dashboard
+        savePreviewUrls(previewUrls);
+      } else if (!foundPreviewUrls && !options.skipUrlCheck) {
+        logger.warn('No preview URLs found.');
+        if (!options.dryRun && !options.test) {
+          const continueWithoutUrls = await getUserInput(
+            'No preview URLs found. Continue with PR creation? (y/N): ',
+            'n'
+          );
+          if (continueWithoutUrls.toLowerCase() !== 'y') {
+            logger.error('PR creation aborted: No preview URLs found.');
+            return 1;
+          }
+        }
+      }
+    } catch (error) {
+      logger.error(`Error looking for preview URLs: ${error.message}`);
+      if (!options.skipUrlCheck && !options.dryRun && !options.test) {
+        const continueAfterError = await getUserInput(
+          'Error looking for preview URLs. Continue with PR creation? (y/N): ',
+          'n'
+        );
+        if (continueAfterError.toLowerCase() !== 'y') {
+          logger.error('PR creation aborted due to URL check error.');
+          return 1;
+        }
+      }
     }
     
     // Create the full PR description
-    const fullDescription = `${prDescription}${previewUrls}\n\n## Changes\n- Tested with preview deployment\n- Ready for review`;
+    const fullDescription = `${prDescription}\n\n## Changes\n- Tested with preview deployment\n- Ready for review`;
     
     // Create PR
     logger.info('Creating pull request...');
@@ -448,13 +512,14 @@ async function createPR() {
  * Simple function to get user input
  * @returns {Promise<string>} User input
  */
-function getUserInput() {
+function getUserInput(prompt, defaultValue) {
   return new Promise((resolve) => {
     process.stdin.resume();
     process.stdin.setEncoding('utf8');
     process.stdin.once('data', (data) => {
       process.stdin.pause();
-      resolve(data.trim());
+      const response = data.trim();
+      resolve(response || defaultValue);
     });
   });
 }

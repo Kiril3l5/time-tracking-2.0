@@ -92,7 +92,7 @@ import * as dependencyScanner from './checks/dependency-scanner.js';
 import * as deadCodeDetector from './checks/dead-code-detector.js';
 import * as docQuality from './checks/doc-quality.js';
 import * as moduleSyntaxCheck from './checks/module-syntax-check.js';
-import * as workflowValidation from './checks/workflow-validation.js';
+import * as workflowValidation from './workflow/workflow-validation.js';
 
 // Import Firebase modules
 import * as deployment from './firebase/deployment.js';
@@ -112,7 +112,10 @@ import * as testDepsFixer from './test-types/test-deps-fixer.js';
 import * as queryTypesFixer from './typescript/query-types-fixer.js';
 
 // Import the report collector
-import { collectAndGenerateReport, cleanupTempDirectory, getHtmlReportPath, getReportPath, createJsonReport } from './reports/report-collector.js';
+import { collectAndGenerateReport, cleanupTempDirectory, getHtmlReportPath, getReportPath, createJsonReport, extractPreviewUrls } from './reports/report-collector.js';
+
+import * as metrics from './metrics/performance-metrics.js';
+import { PerformanceTracker } from './metrics/performance-tracker.js';
 
 /* global process, console */
 
@@ -515,14 +518,12 @@ export default async function main(args) {
 
     // Enhanced report collection with explicit paths
     const reportResult = await collectAndGenerateReport({
-      bundlePath: getReportPath('bundle'),
-      docQualityPath: getReportPath('docQuality'),
-      deadCodePath: getReportPath('deadCode'),
-      vulnerabilityPath: getReportPath('vulnerability'),
-      performancePath: getReportPath('performance'),
-      cleanupReports: !args['keep-individual-reports'],
+      reportPath: args.output || 'preview-dashboard.html',
       title: `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`,
-      outputPath: args.output || 'preview-dashboard.html'
+      // Get preview URLs
+      previewUrls: extractPreviewUrls(),
+      // Don't cleanup reports unless specified
+      cleanupIndividualReports: !args['keep-individual-reports']
     });
     
     if (reportResult) {
@@ -1210,6 +1211,33 @@ function generateChannelId() {
 }
 
 /**
+ * Format and save preview URLs
+ * 
+ * @param {Object} urls - Object containing preview URLs
+ * @returns {boolean} - Success or failure
+ */
+function savePreviewUrls(urls) {
+  if (!urls || Object.keys(urls).length === 0) {
+    return false;
+  }
+
+  try {
+    const tempDir = path.join(process.cwd(), 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const filePath = path.join(tempDir, 'preview-urls.json');
+    fs.writeFileSync(filePath, JSON.stringify(urls, null, 2));
+    logger.success(`Preview URLs saved to ${filePath}`);
+    return true;
+  } catch (error) {
+    logger.error(`Failed to save preview URLs: ${error.message}`);
+    return false;
+  }
+}
+
+/**
  * Deploy to Firebase preview channel
  * @param {Object} args - Command line arguments
  * @returns {Promise<boolean>} - Whether the deployment succeeded
@@ -1260,42 +1288,16 @@ async function deployPreview(args) {
     if (deployResult.success) {
       logger.success(`Deployment successful!`);
       
-      // Log preview URLs
-      if (deployResult.urls && deployResult.urls.length > 0) {
-        logger.info(`Preview URLs:`);
+      // Extract and process the preview URLs
+      const urls = extractPreviewUrlsFromOutput(deployResult.output);
+      
+      if (urls && Object.keys(urls).length > 0) {
+        logger.success('Successfully extracted preview URLs:');
+        if (urls.admin) logger.info(`ADMIN: ${urls.admin}`);
+        if (urls.hours) logger.info(`HOURS: ${urls.hours}`);
         
-        // Format URLs using urlExtractor
-        const formattedResult = urlExtractor.formatUrls({
-          urls: deployResult.urls,
-          format: 'plain'
-        });
-        
-        // Log the formatted URLs string instead of the entire result object
-        logger.info(formattedResult.formatted);
-        
-        // Add GitHub PR comment if applicable
-        let prNumber;
-        if (gitAuth && typeof gitAuth.getPullRequestNumber === 'function') {
-          try {
-            prNumber = gitAuth.getPullRequestNumber();
-          } catch (error) {
-            logger.warn(`Failed to get PR number: ${error.message}`);
-          }
-        }
-        
-        if (prNumber) {
-          logger.info(`Adding deployment comment to PR #${prNumber}`);
-          
-          // Create PR comment content using urlExtractor
-          const commentContent = urlExtractor.formatPRComment({
-            urls: deployResult.urls,
-            channelId,
-            environmentName: 'preview'
-          });
-          
-          // Assuming gitAuth module has a function for adding PR comments
-          gitAuth.addPRComment(prNumber, commentContent);
-        }
+        // Save the URLs for use in the dashboard
+        savePreviewUrls(urls);
       } else {
         logger.warn('No preview URLs found in deployment output');
       }
@@ -1313,6 +1315,53 @@ async function deployPreview(args) {
   } finally {
     // Instead of: await metrics.endStage('deployment');
   }
+}
+
+/**
+ * Extract preview URLs from deployment output
+ * 
+ * @param {string} output - Deployment output
+ * @returns {Object|null} - Object with admin and hours URLs or null
+ */
+function extractPreviewUrlsFromOutput(output) {
+  if (!output) return null;
+  
+  const urls = {};
+  
+  // Look for labeled URLs first (our custom format)
+  const adminMatch = output.match(/ADMIN:?\s+(https:\/\/[^\s,]+)/i);
+  if (adminMatch && adminMatch[1]) {
+    urls.admin = adminMatch[1].trim();
+  }
+  
+  const hoursMatch = output.match(/HOURS:?\s+(https:\/\/[^\s,]+)/i);
+  if (hoursMatch && hoursMatch[1]) {
+    urls.hours = hoursMatch[1].trim();
+  }
+  
+  // If not found, try to extract Firebase hosting URLs
+  if (!urls.admin || !urls.hours) {
+    const firebaseUrlPattern = /(?:Project Console|Hosting URL|Web app URL|Preview URL):\s+(https:\/\/[^\s,]+)/gi;
+    const urlMatches = [...output.matchAll(firebaseUrlPattern)];
+    
+    if (urlMatches.length > 0) {
+      // Try to differentiate between admin and hours URLs
+      for (const match of urlMatches) {
+        const url = match[1].trim();
+        if (url.includes('admin') && !urls.admin) {
+          urls.admin = url;
+        } else if (url.includes('hours') && !urls.hours) {
+          urls.hours = url;
+        } else if (!urls.admin) {
+          urls.admin = url;
+        } else if (!urls.hours) {
+          urls.hours = url;
+        }
+      }
+    }
+  }
+  
+  return Object.keys(urls).length > 0 ? urls : null;
 }
 
 /**

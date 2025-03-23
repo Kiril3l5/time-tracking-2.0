@@ -41,13 +41,14 @@ function ensureTempDirExists() {
   }
 }
 
-// Default paths for various report files
+// Define paths to various reports
 const REPORT_PATHS = {
-  bundle: path.join(TEMP_DIR, 'bundle-report.json'),
-  docQuality: path.join(TEMP_DIR, 'doc-quality-report.json'),
-  deadCode: path.join(TEMP_DIR, 'dead-code-report.json'),
-  vulnerability: path.join(TEMP_DIR, 'vulnerability-report.json'),
-  performance: path.join(TEMP_DIR, 'performance-metrics.json')
+  BUNDLE: path.join(TEMP_DIR, 'bundle-report.json'),
+  DOC_QUALITY: path.join(TEMP_DIR, 'doc-quality-report.json'),
+  DEAD_CODE: path.join(TEMP_DIR, 'dead-code-report.json'),
+  VULNERABILITY: path.join(TEMP_DIR, 'vulnerability-report.json'),
+  PERFORMANCE: path.join(TEMP_DIR, 'performance-metrics.json'),
+  PREVIEW_URLS: path.join(TEMP_DIR, 'preview-urls.json')  // Add path for preview URLs
 };
 
 /**
@@ -74,78 +75,186 @@ export function cleanupTempDirectory() {
 }
 
 /**
- * Collect report data from various modules and generate a consolidated report
+ * Extract preview URLs from files and logs
  * 
- * @param {Object} options - Options for report collection
- * @param {string} [options.bundlePath] - Path to bundle analysis report
- * @param {string} [options.docQualityPath] - Path to doc quality report
- * @param {string} [options.deadCodePath] - Path to dead code report
- * @param {string} [options.vulnerabilityPath] - Path to vulnerability report
- * @param {string} [options.performancePath] - Path to performance metrics report
- * @param {string} [options.outputPath] - Path to save the consolidated report
- * @param {string} [options.title] - Report title
- * @param {boolean} [options.cleanupReports] - Whether to delete individual reports after consolidation
- * @returns {Promise<boolean>} - Whether the operation was successful
+ * @returns {Object|null} - Preview URLs object or null if not found
  */
-export async function collectAndGenerateReport(options = {}) {
+function extractPreviewUrls() {
   try {
-    // Ensure temp directory exists
-    ensureTempDirExists();
-    
-    logger.info('Collecting report data...');
-    
-    const {
-      bundlePath = REPORT_PATHS.bundle,
-      docQualityPath = REPORT_PATHS.docQuality,
-      deadCodePath = REPORT_PATHS.deadCode,
-      vulnerabilityPath = REPORT_PATHS.vulnerability,
-      performancePath = REPORT_PATHS.performance,
-      outputPath = 'preview-dashboard.html',
-      title = `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`,
-      cleanupReports = true
-    } = options;
-    
-    // Load data from report files (if they exist)
-    const bundleData = loadReportData(bundlePath);
-    const docQualityData = loadReportData(docQualityPath);
-    const deadCodeData = loadReportData(deadCodePath);
-    const vulnerabilityData = loadReportData(vulnerabilityPath);
-    const performanceData = loadReportData(performancePath);
-    
-    // Check if we have at least some data to report
-    const hasData = bundleData || docQualityData || deadCodeData || 
-                   vulnerabilityData || performanceData;
-                   
-    if (!hasData) {
-      logger.warn('No report data found. Skipping consolidated report generation.');
-      return false;
+    // First try to read from the dedicated preview URLs file
+    if (fs.existsSync(REPORT_PATHS.PREVIEW_URLS)) {
+      logger.info(`Reading preview URLs from ${REPORT_PATHS.PREVIEW_URLS}`);
+      const urlsData = JSON.parse(fs.readFileSync(REPORT_PATHS.PREVIEW_URLS, 'utf8'));
+      return urlsData;
     }
     
-    // Generate the consolidated report
-    const result = await generateConsolidatedReport({
-      reportPath: outputPath,
+    // If dedicated file doesn't exist, try to find URLs in firebase logs
+    const logFiles = fs.readdirSync(TEMP_DIR)
+      .filter(file => file.includes('firebase-deploy-log') && file.endsWith('.txt'))
+      .map(file => path.join(TEMP_DIR, file));
+    
+    if (logFiles.length === 0) {
+      logger.warn('No Firebase deployment logs found to extract preview URLs');
+      return null;
+    }
+    
+    // Get the most recent log file
+    const mostRecentLog = logFiles.sort((a, b) => {
+      return fs.statSync(b).mtime.getTime() - fs.statSync(a).mtime.getTime();
+    })[0];
+    
+    logger.info(`Trying to extract preview URLs from ${mostRecentLog}`);
+    const logContent = fs.readFileSync(mostRecentLog, 'utf8');
+    
+    // Extract URLs using regex
+    const urlsObj = {};
+    
+    // Match patterns like "ADMIN: https://..."
+    const adminMatch = logContent.match(/ADMIN:?\s+(https:\/\/[^\s,]+)/i);
+    if (adminMatch && adminMatch[1]) {
+      urlsObj.admin = adminMatch[1].trim();
+    }
+    
+    // Match patterns like "HOURS: https://..."
+    const hoursMatch = logContent.match(/HOURS:?\s+(https:\/\/[^\s,]+)/i);
+    if (hoursMatch && hoursMatch[1]) {
+      urlsObj.hours = hoursMatch[1].trim();
+    }
+    
+    // If no labeled URLs found, try to find generic Firebase hosting URLs
+    if (!urlsObj.admin && !urlsObj.hours) {
+      const firebaseUrlPattern = /(?:Project Console|Hosting URL|Web app URL):\s+(https:\/\/[^\s,]+)/gi;
+      const urlMatches = [...logContent.matchAll(firebaseUrlPattern)];
+      
+      if (urlMatches.length > 0) {
+        // If we found generic URLs, try to differentiate between admin and hours
+        // based on URL patterns or fallback to using them as generic URLs
+        for (const match of urlMatches) {
+          const url = match[1].trim();
+          if (url.includes('admin') && !urlsObj.admin) {
+            urlsObj.admin = url;
+          } else if (url.includes('hours') && !urlsObj.hours) {
+            urlsObj.hours = url;
+          } else if (!urlsObj.admin) {
+            urlsObj.admin = url;
+          } else if (!urlsObj.hours) {
+            urlsObj.hours = url;
+          }
+        }
+      }
+    }
+    
+    if (Object.keys(urlsObj).length > 0) {
+      // Save the extracted URLs for future use
+      try {
+        fs.writeFileSync(REPORT_PATHS.PREVIEW_URLS, JSON.stringify(urlsObj, null, 2));
+        logger.success(`Preview URLs extracted and saved to ${REPORT_PATHS.PREVIEW_URLS}`);
+      } catch (err) {
+        logger.warn(`Could not save preview URLs to file: ${err.message}`);
+      }
+      
+      return urlsObj;
+    }
+    
+    logger.warn('No preview URLs found in logs');
+    return null;
+  } catch (error) {
+    logger.error(`Error extracting preview URLs: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Collect report data from various modules and generate consolidated report
+ * 
+ * @param {Object} options - Options for report collection
+ * @returns {Promise<boolean>} - Success or failure
+ */
+async function collectAndGenerateReport(options = {}) {
+  // Ensure temp directory exists
+  ensureTempDirExists();
+  
+  logger.info('Starting report collection process...');
+  
+  const {
+    reportPath = 'preview-dashboard.html',
+    outputPath = null,
+    title = `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`,
+    cleanupIndividualReports = false
+  } = options;
+  
+  // Load data from various reports
+  let bundleData = null;
+  let docQualityData = null;
+  let deadCodeData = null;
+  let vulnerabilityData = null;
+  let performanceData = null;
+  let previewUrls = null;  // Add preview URLs variable
+  
+  try {
+    // Load bundle analysis report
+    if (fs.existsSync(REPORT_PATHS.BUNDLE)) {
+      logger.info(`Loading bundle analysis report from ${REPORT_PATHS.BUNDLE}`);
+      bundleData = JSON.parse(fs.readFileSync(REPORT_PATHS.BUNDLE, 'utf8'));
+    }
+    
+    // Load documentation quality report
+    if (fs.existsSync(REPORT_PATHS.DOC_QUALITY)) {
+      logger.info(`Loading documentation quality report from ${REPORT_PATHS.DOC_QUALITY}`);
+      docQualityData = JSON.parse(fs.readFileSync(REPORT_PATHS.DOC_QUALITY, 'utf8'));
+    }
+    
+    // Load dead code detection report
+    if (fs.existsSync(REPORT_PATHS.DEAD_CODE)) {
+      logger.info(`Loading dead code detection report from ${REPORT_PATHS.DEAD_CODE}`);
+      deadCodeData = JSON.parse(fs.readFileSync(REPORT_PATHS.DEAD_CODE, 'utf8'));
+    }
+    
+    // Load vulnerability scanning report
+    if (fs.existsSync(REPORT_PATHS.VULNERABILITY)) {
+      logger.info(`Loading vulnerability scanning report from ${REPORT_PATHS.VULNERABILITY}`);
+      vulnerabilityData = JSON.parse(fs.readFileSync(REPORT_PATHS.VULNERABILITY, 'utf8'));
+    }
+    
+    // Load performance metrics report
+    if (fs.existsSync(REPORT_PATHS.PERFORMANCE)) {
+      logger.info(`Loading performance metrics report from ${REPORT_PATHS.PERFORMANCE}`);
+      performanceData = JSON.parse(fs.readFileSync(REPORT_PATHS.PERFORMANCE, 'utf8'));
+    }
+    
+    // Extract preview URLs
+    previewUrls = extractPreviewUrls();
+    
+    // Generate consolidated report
+    const consolidatedReportPath = outputPath || reportPath;
+    
+    const success = await generateConsolidatedReport({
+      reportPath: consolidatedReportPath,
       bundleData,
       docQualityData,
       deadCodeData,
       vulnerabilityData,
       performanceData,
+      previewUrls,  // Pass preview URLs to consolidated report generator
       title
     });
     
-    // If successful and cleanup requested, remove individual report files
-    if (result && cleanupReports) {
-      cleanupIndividualReports([
-        bundlePath, 
-        docQualityPath, 
-        deadCodePath, 
-        vulnerabilityPath, 
-        performancePath
-      ]);
+    if (success) {
+      logger.success(`Consolidated report generated at ${consolidatedReportPath}`);
+      
+      // Cleanup individual reports if requested
+      if (cleanupIndividualReports) {
+        logger.info('Cleaning up individual reports...');
+        cleanupTempDirectory();
+      }
+      
+      return true;
+    } else {
+      logger.error('Failed to generate consolidated report');
+      return false;
     }
-    
-    return result;
   } catch (error) {
-    logger.error(`Error collecting and generating report: ${error.message}`);
+    logger.error(`Error in report collection process: ${error.message}`);
     return false;
   }
 }
@@ -287,4 +396,15 @@ if (process.argv[1] === import.meta.url) {
         logger.warn('No test consolidated report was generated');
       }
     });
-} 
+}
+
+// Export the functions
+export {
+  collectAndGenerateReport,
+  extractPreviewUrls,
+  REPORT_PATHS,
+  TEMP_DIR
+};
+
+// Export default function
+export default collectAndGenerateReport; 

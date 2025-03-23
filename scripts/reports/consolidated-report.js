@@ -40,6 +40,7 @@ export async function generateConsolidatedReport(options = {}) {
       deadCodeData = null,
       vulnerabilityData = null,
       performanceData = null,
+      previewUrls = null,
       title = `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`
     } = options;
     
@@ -52,7 +53,8 @@ export async function generateConsolidatedReport(options = {}) {
       docQualityData,
       deadCodeData,
       vulnerabilityData,
-      performanceData
+      performanceData,
+      previewUrls
     });
     
     // Write to file
@@ -79,7 +81,8 @@ function generateHtml(data) {
     docQualityData, 
     deadCodeData, 
     vulnerabilityData,
-    performanceData 
+    performanceData,
+    previewUrls 
   } = data;
   
   return `<!DOCTYPE html>
@@ -204,6 +207,42 @@ function generateHtml(data) {
     .status-value.error {
       color: var(--color-warning);
     }
+    .preview-urls-panel {
+      margin: 20px 0;
+      padding: 20px;
+      background-color: var(--color-primary-light);
+      border-radius: var(--border-radius);
+      border: 1px solid var(--color-primary);
+      box-shadow: var(--shadow);
+    }
+    .preview-urls-panel h2 {
+      margin-top: 0;
+      color: var(--color-primary);
+      border-left: none;
+      padding-left: 0;
+    }
+    .preview-url-item {
+      margin: 15px 0;
+      padding: 10px;
+      background-color: white;
+      border-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .preview-url-label {
+      font-weight: bold;
+      margin-bottom: 5px;
+      color: var(--color-primary);
+    }
+    .preview-url-value {
+      word-break: break-all;
+    }
+    .preview-url-value a {
+      color: var(--color-primary);
+      text-decoration: none;
+    }
+    .preview-url-value a:hover {
+      text-decoration: underline;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -266,6 +305,33 @@ function generateHtml(data) {
 <body>
   <h1>${title}</h1>
   <p>Generated on: ${new Date().toLocaleString()}</p>
+  
+  ${previewUrls ? `
+  <div class="preview-urls-panel">
+    <h2>🚀 Preview URLs</h2>
+    <p>Use these URLs to test the current preview deployment:</p>
+    
+    ${previewUrls.admin ? `
+    <div class="preview-url-item">
+      <div class="preview-url-label">Admin Portal:</div>
+      <div class="preview-url-value">
+        <a href="${previewUrls.admin}" target="_blank">${previewUrls.admin}</a>
+      </div>
+    </div>
+    ` : ''}
+    
+    ${previewUrls.hours ? `
+    <div class="preview-url-item">
+      <div class="preview-url-label">Hours Portal:</div>
+      <div class="preview-url-value">
+        <a href="${previewUrls.hours}" target="_blank">${previewUrls.hours}</a>
+      </div>
+    </div>
+    ` : ''}
+    
+    <p style="margin-top: 15px;"><small>Note: These preview URLs will remain accessible until the preview environment is deleted or expires.</small></p>
+  </div>
+  ` : ''}
   
   <div class="status-panel">
     <h2>Workflow Summary</h2>
