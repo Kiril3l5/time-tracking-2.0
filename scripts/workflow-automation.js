@@ -29,6 +29,7 @@ import * as logger from './core/logger.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
+const gitignoreFixerPath = path.join(__dirname, 'fix-gitignore.js');
 
 // Create readline interface for user input
 const rl = readline.createInterface({
@@ -209,6 +210,198 @@ function suggestPRContent() {
 }
 
 /**
+ * Check for and fix .gitignore issues
+ */
+async function fixGitignoreIssues() {
+  logger.info("Checking .gitignore configuration...");
+  
+  try {
+    // Check if the fixer script exists
+    if (fs.existsSync(gitignoreFixerPath)) {
+      await import('./fix-gitignore.js');
+      return true;
+    } else {
+      logger.warn("Gitignore fixer script not found. Temp files may not be properly ignored.");
+      return false;
+    }
+  } catch (error) {
+    logger.warn("Could not run gitignore fixer:", error.message);
+    return false;
+  }
+}
+
+/**
+ * Create PR with better error handling
+ */
+async function createPullRequest(title, description) {
+  logger.sectionHeader('CREATING PULL REQUEST');
+  logger.info(`Creating PR with title: ${title}`);
+  
+  try {
+    const result = executeCommand(`pnpm run pr:create-with-title "${title}" "${description}"`, { 
+      stdio: 'inherit',
+      suppressErrors: true,
+      exitOnError: false
+    });
+    
+    if (!result.success) {
+      // PR creation failed, check for specific errors
+      if (result.output.includes("You have uncommitted changes")) {
+        logger.error("PR creation failed due to uncommitted changes.");
+        
+        // Offer to auto-commit
+        const shouldAutoCommit = await prompt("Would you like to automatically commit these changes? (Y/n): ");
+        
+        if (shouldAutoCommit.toLowerCase() !== 'n') {
+          logger.info("Auto-committing changes...");
+          const autoCommitResult = executeCommand(`pnpm run pr:auto-commit "${title}" "${description}"`, { 
+            stdio: 'inherit',
+            suppressErrors: false
+          });
+          
+          if (autoCommitResult.success) {
+            logger.success("PR created successfully with auto-commit!");
+            return true;
+          } else {
+            logger.error("Auto-commit failed. Please commit your changes manually.");
+            return false;
+          }
+        } else {
+          logger.info("You can manually commit your changes and then create a PR.");
+          return false;
+        }
+      } else if (result.output.includes("a pull request for branch") && result.output.includes("already exists")) {
+        // PR already exists
+        const prUrl = result.output.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
+        
+        logger.warn("A pull request already exists for this branch.");
+        if (prUrl) {
+          logger.info(`Existing PR: ${prUrl}`);
+          
+          // Offer to update the PR title/description
+          const shouldUpdate = await prompt("Would you like to update the existing PR? (y/N): ");
+          
+          if (shouldUpdate.toLowerCase() === 'y') {
+            logger.info("Use the GitHub website to update the PR details.");
+            
+            // Try to open the PR URL in browser
+            try {
+              const openCmd = process.platform === 'win32' ? 'start' : 
+                process.platform === 'darwin' ? 'open' : 'xdg-open';
+              executeCommand(`${openCmd} ${prUrl}`);
+              logger.success("Opened PR in browser for editing.");
+            } catch (error) {
+              logger.info(`Please visit ${prUrl} to update the PR.`);
+            }
+          }
+        }
+        return true; // PR exists, so technically "success"
+      } else {
+        logger.error("PR creation failed for an unknown reason.");
+        return false;
+      }
+    } else {
+      logger.success("PR created successfully!");
+      return true;
+    }
+  } catch (error) {
+    logger.error("Failed to create PR:", error.message);
+    return false;
+  }
+}
+
+/**
+ * Sync main branch with remote
+ */
+async function syncMainBranch() {
+  logger.sectionHeader('SYNCING MAIN BRANCH');
+  logger.info("Updating local 'main' branch with remote changes...");
+  
+  const currentBranch = getCurrentBranch();
+  
+  // If already on main, just pull
+  if (currentBranch === 'main' || currentBranch === 'master') {
+    const result = executeCommand('git pull origin main', { stdio: 'inherit' });
+    if (result.success) {
+      logger.success("Main branch updated successfully!");
+      return true;
+    } else {
+      logger.error("Failed to update main branch.");
+      return false;
+    }
+  }
+  
+  // Check for uncommitted changes before switching to main
+  if (hasUncommittedChanges()) {
+    logger.warn("You have uncommitted changes that would be affected by switching branches.");
+    
+    // Offer to commit, stash, or abort
+    logger.info("\nOptions:");
+    logger.info("1. Commit changes before switching");
+    logger.info("2. Stash changes temporarily");
+    logger.info("3. Cancel syncing main branch");
+    
+    const choice = await prompt("Choose an option (1/2/3): ");
+    
+    if (choice === "1") {
+      // Commit changes
+      const commitMessage = await prompt("Enter commit message: ");
+      if (!commitMessage) {
+        logger.error("Commit message is required.");
+        return false;
+      }
+      
+      executeCommand('git add .');
+      const commitResult = executeCommand(`git commit -m "${commitMessage}"`);
+      
+      if (!commitResult.success) {
+        logger.error("Failed to commit changes.");
+        return false;
+      }
+    } else if (choice === "2") {
+      // Stash changes
+      const stashResult = executeCommand('git stash push -m "Stashed before syncing main"');
+      if (!stashResult.success) {
+        logger.error("Failed to stash changes.");
+        return false;
+      }
+      logger.info("Changes stashed successfully. Use 'git stash pop' to restore them later.");
+    } else {
+      logger.info("Sync cancelled.");
+      return false;
+    }
+  }
+  
+  // Switch to main and pull
+  const checkoutResult = executeCommand('git checkout main');
+  if (!checkoutResult.success) {
+    logger.error("Failed to checkout main branch.");
+    return false;
+  }
+  
+  const pullResult = executeCommand('git pull origin main', { stdio: 'inherit' });
+  if (!pullResult.success) {
+    logger.error("Failed to pull latest changes from remote.");
+    return false;
+  }
+  
+  logger.success("Main branch updated successfully!");
+  
+  // Ask if they want to go back to the previous branch
+  const goBackToBranch = await prompt(`Would you like to switch back to '${currentBranch}'? (Y/n): `);
+  if (goBackToBranch.toLowerCase() !== 'n') {
+    const switchBackResult = executeCommand(`git checkout ${currentBranch}`);
+    if (switchBackResult.success) {
+      logger.success(`Switched back to branch: ${currentBranch}`);
+    } else {
+      logger.error(`Failed to switch back to branch: ${currentBranch}`);
+    }
+  }
+  
+  return true;
+}
+
+/**
  * Main workflow function
  */
 async function runWorkflow() {
@@ -221,6 +414,14 @@ async function runWorkflow() {
     
     let branchName = currentBranch;
     let createdNewBranch = false;
+    
+    // Check if they want to sync main first
+    if (currentBranch !== 'main' && currentBranch !== 'master') {
+      const shouldSyncMain = await prompt("Would you like to sync your local main branch with remote first? (y/N): ");
+      if (shouldSyncMain.toLowerCase() === 'y') {
+        await syncMainBranch();
+      }
+    }
     
     // If on main, create a new feature branch
     if (currentBranch === 'main' || currentBranch === 'master') {
@@ -375,6 +576,9 @@ async function runWorkflow() {
       logger.info("No uncommitted changes detected.");
     }
     
+    // New Step: Fix gitignore issues
+    await fixGitignoreIssues();
+    
     // Step 3: Run preview deployment
     logger.sectionHeader('RUNNING PREVIEW DEPLOYMENT');
     logger.info("Starting preview deployment. This may take a few minutes...");
@@ -435,17 +639,17 @@ async function runWorkflow() {
           finalDescription = customDescription;
         }
         
-        // Create PR
-        logger.sectionHeader('CREATING PULL REQUEST');
-        logger.info(`Creating PR with title: ${finalTitle}`);
+        // Create PR with better error handling
+        const prSuccess = await createPullRequest(finalTitle, finalDescription);
         
-        try {
-          executeCommand(`pnpm run pr:create-with-title "${finalTitle}" "${finalDescription}"`, { stdio: 'inherit' });
-          logger.success("Pull request created successfully!");
-        } catch (error) {
-          logger.error("Failed to create PR:", error.message);
-          logger.info("You can try manually with:");
-          logger.info(`pnpm run pr:create-with-title "${finalTitle}" "${finalDescription}"`);
+        // If PR was successful, offer guidance on post-PR workflow
+        if (prSuccess) {
+          logger.sectionHeader('AFTER PR IS MERGED');
+          logger.info("After your PR is merged on GitHub, follow these steps:");
+          logger.info("1. Switch to main branch: git checkout main");
+          logger.info("2. Pull latest changes: git pull origin main");
+          logger.info("3. Start a new feature with: pnpm run workflow:new");
+          logger.info("\nYou can run 'pnpm run sync-main' at any time to update your local main branch.");
         }
       }
     } catch (error) {
@@ -461,6 +665,7 @@ async function runWorkflow() {
     logger.info("2. Run preview deployment again: pnpm run preview");
     logger.info("3. Create/update PR: pnpm run pr:create");
     logger.info("4. Switch to main branch: git checkout main");
+    logger.info("5. Sync main with remote: pnpm run sync-main");
     
     // Final prompt - this is just for UX completion, no action needed
     await prompt("Press Enter to exit...");

@@ -107,7 +107,9 @@
     "workflow": "node scripts/workflow-automation.js",
     "workflow:start": "node scripts/workflow-automation.js",
     "workflow:new": "git checkout main && git pull && node scripts/workflow-automation.js",
-    "dev": "node scripts/workflow-automation.js"
+    "dev": "node scripts/workflow-automation.js",
+    "sync-main": "node scripts/sync-main.js",
+    "fix-gitignore": "node scripts/fix-gitignore.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
