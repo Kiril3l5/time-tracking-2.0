@@ -321,6 +321,7 @@ export async function deployToPreviewChannel(options) {
  * @param {boolean} [options.cleanBuild=true] - Whether to clean the build directory first
  * @param {string} [options.message] - Optional message for the deployment
  * @param {Object} [options.env={}] - Environment variables for the build
+ * @param {boolean} [options.skipBuild=false] - Whether to skip the build step
  * @returns {Promise<Object>} Deployment result object containing:
  *   - success {boolean}: Whether the deployment was successful
  *   - rawOutput {string}: Raw output from the Firebase deployment command
@@ -351,7 +352,8 @@ export async function deployToProduction(options) {
     buildDir = 'build',
     cleanBuild = true,
     message = '',
-    env = {}
+    env = {},
+    skipBuild = false
   } = options;
   
   // Validate inputs
@@ -366,8 +368,8 @@ export async function deployToProduction(options) {
   logger.info(`Deploying to Firebase production`);
   logger.info(`Project: ${projectId}, Site: ${site}`);
   
-  // Clean build directory if needed
-  if (cleanBuild) {
+  // Clean build directory if needed and not skipping build
+  if (cleanBuild && !skipBuild) {
     logger.info('Cleaning build directory...');
     
     // Use platform-specific command for cleaning
@@ -387,21 +389,24 @@ export async function deployToProduction(options) {
     }
   }
   
-  // Run build script with environment variables
-  logger.info('Building application...');
-  
-  const buildCommand = 'pnpm run build:all';
-  const buildResult = await commandRunner.runCommandAsync(buildCommand, {
-    env: { ...process.env, ...env }
-  });
-  
-  if (!buildResult.success) {
-    logger.error('Build failed, aborting deployment');
-    return {
-      success: false,
-      error: 'Build failed',
-      buildOutput: buildResult.output
-    };
+  // Run build script with environment variables if not skipping build
+  if (!skipBuild) {
+    logger.info('Building application...');
+    
+    const buildCommand = 'pnpm run build:all';
+    const buildResult = await commandRunner.runCommandAsync(buildCommand, {
+      env: { ...process.env, ...env }
+    });
+    
+    if (!buildResult.success) {
+      logger.error('Build failed, aborting deployment');
+      return {
+        success: false,
+        error: 'Build failed, cannot deploy'
+      };
+    }
+  } else {
+    logger.info('Skipping build step as requested...');
   }
   
   // Deploy to Firebase

@@ -239,7 +239,7 @@ async function buildApplication(args) {
   
   // Get config options
   const buildConfig = config.getBuildConfig();
-  const buildScript = buildConfig.productionScript || 'build';
+  const buildScript = buildConfig.productionScript || 'build:all';
   const buildEnv = environment.generateDeploymentEnv({
     envType: 'production',
     additionalVars: buildConfig.productionEnv || {}
@@ -295,14 +295,14 @@ async function performGitOperations(args) {
   try {
     // Add all changed files
     logger.info('Adding files to Git');
-    await commandRunner.run('git add .', { 
+    await commandRunner.runCommand('git add .', { 
       captureOutput: false, 
       logOutput: args.verbose 
     });
     
     // Commit changes
     logger.info(`Committing changes: "${args.commitMessage}"`);
-    const commitResult = await commandRunner.run(
+    const commitResult = await commandRunner.runCommand(
       `git commit -m "${args.commitMessage.replace(/"/g, '\\"')}"`, 
       { captureOutput: true }
     );
@@ -313,7 +313,7 @@ async function performGitOperations(args) {
     } else {
       // Push to remote
       logger.info('Pushing changes to remote repository');
-      await commandRunner.run('git push', { 
+      await commandRunner.runCommand('git push', { 
         captureOutput: false, 
         logOutput: args.verbose 
       });
@@ -328,7 +328,7 @@ async function performGitOperations(args) {
           logger.info(`Creating Git tag: ${tagName}`);
           
           // Check if tag already exists
-          const tagExists = await commandRunner.run(`git tag -l "${tagName}"`, { 
+          const tagExists = await commandRunner.runCommand(`git tag -l "${tagName}"`, { 
             captureOutput: true 
           });
           
@@ -336,12 +336,12 @@ async function performGitOperations(args) {
             logger.warn(`Tag ${tagName} already exists - skipping tag creation`);
           } else {
             // Create and push tag
-            await commandRunner.run(`git tag -a "${tagName}" -m "Version ${version}"`, { 
+            await commandRunner.runCommand(`git tag -a "${tagName}" -m "Version ${version}"`, { 
               captureOutput: false, 
               logOutput: args.verbose 
             });
             
-            await commandRunner.run(`git push origin "${tagName}"`, { 
+            await commandRunner.runCommand(`git push origin "${tagName}"`, { 
               captureOutput: false, 
               logOutput: args.verbose 
             });
@@ -391,7 +391,8 @@ async function deployProduction(args) {
     projectId,
     site,
     buildDir,
-    message
+    message,
+    skipBuild: !args['skip-build'],
   });
   
   if (deployResult.success) {
@@ -444,7 +445,11 @@ async function main() {
     
     // Load configuration
     logger.info('Loading configuration...');
-    config.loadConfig();
+    const firebaseConfig = config.getFirebaseConfig();
+    const buildConfig = config.getBuildConfig();
+    const previewConfig = config.getPreviewConfig();
+    
+    logger.info(`Loaded configuration for project: ${firebaseConfig.projectId}`);
     
     // Display workflow header
     logger.sectionHeader('Firebase Production Deployment Workflow');
@@ -467,14 +472,33 @@ async function main() {
       
       if (buildPassed) {
         // Perform Git operations
-        await performGitOperations(args);
+        const gitPassed = await performGitOperations(args);
+        if (!gitPassed && !args['skip-git']) {
+          logger.warn('Git operations failed, but continuing with deployment');
+          // Ask the user if they want to continue
+          console.log('Do you want to continue with deployment despite Git errors? (y/n)');
+          const response = await new Promise(resolve => {
+            process.stdin.once('data', data => {
+              resolve(data.toString().trim().toLowerCase());
+            });
+          });
+          
+          if (response !== 'y') {
+            logger.info('Deployment canceled by user');
+            process.exit(1);
+          }
+        }
         
-        // Deploy to production
+        // Deploy to production, setting skipBuild to true since we already built
+        args['skip-build'] = true;  // Ensure we skip the second build
         const deployPassed = await deployProduction(args);
         
         // Final result
         if (deployPassed) {
           logger.success('Production deployment completed successfully!');
+          logger.info('Your changes are now live at:');
+          logger.info(`- Admin: https://admin.autonomyheroes.com/`);
+          logger.info(`- Hours: https://hours.autonomyheroes.com/`);
           process.exit(0);
         } else {
           logger.error('Production deployment failed.');
