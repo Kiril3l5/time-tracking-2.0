@@ -186,14 +186,19 @@ function showWorkflowProgress(stepId) {
   if (!step) return;
   
   const totalSteps = WORKFLOW_STEPS.length;
+  
+  // Create a more visual progress indicator
   const progressBar = Array(totalSteps).fill('○').map((char, i) => i+1 === stepId ? '●' : char).join(' ');
+  
+  // Calculate percentage complete for this step
+  const percentComplete = Math.round((stepId / totalSteps) * 100);
   
   // Update terminal title with current step
   updateTerminalTitle(`Time-Tracking Workflow [${stepId}/${totalSteps}] - ${step.name}`);
   
   logger.sectionHeader(`STEP ${stepId}/${totalSteps}: ${step.name}`);
   logger.info(`${step.description}`);
-  logger.info(`Progress: ${progressBar}`);
+  logger.info(`Progress: ${progressBar} (${percentComplete}%)`);
   logger.info('─'.repeat(50));
 }
 
@@ -251,7 +256,55 @@ function executeCommand(command, options = {}) {
   }
   
   try {
-    const output = execSync(command, { encoding: 'utf8', ...options });
+    // Handle timeout option separately
+    const execOptions = { ...options };
+    if (execOptions.timeout) {
+      const timeout = execOptions.timeout;
+      delete execOptions.timeout; // Remove from execSync options
+      
+      // For stdio: 'inherit' commands, we won't have access to the output
+      // so we need to handle differently
+      if (options.stdio === 'inherit') {
+        try {
+          const output = execSync(command, { 
+            encoding: 'utf8', 
+            ...execOptions,
+            timeout
+          });
+          
+          const result = { 
+            success: true, 
+            output: output || '', 
+            error: null 
+          };
+          
+          // Cache the result if cacheable
+          if (isCacheable) {
+            commandCache.set(command, { 
+              result, 
+              timestamp: Date.now() 
+            });
+          }
+          
+          return result;
+        } catch (error) {
+          // Special handling for timeout errors
+          if (error.code === 'ETIMEDOUT') {
+            logger.warn(`Command timed out after ${timeout/1000} seconds: ${command}`);
+          }
+          
+          // For stdio: 'inherit', we might still want to extract URLs even if the command failed
+          return { 
+            success: false, 
+            output: error.stdout || '', 
+            error: error,
+            timedOut: error.code === 'ETIMEDOUT'
+          };
+        }
+      }
+    }
+    
+    const output = execSync(command, { encoding: 'utf8', ...execOptions });
     const result = { 
       success: true, 
       output, 
@@ -1088,52 +1141,53 @@ async function runWorkflow() {
     
     // Run the preview workflow with better error handling
     const previewCommand = 'pnpm run preview';
-    logger.info("\nRunning preview deployment workflow...");
+    logger.command(previewCommand); // Use the command logger for better visibility
     
     // Track overall workflow success
     let workflowSuccess = true;
     let previewUrls = null;
     
     try {
-      // Execute the preview command
+      // Execute the preview command with dedicated handling for preview deployment
+      // Use inherit for stdio to show real-time output, which is important for long-running commands
       const result = executeCommand(previewCommand, { 
-        stdio: 'pipe',
-        suppressErrors: true 
+        stdio: 'inherit', // Change from 'pipe' to 'inherit' to show real-time output
+        suppressErrors: true,
+        disableCache: true, // Ensure we don't use cached results for deployment
+        timeout: 600000 // 10 minute timeout for preview deployment
       });
       
+      // Since we're using stdio: 'inherit', we won't have output in the result object
+      // Instead, we need to check if the command completed successfully based on exit code
       if (!result.success) {
-        logger.error("Preview deployment encountered errors");
+        logger.warn("Preview deployment command exited with non-zero status");
         
-        // Save the output to a log file for URL extraction
+        // Try to find deployment logs in the temp directory
         const tempDir = path.join(process.cwd(), 'temp');
         if (!fs.existsSync(tempDir)) {
           fs.mkdirSync(tempDir, { recursive: true });
         }
         
-        const logFilePath = path.join(tempDir, 'preview-deploy-error.log');
-        fs.writeFileSync(logFilePath, result.output || '');
-        
         // Check if deployment actually completed despite errors
-        logger.info("Checking for preview URLs in deployment output...");
+        logger.info("Checking for preview URLs in deployment logs...");
         
         try {
-          // Attempt to extract URLs from the output
           // Import report collector functions dynamically
           const reportModule = await import('./reports/report-collector.js');
           
-          // Try to extract URLs from the error output
+          // Try to extract URLs from logs
           previewUrls = reportModule.extractPreviewUrls({tempDir});
           
           if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
-            logger.success("Found preview URLs despite deployment errors!");
+            logger.success("Found preview URLs despite deployment warnings!");
             
             // Display the URLs
             if (previewUrls.admin) {
-              logger.info(`Admin Dashboard URL: ${previewUrls.admin}`);
+              logger.link("Admin Dashboard", previewUrls.admin);
             }
             
             if (previewUrls.hours) {
-              logger.info(`Hours App URL: ${previewUrls.hours}`);
+              logger.link("Hours App", previewUrls.hours);
             }
             
             // Mark as partial success
@@ -1153,15 +1207,11 @@ async function runWorkflow() {
         // Import report collector functions dynamically
         const reportModule = await import('./reports/report-collector.js');
         
-        // Extract URLs from the command output
+        // Extract URLs from logs
         const tempDir = path.join(process.cwd(), 'temp');
         if (!fs.existsSync(tempDir)) {
           fs.mkdirSync(tempDir, { recursive: true });
         }
-        
-        // Save output to a log file for URL extraction
-        const logFilePath = path.join(tempDir, 'preview-deploy.log');
-        fs.writeFileSync(logFilePath, result.output || '');
         
         // Extract URLs from the logs
         previewUrls = reportModule.extractPreviewUrls({tempDir});
@@ -1171,11 +1221,11 @@ async function runWorkflow() {
           
           // Display the URLs
           if (previewUrls.admin) {
-            logger.info(`Admin Dashboard URL: ${previewUrls.admin}`);
+            logger.link("Admin Dashboard", previewUrls.admin);
           }
           
           if (previewUrls.hours) {
-            logger.info(`Hours App URL: ${previewUrls.hours}`);
+            logger.link("Hours App", previewUrls.hours);
           }
           
           workflowSuccess = true;
