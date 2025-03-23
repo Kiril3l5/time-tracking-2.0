@@ -92,7 +92,7 @@ import * as dependencyScanner from './checks/dependency-scanner.js';
 import * as deadCodeDetector from './checks/dead-code-detector.js';
 import * as docQuality from './checks/doc-quality.js';
 import * as moduleSyntaxCheck from './checks/module-syntax-check.js';
-import * as workflowValidation from './workflow/workflow-validation.js';
+import * as workflowValidation from './checks/workflow-validation.js';
 
 // Import Firebase modules
 import * as deployment from './firebase/deployment.js';
@@ -113,9 +113,6 @@ import * as queryTypesFixer from './typescript/query-types-fixer.js';
 
 // Import the report collector
 import { collectAndGenerateReport, cleanupTempDirectory, getHtmlReportPath, getReportPath, createJsonReport, extractPreviewUrls } from './reports/report-collector.js';
-
-import * as metrics from './metrics/performance-metrics.js';
-import { PerformanceTracker } from './metrics/performance-tracker.js';
 
 /* global process, console */
 
