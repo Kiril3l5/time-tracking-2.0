@@ -59,10 +59,31 @@ function processFile(filePath, options = {}) {
       }
     }
 
-    // Add type declarations if they're actually used in the code
-    // Instead of blindly adding them when hooks are present
-    const needsQueryKeyType = content.includes('QueryKey') && !content.includes("QueryKey } from '@tanstack/react-query'");
-    const needsQueryFunctionType = content.includes('QueryFunction') && !content.includes("QueryFunction } from '@tanstack/react-query'");
+    // More accurate check for type usage
+    // Check if these types are actually being used in type annotations/signatures
+    // not just mentioned somewhere in the code as string literals
+    const hasQueryKeyTypeAnnotation = /:\s*QueryKey\b|\bQueryKey(\[\]|<|>|\|)/g.test(content);
+    const hasQueryFunctionTypeAnnotation = /:\s*QueryFunction\b|\bQueryFunction(\[\]|<|>|\|)/g.test(content);
+    
+    // Check for any existing imports to avoid duplicates
+    const hasExistingQueryKeyImport = content.includes("QueryKey } from '@tanstack/react-query'");
+    const hasExistingQueryFunctionImport = content.includes("QueryFunction } from '@tanstack/react-query'");
+    
+    const needsQueryKeyType = hasQueryKeyTypeAnnotation && !hasExistingQueryKeyImport;
+    const needsQueryFunctionType = hasQueryFunctionTypeAnnotation && !hasExistingQueryFunctionImport;
+
+    // Specifically remove unused imports
+    if (content.includes("import type { QueryKey") && !hasQueryKeyTypeAnnotation) {
+      content = content.replace(/import type \{ QueryKey(, QueryFunction)? \} from '@tanstack\/react-query';(\r\n|\r|\n)/g, '');
+      content = content.replace(/import type \{ (.*), QueryKey(, .*)? \} from '@tanstack\/react-query';(\r\n|\r|\n)/g, 'import type { $1$2 } from \'@tanstack/react-query\';$3');
+      modified = true;
+    }
+    
+    if (content.includes("import type { QueryFunction") && !hasQueryFunctionTypeAnnotation) {
+      content = content.replace(/import type \{ QueryFunction(, QueryKey)? \} from '@tanstack\/react-query';(\r\n|\r|\n)/g, '');
+      content = content.replace(/import type \{ (.*), QueryFunction(, .*)? \} from '@tanstack\/react-query';(\r\n|\r|\n)/g, 'import type { $1$2 } from \'@tanstack/react-query\';$3');
+      modified = true;
+    }
     
     if (needsQueryKeyType || needsQueryFunctionType) {
       // Find the last import statement
