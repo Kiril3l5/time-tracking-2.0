@@ -72,7 +72,24 @@ export function checkFirebaseAuth() {
   logger.info('Checking Firebase CLI authentication...');
   
   try {
-    // Use login:list to check if a user is signed in
+    // Run additional command that requires valid token to double-check authentication
+    // This is more reliable than just using login:list which might show logged in even with expired token
+    const projectsResult = commandRunner.runCommand('firebase projects:list', {
+      stdio: 'pipe',
+      ignoreError: true
+    });
+  
+    // If projects:list fails, token is likely expired
+    if (!projectsResult.success || projectsResult.output?.includes('Error: Failed to get Firebase projects')) {
+      logger.warn('Firebase token may be expired or invalid');
+      return {
+        authenticated: false,
+        error: 'Firebase token expired or invalid',
+        errorDetails: projectsResult.error || 'Token validation failed'
+      };
+    }
+    
+    // Now check with login:list to get the email
     const result = commandRunner.runCommand('firebase login:list', {
       stdio: 'pipe',
       ignoreError: true
@@ -91,7 +108,6 @@ export function checkFirebaseAuth() {
     }
 
     const output = result.output || '';
-    logger.debug('Firebase login:list output:', output);
     
     // Check if any users are logged in
     if (output.includes('No users signed in')) {
@@ -105,47 +121,30 @@ export function checkFirebaseAuth() {
       };
     }
     
+    // If we get here, there should be a logged in user
     // Extract email using regex
     const emailMatch = output.match(/User: ([^\s]+)/);
     const email = emailMatch ? emailMatch[1] : 'Unknown';
     
-    // If we extracted an email, consider the user authenticated regardless
-    // This bypasses the projects:list check which is having issues
-    if (email !== 'Unknown') {
-      logger.success(`Firebase authenticated as: ${email}`);
+    if (email === 'Unknown') {
+      logger.warn('Failed to extract user email from Firebase authentication');
+      logger.warn('This might indicate an issue with the Firebase CLI or token');
       
-      // Try projects:list but don't fail authentication if it doesn't work
-      try {
-        const projectsResult = commandRunner.runCommand('firebase projects:list', {
-          stdio: 'pipe',
-          ignoreError: true,
-          timeout: 5000  // Short timeout to avoid hanging
-        });
-        
-        if (!projectsResult.success) {
-          logger.warn('Could not verify project access, but user is authenticated');
-          logger.warn('This may be a temporary Firebase CLI issue');
-        }
-      } catch (error) {
-        logger.warn('Error checking projects list, but continuing with authentication');
-        logger.debug(`Projects list error: ${error.message}`);
-      }
-      
+      // If email is Unknown but we passed the project list check, still consider it authenticated
+      // but with a warning
+      logger.success(`Firebase authenticated but unable to identify user email`);
       return {
         authenticated: true,
-        email
+        email: 'Unknown',
+        warning: 'Unable to determine user email'
       };
     }
     
-    logger.warn('Failed to extract user email from Firebase authentication');
-    logger.warn('This might indicate an issue with the Firebase CLI or token');
+    logger.success(`Firebase authenticated as: ${email}`);
     
-    // If we get here, we have a user but couldn't extract the email
-    logger.success(`Firebase authenticated but unable to identify user email`);
     return {
       authenticated: true,
-      email: 'Unknown',
-      warning: 'Unable to determine user email'
+      email
     };
   } catch (error) {
     logger.error(`Unexpected error checking Firebase authentication: ${error.message}`);

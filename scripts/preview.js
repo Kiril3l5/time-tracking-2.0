@@ -581,52 +581,69 @@ async function verifyAuthentication() {
       ? (currentTime - authTokens.lastAuthenticated) / (1000 * 60 * 60) // Convert to hours
       : 24; // If no record, assume it's been 24 hours
     
-    // First, try regular authentication check regardless of token age
-    const initialAuthResult = await authManager.verifyAllAuth();
+    // Check authentication
+    const authResult = await authManager.verifyAllAuth();
     
-    // If Firebase authentication is already valid, update the timestamp and return
-    if (initialAuthResult.success && initialAuthResult.services.firebase.authenticated) {
-      logger.success('Firebase authentication is valid');
-      // Update the last authentication time
-      _saveAuthTokens({
-        ...authTokens,
-        lastAuthenticated: currentTime
-      });
+    if (!authResult.success) {
+      logger.error('Authentication verification failed');
       
-      logger.success(`Firebase authenticated as: ${initialAuthResult.services.firebase.email || 'Unknown'}`);
-      logger.success(`Git user: ${initialAuthResult.services.gitAuth.name} <${initialAuthResult.services.gitAuth.email}>`);
-      progressTracker.completeStep(true, 'Authentication verified');
-      return true;
-    }
-    
-    // Authentication failed, try to provide actionable guidance
-    logger.error('Authentication verification failed');
-    
-    if (!initialAuthResult.services.firebase.authenticated) {
-      logger.error('Firebase authentication failed');
-      
-      // Check if we have the manual backup option available
-      const skipAuthCheck = process.env.SKIP_FIREBASE_AUTH_CHECK === 'true';
-      if (skipAuthCheck) {
-        logger.warn('Continuing with deployment despite authentication issues (SKIP_FIREBASE_AUTH_CHECK=true)');
-        progressTracker.completeStep(true, 'Authentication check bypassed by environment variable');
-        return true;
+      if (!authResult.services.firebase.authenticated) {
+        logger.error('Firebase authentication failed');
+        
+        // Run reauth directly without any extra conditions 
+        logger.info('Initiating Firebase reauthentication...');
+          
+        try {
+          // Just run the reauth command as requested
+          const reAuthResult = await commandRunner.runCommandAsync('firebase login --reauth', { 
+            stdio: 'inherit', // Use inherit to allow interactive prompts
+            shell: true 
+          });
+            
+          if (reAuthResult.success) {
+            logger.success('Firebase reauthentication successful');
+            // Update the last authentication time
+            _saveAuthTokens({
+              ...authTokens,
+              lastAuthenticated: currentTime
+            });
+              
+            // Verify auth again after reauth 
+            const newAuthResult = await authManager.verifyAllAuth();
+            if (newAuthResult.success) {
+              logger.success(`Firebase authenticated as: ${newAuthResult.services.firebase.email || 'Unknown'}`);
+              logger.success(`Git user: ${newAuthResult.services.gitAuth.name} <${newAuthResult.services.gitAuth.email}>`);
+              progressTracker.completeStep(true, 'Authentication verified after reauthentication');
+              return true;
+            }
+          } else {
+            logger.error('Firebase reauthentication failed');
+            logger.error(reAuthResult.error || 'Unknown error during reauthentication');
+            progressTracker.completeStep(false, 'Firebase reauthentication failed');
+            return false;
+          }
+        } catch (error) {
+          logger.error(`Error during Firebase reauthentication: ${error.message}`);
+          progressTracker.completeStep(false, 'Error during Firebase reauthentication');
+          return false;
+        }
       }
       
-      logger.info('Please run the following command manually in your terminal:');
-      logger.info('firebase login');
-      logger.info('After completing authentication, run the workflow again');
+      if (!authResult.services.gitAuth.authenticated) {
+        logger.error('Git authentication failed');
+        logger.info('Please configure Git user name and email:');
+        logger.info('git config --global user.name "Your Name"');
+        logger.info('git config --global user.email "your.email@example.com"');
+      }
+      
+      progressTracker.completeStep(false, 'Authentication verification failed');
+      return false;
     }
     
-    if (!initialAuthResult.services.gitAuth.authenticated) {
-      logger.error('Git authentication failed');
-      logger.info('Please configure Git user name and email:');
-      logger.info('git config --global user.name "Your Name"');
-      logger.info('git config --global user.email "your.email@example.com"');
-    }
-    
-    progressTracker.completeStep(false, 'Authentication verification failed');
-    return false;
+    logger.success(`Firebase authenticated as: ${authResult.services.firebase.email || 'Unknown'}`);
+    logger.success(`Git user: ${authResult.services.gitAuth.name} <${authResult.services.gitAuth.email}>`);
+    progressTracker.completeStep(true, 'Authentication verified');
+    return true;
   } catch (error) {
     logger.error(`Error during authentication verification: ${error.message}`);
     progressTracker.completeStep(false, 'Error during authentication verification');
@@ -1233,15 +1250,9 @@ async function deployPreview(args) {
     // Verify Firebase authentication first
     const authResult = await verifyAuthentication();
     if (!authResult) {
-      // Check if we're allowed to proceed despite authentication failure
-      const skipAuthCheck = process.env.SKIP_FIREBASE_AUTH_CHECK === 'true';
-      if (skipAuthCheck) {
-        logger.warn('Proceeding with deployment despite authentication failure (SKIP_FIREBASE_AUTH_CHECK=true)');
-      } else {
-        logger.error('Authentication failed. Cannot proceed with deployment.');
-        progressTracker.completeStep(false, 'Deployment aborted due to authentication failure');
-        return false;
-      }
+      logger.error('Authentication failed. Cannot proceed with deployment.');
+      progressTracker.completeStep(false, 'Deployment aborted due to authentication failure');
+      return false;
     }
     
     // Generate channel ID

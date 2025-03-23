@@ -678,30 +678,11 @@ async function runWorkflow() {
     let workflowSuccess = true;
     
     try {
-      // Ask if user wants to bypass authentication checks
-      const bypassAuth = await prompt("Would you like to bypass Firebase authentication checks? (y/N): ");
-      
-      let command = previewCommand;
-      if (bypassAuth.toLowerCase() === 'y') {
-        logger.warn("Running preview deployment with authentication checks bypassed");
-        // Use environment variable to tell the preview script to bypass auth checks
-        command = 'SKIP_FIREBASE_AUTH_CHECK=true ' + previewCommand;
-      }
-      
-      const previewResult = executeCommand(command);
+      const previewResult = executeCommand(previewCommand);
       
       if (!previewResult.success) {
         logger.error("Preview deployment failed");
         logger.error("Command failed: pnpm run preview");
-        workflowSuccess = false;
-      }
-      
-      // Check for specific error patterns in the output
-      const output = previewResult.output || '';
-      if (output.includes("Authentication failed") || 
-          output.includes("ERROR: Firebase") || 
-          output.includes("ERROR: Command failed: firebase")) {
-        logger.error("Firebase authentication issues detected in the output");
         workflowSuccess = false;
       }
       
