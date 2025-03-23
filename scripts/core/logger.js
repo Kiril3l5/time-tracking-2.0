@@ -181,81 +181,157 @@ export function log(message) {
 }
 
 /**
- * Log an info message (blue)
- * 
- * @function info
+ * Logger utility for consistent terminal output styling
+ */
+
+// ANSI color codes for terminal styling
+const COLORS = {
+  reset: '\x1b[0m',
+  bright: '\x1b[1m',
+  dim: '\x1b[2m',
+  underscore: '\x1b[4m',
+  blink: '\x1b[5m',
+  reverse: '\x1b[7m',
+  hidden: '\x1b[8m',
+  
+  black: '\x1b[30m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  magenta: '\x1b[35m',
+  cyan: '\x1b[36m',
+  white: '\x1b[37m',
+  
+  bgBlack: '\x1b[40m',
+  bgRed: '\x1b[41m',
+  bgGreen: '\x1b[42m',
+  bgYellow: '\x1b[43m',
+  bgBlue: '\x1b[44m',
+  bgMagenta: '\x1b[45m',
+  bgCyan: '\x1b[46m',
+  bgWhite: '\x1b[47m'
+};
+
+// Icons for different message types - SIMPLIFIED
+const ICONS = {
+  info: '',
+  success: '[SUCCESS]',
+  warning: '[WARNING]',
+  error: '[ERROR]',
+  command: '$',
+  section: '',
+  link: '',
+  time: '',
+  debug: '[DEBUG]'
+};
+
+// Timestamp function
+function getTimestamp() {
+  const now = new Date();
+  return `${now.toLocaleTimeString()}`;
+}
+
+/**
+ * Log an informational message
  * @param {string} message - The message to log
- * @description Outputs an information message with a blue "INFO:" prefix. Used for
- * general information and status updates that are important but not warnings or errors.
- * @example
- * logger.info('Configuration loaded successfully');
- * // Outputs: "[INFO:] Configuration loaded successfully" (with "INFO:" in blue)
  */
 export function info(message) {
-  console.log(`${colors.styled.info('INFO:')} ${message}`);
+  console.log(`${COLORS.cyan}${message}${COLORS.reset}`);
 }
 
 /**
- * Log a success message (green)
- * 
- * @function success
+ * Log a success message
  * @param {string} message - The message to log
- * @description Outputs a success message with a green "SUCCESS:" prefix. Used to
- * indicate that an operation or step completed successfully.
- * @example
- * logger.success('Deployment completed without errors');
- * // Outputs: "[SUCCESS:] Deployment completed without errors" (with "SUCCESS:" in green)
  */
 export function success(message) {
-  console.log(`${colors.styled.success('SUCCESS:')} ${message}`);
+  console.log(`${COLORS.green}${ICONS.success} ${message}${COLORS.reset}`);
 }
 
 /**
- * Log a warning message (yellow)
- * 
- * @function warn
+ * Log a warning message
  * @param {string} message - The message to log
- * @description Outputs a warning message with a yellow "WARNING:" prefix. Used for
- * issues that don't prevent the workflow from continuing but should be noted.
- * @example
- * logger.warn('API rate limit approaching, operations may be throttled');
- * // Outputs: "[WARNING:] API rate limit approaching, operations may be throttled" (with "WARNING:" in yellow)
  */
 export function warn(message) {
-  console.warn(`${colors.styled.warning('WARNING:')} ${message}`);
+  console.log(`${COLORS.yellow}${ICONS.warning} ${message}${COLORS.reset}`);
 }
 
 /**
- * Log an error message (red)
- * 
- * @function error
+ * Log an error message
  * @param {string} message - The message to log
- * @description Outputs an error message with a red "ERROR:" prefix. Used for
- * significant issues that may prevent parts of the workflow from functioning correctly.
- * @example
- * logger.error('Failed to connect to database');
- * // Outputs: "[ERROR:] Failed to connect to database" (with "ERROR:" in red)
  */
 export function error(message) {
-  console.error(`${colors.styled.error('ERROR:')} ${message}`);
+  console.log(`${COLORS.red}${ICONS.error} ${message}${COLORS.reset}`);
 }
 
 /**
- * Log a debug message (only shown in verbose mode)
- * 
- * @function debug
- * @param {string} message - The message to log
- * @description Outputs a debug message with a dimmed "DEBUG:" prefix, but only when
- * verbose mode is enabled. Used for detailed diagnostic information that would
- * normally clutter the output.
- * @example
- * logger.debug('Request payload: ' + JSON.stringify(data));
- * // Only appears if verbose mode is enabled
+ * Log a debug message
+ * @param {string} message - The debug message to log
  */
 export function debug(message) {
   if (verbose) {
-    console.log(`${colors.styled.format('DEBUG:', colors.colors.dim)} ${message}`);
+    console.log(`${COLORS.dim}${ICONS.debug} ${message}${COLORS.reset}`);
   }
+}
+
+/**
+ * Log a section header
+ * @param {string} title - The section title
+ */
+export function sectionHeader(title) {
+  const timestamp = getTimestamp();
+  console.log('\n');
+  console.log(`${COLORS.bright}${COLORS.magenta}STEP: ${title} [${timestamp}]${COLORS.reset}`);
+  console.log(`${COLORS.bright}${COLORS.magenta}${'='.repeat(40)}${COLORS.reset}`);
+}
+
+/**
+ * Log a command
+ * @param {string} command - The command being executed
+ */
+export function command(command) {
+  console.log(`${COLORS.bright}${COLORS.cyan}${ICONS.command} ${command}${COLORS.reset}`);
+}
+
+/**
+ * Log a URL with proper formatting
+ * @param {string} label - The URL label
+ * @param {string} url - The URL
+ */
+export function link(label, url) {
+  console.log(`${COLORS.cyan}${label}: ${url}${COLORS.reset}`);
+}
+
+/**
+ * Log a timed operation start
+ * @param {string} operation - The operation being timed
+ */
+export function timeStart(operation) {
+  console.log(`${COLORS.cyan}Starting: ${operation}${COLORS.reset}`);
+  return Date.now();
+}
+
+/**
+ * Log a timed operation end
+ * @param {string} operation - The operation being timed
+ * @param {number} startTime - The start time from timeStart
+ */
+export function timeEnd(operation, startTime) {
+  const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+  console.log(`${COLORS.cyan}Completed: ${operation} (${duration}s)${COLORS.reset}`);
+}
+
+/**
+ * Create a progress bar
+ * @param {number} percent - The percentage complete (0-100)
+ * @param {number} width - The width of the progress bar in characters
+ */
+export function progressBar(percent, width = 30) {
+  const completed = Math.floor(width * (percent / 100));
+  const remaining = width - completed;
+  const bar = `${COLORS.green}${'█'.repeat(completed)}${COLORS.dim}${'░'.repeat(remaining)}${COLORS.reset}`;
+  
+  console.log(`${COLORS.bright}[${bar}] ${percent}%${COLORS.reset}`);
 }
 
 /**
@@ -263,37 +339,11 @@ export function debug(message) {
  * 
  * @function section
  * @param {string} title - The section title
- * @description Creates a visually distinct section header in the logs, with the
- * provided title in uppercase and surrounded by separator lines. Useful for
- * dividing the workflow output into logical sections.
- * @example
- * logger.section('Initializing Deployment');
- * // Outputs a header like:
- * // ==========================================================
- * // INITIALIZING DEPLOYMENT
- * // ==========================================================
  */
 export function section(title) {
   console.log('\n');
-  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(80)}${colors.colors.reset}`);
-  console.log(`${colors.colors.cyan}${colors.colors.bold}${title.toUpperCase()}${colors.colors.reset}`);
-  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(80)}${colors.colors.reset}`);
-  console.log('');
-}
-
-/**
- * Create a section header (alias for section)
- * 
- * @function sectionHeader
- * @param {string} title - The section title
- * @description Alias for the section() function, provided for backward compatibility
- * and readability in some contexts.
- * @see section
- * @example
- * logger.sectionHeader('Building Application');
- */
-export function sectionHeader(title) {
-  section(title);
+  console.log(`${colors.colors.cyan}${colors.colors.bold}${title}${colors.colors.reset}`);
+  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(40)}${colors.colors.reset}`);
 }
 
 /**
@@ -319,24 +369,14 @@ export function setSteps(steps) {
  * 
  * @function startStep
  * @param {string} title - The step title
- * @description Marks the beginning of a new step in the workflow. Increments the
- * current step counter, displays a header with step number, title, and starts
- * timing for this step. Should be paired with endStep().
- * @example
- * // Start the "Authentication" step (assuming setSteps was called earlier)
- * logger.startStep('Authentication');
- * // Outputs a header like:
- * // STEP 1/5: AUTHENTICATION
- * // ============================================================
  */
 export function startStep(title) {
   currentStep++;
   stepStartTime = Date.now();
   
   console.log('\n');
-  console.log(`${colors.colors.cyan}${colors.colors.bold}STEP ${currentStep}/${totalSteps}: ${title.toUpperCase()}${colors.colors.reset}`);
-  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(60)}${colors.colors.reset}`);
-  console.log('');
+  console.log(`${colors.colors.cyan}${colors.colors.bold}STEP ${currentStep}/${totalSteps}: ${title}${colors.colors.reset}`);
+  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(40)}${colors.colors.reset}`);
 }
 
 /**
@@ -345,32 +385,16 @@ export function startStep(title) {
  * @function endStep
  * @param {string} status - The status ('success', 'warning', or 'error')
  * @param {string} message - An optional message
- * @description Marks the end of a workflow step. Displays the time taken to complete
- * the step and a status message with appropriate color coding (green for success,
- * yellow for warning, red for error). Should be called after startStep().
- * @example
- * // End a step successfully
- * logger.endStep('success', 'All checks passed');
- * 
- * // End a step with a warning
- * logger.endStep('warning', 'Minor issues detected, continuing anyway');
- * 
- * // End a step with an error
- * logger.endStep('error', 'Critical failure in deployment');
  */
 export function endStep(status = 'success', message = '') {
   const elapsed = ((Date.now() - stepStartTime) / 1000).toFixed(1);
   const statusColor = status === 'success' ? colors.colors.green : 
                      status === 'warning' ? colors.colors.yellow : colors.colors.red;
   
-  console.log('\n');
-  console.log(`${statusColor}${colors.colors.bold}Step completed in ${elapsed}s${colors.colors.reset}`);
+  const statusText = status === 'success' ? 'SUCCESS' : 
+                    status === 'warning' ? 'WARNING' : 'ERROR';
   
-  if (message) {
-    console.log(`${statusColor}${message}${colors.colors.reset}`);
-  }
-  
-  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(60)}${colors.colors.reset}`);
+  console.log(`${statusColor}${colors.colors.bold}[${statusText}] ${message} (${elapsed}s)${colors.colors.reset}`);
 }
 
 /**
@@ -427,5 +451,10 @@ export default {
   startStep,
   endStep,
   showProgress,
-  getColors
+  getColors,
+  command,
+  link,
+  timeStart,
+  timeEnd,
+  progressBar
 }; 

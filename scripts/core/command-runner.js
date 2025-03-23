@@ -252,6 +252,8 @@ export function runCommand(command, options = {}) {
  * @param {boolean} [options.ignoreError=false] - Don't throw on non-zero exit code
  * @param {string} [options.stdio='inherit'] - stdio option for child_process
  * @param {number} [options.timeout] - Timeout in milliseconds
+ * @param {boolean} [options.captureOutput=false] - Capture output even if stdio is not pipe
+ * @param {boolean} [options.silent=false] - Suppress all output to console
  * @returns {Promise<Object>} Command result object with:
  *   - success {boolean}: Whether the command completed successfully
  *   - output {string}: Command output (if stdio is not 'inherit')
@@ -265,7 +267,8 @@ export async function runCommandAsync(command, options = {}) {
     stdio = 'inherit',
     timeout = 0,
     shell = false,
-    captureOutput = false
+    captureOutput = false,
+    silent = false
   } = options;
   
   const startTime = Date.now();
@@ -274,102 +277,91 @@ export async function runCommandAsync(command, options = {}) {
   let success = false;
   
   try {
-    const captureStdio = stdio === 'pipe' || captureOutput;
+    // Determine stdio mode:
+    // - 'pipe' if captureOutput is true or stdio is 'pipe'
+    // - 'ignore' if silent is true
+    // - otherwise use the provided stdio option
+    const effectiveStdio = captureOutput || stdio === 'pipe'
+      ? 'pipe'
+      : silent ? 'ignore' : stdio;
     
-    if (captureStdio) {
-      // For capturing stdout/stderr, use exec
-      const execOptions = {
-        cwd,
-        env,
-        encoding: 'utf8',
-        maxBuffer: 5 * 1024 * 1024 // 5 MB buffer for large outputs
-      };
+    // Log command only if not silent
+    if (!silent) {
+      logger.debug(`Running command: ${command}`);
+    }
+    
+    // Configure spawn options
+    const spawnOptions = {
+      cwd,
+      env: { ...env },
+      stdio: effectiveStdio,
+      shell: true  // Use shell: true for all platforms
+    };
+    
+    await new Promise((resolve, reject) => {
+      // Use shell: true for all platforms to ensure commands work properly
+      const childProcess = child_process.spawn(
+        command,
+        [],
+        spawnOptions
+      );
       
+      let stdoutChunks = [];
+      let stderrChunks = [];
+      
+      if (childProcess.stdout) {
+        childProcess.stdout.on('data', (data) => {
+          if (captureOutput || effectiveStdio === 'pipe') {
+            stdoutChunks.push(data);
+          }
+        });
+      }
+      
+      if (childProcess.stderr) {
+        childProcess.stderr.on('data', (data) => {
+          if (captureOutput || effectiveStdio === 'pipe') {
+            stderrChunks.push(data);
+          }
+        });
+      }
+      
+      let timeoutId;
       if (timeout > 0) {
-        execOptions.timeout = timeout;
-      }
-      
-      if (shell) {
-        execOptions.shell = true;
-      }
-      
-      const result = await execAsync(command, execOptions);
-      output = result.stdout || '';
-      success = true;
-    } else {
-      // For inheriting stdio, use spawn
-      const spawnOptions = {
-        cwd,
-        env,
-        stdio,
-        shell: true // Use shell: true for cross-platform compatibility
-      };
-      
-      await new Promise((resolve, reject) => {
-        // Use shell: true for all platforms to ensure commands work properly
-        const childProcess = child_process.spawn(
-          command,
-          [],
-          spawnOptions
-        );
-        
-        let stdoutChunks = [];
-        let stderrChunks = [];
-        
-        if (childProcess.stdout) {
-          childProcess.stdout.on('data', (data) => {
-            if (captureOutput) {
-              stdoutChunks.push(data);
-            }
-          });
-        }
-        
-        if (childProcess.stderr) {
-          childProcess.stderr.on('data', (data) => {
-            if (captureOutput) {
-              stderrChunks.push(data);
-            }
-          });
-        }
-        
-        let timeoutId;
-        if (timeout > 0) {
-          timeoutId = setTimeout(() => {
-            childProcess.kill();
-            const err = new Error(`Command timed out after ${timeout}ms: ${command}`);
-            err.code = 'TIMEOUT';
-            reject(err);
-          }, timeout);
-        }
-        
-        childProcess.on('close', (code) => {
-          if (timeoutId) clearTimeout(timeoutId);
-          
-          if (captureOutput) {
-            output = Buffer.concat(stdoutChunks).toString('utf8');
-            error = Buffer.concat(stderrChunks).toString('utf8');
-          }
-          
-          if (code === 0) {
-            success = true;
-            resolve();
-          } else if (ignoreError) {
-            resolve();
-          } else {
-            const err = new Error(`Command failed with exit code ${code}: ${command}`);
-            err.code = code;
-            reject(err);
-          }
-        });
-        
-        childProcess.on('error', (err) => {
-          if (timeoutId) clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => {
+          childProcess.kill();
+          const err = new Error(`Command timed out after ${timeout}ms: ${command}`);
+          err.code = 'TIMEOUT';
           reject(err);
-        });
+        }, timeout);
+      }
+      
+      childProcess.on('close', (code) => {
+        if (timeoutId) clearTimeout(timeoutId);
+        
+        if (captureOutput || effectiveStdio === 'pipe') {
+          output = Buffer.concat(stdoutChunks).toString('utf8');
+          error = Buffer.concat(stderrChunks).toString('utf8');
+        }
+        
+        if (code === 0) {
+          success = true;
+          resolve();
+        } else if (ignoreError) {
+          resolve();
+        } else {
+          const err = new Error(`Command failed with exit code ${code}: ${command}`);
+          err.code = code;
+          reject(err);
+        }
       });
       
-      success = true;
-    }
+      childProcess.on('error', (err) => {
+        if (timeoutId) clearTimeout(timeoutId);
+        reject(err);
+      });
+    });
+    
+    success = true;
     
     const endTime = Date.now();
     const result = {
@@ -377,8 +369,10 @@ export async function runCommandAsync(command, options = {}) {
       output
     };
     
-    // Save command output to cache and file
-    saveCommandOutput(command, output, error, success, startTime, endTime);
+    // Save command output to cache and file if not silent
+    if (!silent) {
+      saveCommandOutput(command, output, error, success, startTime, endTime);
+    }
     
     return result;
   } catch (err) {
@@ -387,8 +381,10 @@ export async function runCommandAsync(command, options = {}) {
     output = err.stdout || '';
     const stderr = err.stderr || error;
     
-    // Save command output to cache and file
-    saveCommandOutput(command, output, stderr, false, startTime, endTime);
+    // Save command output to cache and file if not silent
+    if (!silent) {
+      saveCommandOutput(command, output, stderr, false, startTime, endTime);
+    }
     
     if (ignoreError) {
       return {

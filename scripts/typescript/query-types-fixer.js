@@ -59,26 +59,50 @@ function processFile(filePath, options = {}) {
       }
     }
 
-    // Add type declarations if using React Query hooks
-    if (
-      content.includes('useQuery') ||
-      content.includes('useMutation') ||
-      content.includes('useInfiniteQuery')
-    ) {
-      // Check if we need to add type imports
-      if (!content.includes('@tanstack/react-query-types')) {
-        // Find the last import statement
-        const importRegex = /import\s+[^;]+;/g;
-        let lastImportIndex = -1;
-        let match;
+    // More accurate check for type usage
+    // Check if these types are actually being used in type annotations/signatures
+    // not just mentioned somewhere in the code as string literals
+    const hasQueryKeyTypeAnnotation = /:\s*QueryKey\b|\bQueryKey(\[\]|<|>|\|)/g.test(content);
+    const hasQueryFunctionTypeAnnotation = /:\s*QueryFunction\b|\bQueryFunction(\[\]|<|>|\|)/g.test(content);
+    
+    // Check for any existing imports to avoid duplicates
+    const hasExistingQueryKeyImport = content.includes("QueryKey } from '@tanstack/react-query'");
+    const hasExistingQueryFunctionImport = content.includes("QueryFunction } from '@tanstack/react-query'");
+    
+    const needsQueryKeyType = hasQueryKeyTypeAnnotation && !hasExistingQueryKeyImport;
+    const needsQueryFunctionType = hasQueryFunctionTypeAnnotation && !hasExistingQueryFunctionImport;
+
+    // Specifically remove unused imports
+    if (content.includes("import type { QueryKey") && !hasQueryKeyTypeAnnotation) {
+      content = content.replace(/import type \{ QueryKey(, QueryFunction)? \} from '@tanstack\/react-query';(\r\n|\r|\n)/g, '');
+      content = content.replace(/import type \{ (.*), QueryKey(, .*)? \} from '@tanstack\/react-query';(\r\n|\r|\n)/g, 'import type { $1$2 } from \'@tanstack/react-query\';$3');
+      modified = true;
+    }
+    
+    if (content.includes("import type { QueryFunction") && !hasQueryFunctionTypeAnnotation) {
+      content = content.replace(/import type \{ QueryFunction(, QueryKey)? \} from '@tanstack\/react-query';(\r\n|\r|\n)/g, '');
+      content = content.replace(/import type \{ (.*), QueryFunction(, .*)? \} from '@tanstack\/react-query';(\r\n|\r|\n)/g, 'import type { $1$2 } from \'@tanstack/react-query\';$3');
+      modified = true;
+    }
+    
+    if (needsQueryKeyType || needsQueryFunctionType) {
+      // Find the last import statement
+      const importRegex = /import\s+[^;]+;/g;
+      let lastImportIndex = -1;
+      let match;
+      
+      while ((match = importRegex.exec(content)) !== null) {
+        lastImportIndex = match.index + match[0].length;
+      }
+      
+      if (lastImportIndex !== -1) {
+        // Only add types that are needed
+        const typesToAdd = [];
+        if (needsQueryKeyType) typesToAdd.push('QueryKey');
+        if (needsQueryFunctionType) typesToAdd.push('QueryFunction');
         
-        while ((match = importRegex.exec(content)) !== null) {
-          lastImportIndex = match.index + match[0].length;
-        }
-        
-        if (lastImportIndex !== -1) {
-          // Add type import after the last import
-          const typeImport = "\nimport type { QueryKey, QueryFunction } from '@tanstack/react-query';";
+        if (typesToAdd.length > 0) {
+          const typeImport = `\nimport type { ${typesToAdd.join(', ')} } from '@tanstack/react-query';`;
           content = content.slice(0, lastImportIndex) + typeImport + content.slice(lastImportIndex);
           modified = true;
         }

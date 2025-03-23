@@ -16,7 +16,7 @@
  *   # pnpm run workflow
  */
 
-/* global console, process */
+/* global console, process, global, clearInterval, setInterval */
 
 import { execSync } from 'child_process';
 import readline from 'readline';
@@ -25,11 +25,185 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as logger from './core/logger.js';
 
+// Add Promise-based utilities for parallel operations
+const fsPromises = fs.promises;
+
+// Process monitoring configuration
+const PROCESS_MONITORING = {
+  enabled: true,
+  interval: 30000, // Check every 30 seconds
+  memoryThreshold: 500 * 1024 * 1024, // 500MB warning threshold
+  intervalId: null
+};
+
+/**
+ * Run multiple operations in parallel
+ * @param {Array<Function>} operations - Array of async functions to execute
+ * @param {string} operationName - Name of the operation group for logging
+ * @returns {Promise<Array>} - Results from all operations
+ */
+async function runParallel(operations, operationName = 'parallel operations') {
+  if (!operations || operations.length === 0) return [];
+  
+  const startTime = logger.timeStart(`Running ${operations.length} ${operationName}`);
+  try {
+    const results = await Promise.all(operations);
+    logger.timeEnd(`${operationName}`, startTime);
+    return results;
+  } catch (error) {
+    logger.error(`Error in parallel ${operationName}: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * Start monitoring process resources
+ */
+function startProcessMonitoring() {
+  if (!PROCESS_MONITORING.enabled) return;
+  
+  // Clear any existing interval
+  if (PROCESS_MONITORING.intervalId) {
+    clearInterval(PROCESS_MONITORING.intervalId);
+  }
+  
+  // Set up the new interval
+  PROCESS_MONITORING.intervalId = setInterval(() => {
+    const memoryUsage = process.memoryUsage();
+    const usedMemoryMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
+    const totalMemoryMB = Math.round(memoryUsage.heapTotal / 1024 / 1024);
+    
+    if (memoryUsage.heapUsed > PROCESS_MONITORING.memoryThreshold) {
+      logger.warn(`High memory usage: ${usedMemoryMB}MB used of ${totalMemoryMB}MB allocated`);
+      // Force garbage collection if memory is high (Node.js needs to be started with --expose-gc)
+      if (global.gc) {
+        logger.info("Running garbage collection...");
+        global.gc();
+      }
+    }
+  }, PROCESS_MONITORING.interval);
+}
+
+/**
+ * Stop monitoring process resources
+ */
+function stopProcessMonitoring() {
+  if (PROCESS_MONITORING.intervalId) {
+    clearInterval(PROCESS_MONITORING.intervalId);
+    PROCESS_MONITORING.intervalId = null;
+  }
+}
+
+/**
+ * Clean up temporary resources
+ */
+async function cleanupTemporaryResources() {
+  logger.info("Cleaning up temporary resources...");
+  
+  try {
+    // Clear the command cache to free memory
+    commandCache.clear();
+    
+    // Clean up any temp files older than 7 days
+    const tempDir = path.join(rootDir, 'temp');
+    if (fs.existsSync(tempDir)) {
+      const now = Date.now();
+      const MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+      
+      const files = await fsPromises.readdir(tempDir);
+      let cleanedCount = 0;
+      
+      for (const file of files) {
+        const filePath = path.join(tempDir, file);
+        
+        try {
+          const stats = await fsPromises.stat(filePath);
+          
+          // If file is older than MAX_AGE, delete it
+          if (now - stats.mtime.getTime() > MAX_AGE) {
+            if (stats.isDirectory()) {
+              await fsPromises.rm(filePath, { recursive: true, force: true });
+            } else {
+              await fsPromises.unlink(filePath);
+            }
+            cleanedCount++;
+          }
+        } catch (err) {
+          // Skip errors for individual files
+          logger.debug(`Error checking file ${file}: ${err.message}`);
+        }
+      }
+      
+      if (cleanedCount > 0) {
+        logger.success(`Cleaned up ${cleanedCount} old temporary files`);
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    logger.warn(`Error cleaning up temporary resources: ${error.message}`);
+    return false;
+  }
+}
+
+// Workflow steps configuration - centralized step tracking
+const WORKFLOW_STEPS = [
+  { id: 1, name: 'BRANCH MANAGEMENT', description: 'Setting up your working branch' },
+  { id: 2, name: 'CODE CHANGES', description: 'Managing your code changes' },
+  { id: 3, name: 'GITIGNORE CONFIGURATION', description: 'Ensuring proper file tracking' },
+  { id: 4, name: 'PREVIEW DEPLOYMENT', description: 'Deploying preview environment' },
+  { id: 5, name: 'PULL REQUEST', description: 'Creating or updating PR' },
+  { id: 6, name: 'WORKFLOW COMPLETION', description: 'Finalizing the workflow' }
+];
+
+// Track current step
+let currentStep = 0;
+
+/**
+ * Updates the terminal window title
+ * @param {string} title - The title to set
+ */
+function updateTerminalTitle(title) {
+  // Escape sequence to set terminal title
+  const titleEscape = `\u001B]0;${title}\u0007`;
+  process.stdout.write(titleEscape);
+}
+
+/**
+ * Reset the terminal title to the default
+ */
+function resetTerminalTitle() {
+  updateTerminalTitle('Terminal');
+}
+
+/**
+ * Show workflow progress
+ * @param {number} stepId - The step ID to display
+ */
+function showWorkflowProgress(stepId) {
+  currentStep = stepId;
+  const step = WORKFLOW_STEPS.find(s => s.id === stepId);
+  if (!step) return;
+  
+  // Update terminal title with current step
+  updateTerminalTitle(`${step.name}`);
+  
+  console.log('\n');
+  // Display the step without numbering, just the name and description
+  console.log(`${step.name}`);
+  console.log('='.repeat(50));
+  console.log(`${step.description}`);
+}
+
 // Get the root directory
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 const gitignoreFixerPath = path.join(__dirname, 'fix-gitignore.js');
+
+// Command output cache for frequently used commands
+const commandCache = new Map();
+const CACHE_TTL = 3000; // 3 seconds TTL for cached commands
 
 // Create readline interface for user input
 const rl = readline.createInterface({
@@ -57,17 +231,103 @@ function prompt(question) {
  * @returns {object} - The command output and success status
  */
 function executeCommand(command, options = {}) {
+  // Check if command can be cached (status checks, branch info, etc.)
+  const isCacheable = !options.stdio && 
+                     !options.disableCache && 
+                     (command.startsWith('git status') || 
+                      command.startsWith('git branch') || 
+                      command.startsWith('git diff'));
+  
+  // Return cached result if available and fresh
+  if (isCacheable && commandCache.has(command)) {
+    const cachedResult = commandCache.get(command);
+    const isFresh = (Date.now() - cachedResult.timestamp) < CACHE_TTL;
+    
+    if (isFresh) {
+      return cachedResult.result;
+    }
+  }
+  
+  // Show command being executed unless suppressed
+  if (!options.silent) {
+    console.log(`\n> ${command}`);
+  }
+  
   try {
-    const output = execSync(command, { encoding: 'utf8', ...options });
-    return { 
+    // Handle timeout option separately
+    const execOptions = { ...options };
+    if (execOptions.timeout) {
+      const timeout = execOptions.timeout;
+      delete execOptions.timeout; // Remove from execSync options
+      
+      // For stdio: 'inherit' commands, we won't have access to the output
+      // so we need to handle differently
+      if (options.stdio === 'inherit') {
+        try {
+          const output = execSync(command, { 
+            encoding: 'utf8', 
+            ...execOptions,
+            timeout
+          });
+          
+          const result = { 
+            success: true, 
+            output: output || '', 
+            error: null 
+          };
+          
+          // Cache the result if cacheable
+          if (isCacheable) {
+            commandCache.set(command, { 
+              result, 
+              timestamp: Date.now() 
+            });
+          }
+          
+          return result;
+        } catch (error) {
+          // Special handling for timeout errors
+          if (error.code === 'ETIMEDOUT') {
+            console.log(`\n[WARNING] Command timed out after ${timeout/1000} seconds: ${command}`);
+          }
+          
+          // For stdio: 'inherit', we might still want to extract URLs even if the command failed
+          return { 
+            success: false, 
+            output: error.stdout || '', 
+            error: error,
+            timedOut: error.code === 'ETIMEDOUT'
+          };
+        }
+      }
+    }
+    
+    const output = execSync(command, { encoding: 'utf8', ...execOptions });
+    
+    // Show success indicator (if not suppressed)
+    if (!options.silent && !options.suppressSuccess) {
+      console.log(`[SUCCESS] Command completed`);
+    }
+    
+    const result = { 
       success: true, 
       output, 
       error: null 
     };
+    
+    // Cache the result if cacheable
+    if (isCacheable) {
+      commandCache.set(command, { 
+        result, 
+        timestamp: Date.now() 
+      });
+    }
+    
+    return result;
   } catch (error) {
     if (!options.suppressErrors) {
-      logger.error(`Command failed: ${command}`);
-      logger.error(error.message);
+      console.log(`\n[ERROR] Command failed: ${command}`);
+      console.log(error.message);
     }
     
     // Don't exit process on error unless explicitly requested
@@ -213,7 +473,7 @@ function suggestPRContent() {
  * Check for and fix .gitignore issues
  */
 async function fixGitignoreIssues() {
-  logger.info("Checking .gitignore configuration...");
+  console.log("Checking .gitignore configuration...");
   
   try {
     // Check if the fixer script exists
@@ -221,12 +481,48 @@ async function fixGitignoreIssues() {
       await import('./fix-gitignore.js');
       return true;
     } else {
-      logger.warn("Gitignore fixer script not found. Temp files may not be properly ignored.");
+      console.log("[WARNING] Gitignore fixer script not found. Temp files may not be properly ignored.");
       return false;
     }
   } catch (error) {
-    logger.warn("Could not run gitignore fixer:", error.message);
+    console.log(`[WARNING] Could not run gitignore fixer: ${error.message}`);
     return false;
+  }
+}
+
+/**
+ * Prefetch commonly used git information to speed up multiple calls
+ * @returns {Object} Common git information
+ */
+async function prefetchGitInfo() {
+  logger.info("Prefetching repository information...");
+  
+  // Run these operations in parallel
+  const operations = [
+    () => executeCommand('git branch', { suppressErrors: true }),
+    () => executeCommand('git status --porcelain', { suppressErrors: true }),
+    () => executeCommand('git remote -v', { suppressErrors: true }),
+    () => executeCommand('git log -1 --pretty=format:"%h %s"', { suppressErrors: true })
+  ];
+  
+  try {
+    const startTime = Date.now();
+    const [branchResult, statusResult, remoteResult, lastCommitResult] = await runParallel(
+      operations.map(op => op()),
+      'git info fetching'
+    );
+    
+    // Return collected info
+    return {
+      branches: branchResult.success ? branchResult.output.trim().split('\n') : [],
+      hasChanges: statusResult.success && statusResult.output.trim() !== '',
+      remotes: remoteResult.success ? remoteResult.output.trim().split('\n') : [],
+      lastCommit: lastCommitResult.success ? lastCommitResult.output.trim() : '',
+      fetchTime: Date.now() - startTime
+    };
+  } catch (error) {
+    logger.warn("Error prefetching git info:", error.message);
+    return {};
   }
 }
 
@@ -292,10 +588,15 @@ async function commitGitignoreChanges() {
 
 /**
  * Create PR with better error handling
+ * @param {string} title - The PR title
+ * @param {string} description - The PR description
+ * @param {Object} workflowData - Workflow data object to update with PR info
+ * @returns {boolean} - Whether PR creation was successful
  */
-async function createPullRequest(title, description) {
-  logger.sectionHeader('CREATING PULL REQUEST');
-  logger.info(`Creating PR with title: ${title}`);
+async function createPullRequest(title, description, workflowData) {
+  console.log('\nCREATING PULL REQUEST');
+  console.log('='.repeat(30));
+  console.log(`Creating PR with title: ${title}`);
   
   try {
     const result = executeCommand(`pnpm run pr:create-with-title "${title}" "${description}"`, { 
@@ -304,68 +605,103 @@ async function createPullRequest(title, description) {
       exitOnError: false
     });
     
+    // Update workflow data with PR info
+    if (workflowData) {
+      workflowData.prTitle = title;
+      
+      // Try to extract PR URL from output
+      const prUrl = result.output?.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
+      if (prUrl) {
+        workflowData.prUrl = prUrl;
+      }
+    }
+    
     if (!result.success) {
       // PR creation failed, check for specific errors
-      if (result.output.includes("You have uncommitted changes")) {
-        logger.error("PR creation failed due to uncommitted changes.");
+      if (result.output?.includes("You have uncommitted changes")) {
+        console.log("[ERROR] PR creation failed due to uncommitted changes.");
         
         // Offer to auto-commit
         const shouldAutoCommit = await prompt("Would you like to automatically commit these changes? (Y/n): ");
         
         if (shouldAutoCommit.toLowerCase() !== 'n') {
-          logger.info("Auto-committing changes...");
+          console.log("Auto-committing changes...");
           const autoCommitResult = executeCommand(`pnpm run pr:auto-commit "${title}" "${description}"`, { 
             stdio: 'inherit',
             suppressErrors: false
           });
           
           if (autoCommitResult.success) {
-            logger.success("PR created successfully with auto-commit!");
+            console.log("[SUCCESS] PR created successfully with auto-commit!");
+            
+            // Update workflow data for successful PR
+            if (workflowData) {
+              workflowData.prCreated = true;
+              
+              // Try to extract PR URL from auto-commit result
+              const prUrl = autoCommitResult.output?.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
+              if (prUrl) {
+                workflowData.prUrl = prUrl;
+              }
+            }
+            
             return true;
           } else {
-            logger.error("Auto-commit failed. Please commit your changes manually.");
+            console.log("[ERROR] Auto-commit failed. Please commit your changes manually.");
             return false;
           }
         } else {
-          logger.info("You can manually commit your changes and then create a PR.");
+          console.log("You can manually commit your changes and then create a PR.");
           return false;
         }
-      } else if (result.output.includes("a pull request for branch") && result.output.includes("already exists")) {
+      } else if (result.output?.includes("a pull request for branch") && result.output?.includes("already exists")) {
         // PR already exists
         const prUrl = result.output.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
         
-        logger.warn("A pull request already exists for this branch.");
+        console.log("[WARNING] A pull request already exists for this branch.");
         if (prUrl) {
-          logger.info(`Existing PR: ${prUrl}`);
+          console.log(`Existing PR: ${prUrl}`);
+          
+          // Save the existing PR URL to workflow data
+          if (workflowData) {
+            workflowData.prCreated = true;
+            workflowData.prUrl = prUrl;
+          }
           
           // Offer to update the PR title/description
           const shouldUpdate = await prompt("Would you like to update the existing PR? (y/N): ");
           
           if (shouldUpdate.toLowerCase() === 'y') {
-            logger.info("Use the GitHub website to update the PR details.");
+            console.log("Use the GitHub website to update the PR details.");
             
             // Try to open the PR URL in browser
             try {
               const openCmd = process.platform === 'win32' ? 'start' : 
                 process.platform === 'darwin' ? 'open' : 'xdg-open';
               executeCommand(`${openCmd} ${prUrl}`);
-              logger.success("Opened PR in browser for editing.");
+              console.log("[SUCCESS] Opened PR in browser for editing.");
             } catch (error) {
-              logger.info(`Please visit ${prUrl} to update the PR.`);
+              console.log(`Please visit ${prUrl} to update the PR.`);
             }
           }
         }
         return true; // PR exists, so technically "success"
       } else {
-        logger.error("PR creation failed for an unknown reason.");
+        console.log("[ERROR] PR creation failed for an unknown reason.");
         return false;
       }
     } else {
-      logger.success("PR created successfully!");
+      console.log("[SUCCESS] PR created successfully!");
+      
+      // Update workflow data for successful PR
+      if (workflowData) {
+        workflowData.prCreated = true;
+      }
+      
       return true;
     }
   } catch (error) {
-    logger.error("Failed to create PR:", error.message);
+    console.log(`[ERROR] Failed to create PR: ${error.message}`);
     return false;
   }
 }
@@ -462,15 +798,134 @@ async function syncMainBranch() {
 }
 
 /**
+ * Generates a workflow summary to show at the end
+ * @param {Object} workflowData - Collected data during workflow execution
+ * @returns {string} - Formatted summary
+ */
+function generateWorkflowSummary(workflowData) {
+  const { 
+    startTime, 
+    branch, 
+    commits, 
+    previewUrls, 
+    prCreated,
+    prTitle,
+    prUrl,
+    workflowSuccess
+  } = workflowData;
+  
+  const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+  let summary = '\nWORKFLOW SUMMARY\n';
+  summary += '='.repeat(30) + '\n\n';
+  
+  summary += `Branch: ${branch}\n`;
+  summary += `Duration: ${duration} seconds\n`;
+  
+  // Add commit info if available
+  if (commits && commits.length > 0) {
+    summary += `\nCommits: ${commits.length}\n`;
+    commits.forEach((commit, index) => {
+      summary += `   ${index + 1}. ${commit}\n`;
+    });
+  }
+  
+  // Add preview URLs if available
+  if (previewUrls) {
+    summary += '\nPreview URLs:\n';
+    if (previewUrls.admin) {
+      summary += `   • Admin Dashboard: ${previewUrls.admin}\n`;
+    }
+    if (previewUrls.hours) {
+      summary += `   • Hours App: ${previewUrls.hours}\n`;
+    }
+    if (previewUrls.urls && previewUrls.urls.length > 0) {
+      previewUrls.urls.forEach(url => {
+        summary += `   • ${url}\n`;
+      });
+    }
+  }
+  
+  // Add PR info if a PR was created
+  if (prCreated) {
+    summary += '\nPull Request:\n';
+    summary += `   • Title: ${prTitle}\n`;
+    if (prUrl) {
+      summary += `   • URL: ${prUrl}\n`;
+    }
+  }
+  
+  // Add status
+  summary += '\nStatus: ';
+  if (workflowSuccess) {
+    summary += 'Complete';
+  } else {
+    summary += 'Completed with warnings/errors';
+  }
+  
+  return summary;
+}
+
+/**
+ * Display a formatted workflow summary
+ * @param {Object} workflowData - Data collected during the workflow
+ */
+function displayWorkflowSummary(workflowData) {
+  const summary = generateWorkflowSummary(workflowData);
+  
+  console.log('\n');
+  console.log('WORKFLOW COMPLETED');
+  console.log('='.repeat(30));
+  console.log(summary);
+  console.log('\n');
+}
+
+/**
  * Main workflow function
  */
 async function runWorkflow() {
+  // Start process monitoring
+  startProcessMonitoring();
+  
+  // Set terminal title for the workflow
+  updateTerminalTitle('Time-Tracking Workflow');
+  
+  // Initialize workflow data
+  const workflowData = {
+    startTime: Date.now(),
+    branch: '',
+    commits: [],
+    previewUrls: null,
+    prCreated: false,
+    prTitle: '',
+    prUrl: '',
+    workflowSuccess: true
+  };
+  
   try {
-    logger.sectionHeader('AUTOMATED DEVELOPMENT WORKFLOW');
+    console.log('\nAUTOMATED DEVELOPMENT WORKFLOW\n');
+    console.log('='.repeat(50));
     
-    // Step 1: Check current branch
-    const currentBranch = getCurrentBranch();
-    logger.info(`Current branch: ${currentBranch}`);
+    // Clean up temporary resources before starting
+    console.log("Cleaning up temporary resources...");
+    await cleanupTemporaryResources();
+    
+    // Prefetch git info for faster operations throughout the workflow
+    console.log("Prefetching repository information...");
+    const gitInfo = await prefetchGitInfo();
+    if (gitInfo.fetchTime) {
+      console.log(`Repository info prefetched in ${gitInfo.fetchTime}ms`);
+    }
+    
+    // Step 1: Branch Management
+    showWorkflowProgress(1);
+    
+    // Use prefetched info if available, otherwise fetch on demand
+    const currentBranch = gitInfo.branches 
+      ? gitInfo.branches.find(b => b.startsWith('*'))?.substring(2) || getCurrentBranch() 
+      : getCurrentBranch();
+    
+    console.log(`Current branch: ${currentBranch}`);
+    workflowData.branch = currentBranch;
     
     let branchName = currentBranch;
     let createdNewBranch = false;
@@ -634,8 +1089,13 @@ async function runWorkflow() {
       }
     }
     
-    // Step 2: Check for uncommitted changes and offer to commit
-    if (hasUncommittedChanges()) {
+    // Step 2: Code Changes
+    showWorkflowProgress(2);
+    
+    // Check for uncommitted changes and offer to commit using prefetched info when available
+    const hasChanges = gitInfo.hasChanges !== undefined ? gitInfo.hasChanges : hasUncommittedChanges();
+    
+    if (hasChanges) {
       logger.info("You have uncommitted changes.");
       logger.info("Modified files:");
       console.log(executeCommand('git status --short'));
@@ -649,9 +1109,16 @@ async function runWorkflow() {
         const commitMessage = await prompt(`Enter commit message [${defaultMessage}]: `);
         const finalMessage = commitMessage || defaultMessage;
         
-        // Commit changes
+        // Run git operations in parallel where possible
+        const startTime = logger.timeStart("Committing changes");
+        
+        // First, stage all changes
         executeCommand('git add .');
+        
+        // Then commit
         executeCommand(`git commit -m "${finalMessage}"`);
+        
+        logger.timeEnd("Committing changes", startTime);
         logger.success("Changes committed successfully.");
       }
     } else if (createdNewBranch) {
@@ -660,15 +1127,32 @@ async function runWorkflow() {
       logger.info("No uncommitted changes detected.");
     }
     
-    // Step 3: Fix gitignore issues
-    await fixGitignoreIssues();
+    // Step 3: Gitignore Configuration
+    showWorkflowProgress(3);
     
-    // New Step: Auto-commit any changes made by gitignore fixer
-    await commitGitignoreChanges();
+    // Run gitignore operations in parallel
+    const gitignoreStartTime = logger.timeStart("Checking and fixing gitignore configuration");
     
-    // Step 4: Run preview deployment
-    logger.sectionHeader('RUNNING PREVIEW DEPLOYMENT');
-    logger.info("Starting preview deployment. This may take a few minutes...");
+    // Run these operations in parallel
+    const [gitignoreFixed, gitignoreChangesCommitted] = await Promise.all([
+      fixGitignoreIssues(),
+      commitGitignoreChanges()
+    ]);
+    
+    logger.timeEnd("Checking and fixing gitignore configuration", gitignoreStartTime);
+    
+    // Step 4: Preview Deployment
+    showWorkflowProgress(4);
+    
+    console.log("Starting preview deployment. This may take a few minutes...");
+    
+    // Run the preview workflow with better error handling
+    const previewCommand = 'pnpm run preview';
+    logger.command(previewCommand); // Use the command logger for better visibility
+    
+    // Track overall workflow success
+    let workflowSuccess = true;
+    let previewUrls = null;
     
     // Run the preview workflow with better error handling
     const previewCommand = 'pnpm run preview';
@@ -679,45 +1163,46 @@ async function runWorkflow() {
     let previewUrls = null;
     
     try {
-      // Execute the preview command
-      const previewResult = executeCommand(previewCommand, { 
-        stdio: 'pipe',
-        suppressErrors: true 
+      // Execute the preview command with dedicated handling for preview deployment
+      // Use inherit for stdio to show real-time output, which is important for long-running commands
+      const result = executeCommand(previewCommand, { 
+        stdio: 'inherit', // Change from 'pipe' to 'inherit' to show real-time output
+        suppressErrors: true,
+        disableCache: true, // Ensure we don't use cached results for deployment
+        timeout: 600000 // 10 minute timeout for preview deployment
       });
       
-      if (!previewResult.success) {
-        logger.error("Preview deployment encountered errors");
+      // Since we're using stdio: 'inherit', we won't have output in the result object
+      // Instead, we need to check if the command completed successfully based on exit code
+      if (!result.success) {
+        logger.warn("Preview deployment command exited with non-zero status");
         
-        // Save the output to a log file for URL extraction
+        // Try to find deployment logs in the temp directory
         const tempDir = path.join(process.cwd(), 'temp');
         if (!fs.existsSync(tempDir)) {
           fs.mkdirSync(tempDir, { recursive: true });
         }
         
-        const logFilePath = path.join(tempDir, 'preview-deploy-error.log');
-        fs.writeFileSync(logFilePath, previewResult.output || '');
-        
         // Check if deployment actually completed despite errors
-        logger.info("Checking for preview URLs in deployment output...");
+        logger.info("Checking for preview URLs in deployment logs...");
         
         try {
-          // Attempt to extract URLs from the output
           // Import report collector functions dynamically
           const reportModule = await import('./reports/report-collector.js');
           
-          // Try to extract URLs from the error output
+          // Try to extract URLs from logs
           previewUrls = reportModule.extractPreviewUrls({tempDir});
           
           if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
-            logger.success("Found preview URLs despite deployment errors!");
+            logger.success("Found preview URLs despite deployment warnings!");
             
             // Display the URLs
             if (previewUrls.admin) {
-              logger.info(`Admin Dashboard URL: ${previewUrls.admin}`);
+              logger.link("Admin Dashboard", previewUrls.admin);
             }
             
             if (previewUrls.hours) {
-              logger.info(`Hours App URL: ${previewUrls.hours}`);
+              logger.link("Hours App", previewUrls.hours);
             }
             
             // Mark as partial success
@@ -737,15 +1222,11 @@ async function runWorkflow() {
         // Import report collector functions dynamically
         const reportModule = await import('./reports/report-collector.js');
         
-        // Extract URLs from the command output
+        // Extract URLs from logs
         const tempDir = path.join(process.cwd(), 'temp');
         if (!fs.existsSync(tempDir)) {
           fs.mkdirSync(tempDir, { recursive: true });
         }
-        
-        // Save output to a log file for URL extraction
-        const logFilePath = path.join(tempDir, 'preview-deploy.log');
-        fs.writeFileSync(logFilePath, previewResult.output || '');
         
         // Extract URLs from the logs
         previewUrls = reportModule.extractPreviewUrls({tempDir});
@@ -755,11 +1236,11 @@ async function runWorkflow() {
           
           // Display the URLs
           if (previewUrls.admin) {
-            logger.info(`Admin Dashboard URL: ${previewUrls.admin}`);
+            logger.link("Admin Dashboard", previewUrls.admin);
           }
           
           if (previewUrls.hours) {
-            logger.info(`Hours App URL: ${previewUrls.hours}`);
+            logger.link("Hours App", previewUrls.hours);
           }
           
           workflowSuccess = true;
@@ -793,7 +1274,12 @@ async function runWorkflow() {
       }
     }
     
-    // Step 5: Offer to create a PR
+    // Store preview URLs in workflow data
+    workflowData.previewUrls = previewUrls;
+    
+    // Step 5: Pull Request
+    showWorkflowProgress(5);
+    
     const shouldCreatePR = await prompt("Would you like to create a pull request? (Y/n): ");
     if (shouldCreatePR.toLowerCase() !== 'n') {
       // Check for uncommitted changes that need to be committed before PR creation
@@ -883,7 +1369,7 @@ async function runWorkflow() {
       }
       
       // Create PR with better error handling
-      const prSuccess = await createPullRequest(finalTitle, finalDescription);
+      const prSuccess = await createPullRequest(finalTitle, finalDescription, workflowData);
       
       // If PR was successful, offer guidance on post-PR workflow
       if (prSuccess) {
@@ -896,28 +1382,47 @@ async function runWorkflow() {
       }
     }
     
+    // Step 6: Workflow Completion
+    showWorkflowProgress(6);
+    
     // Final status message
     if (workflowSuccess) {
-      logger.success("\nWorkflow completed successfully! 🎉");
+      console.log("\n[SUCCESS] Workflow completed successfully!");
+      workflowData.workflowSuccess = true;
     } else {
-      logger.warn("\nWorkflow completed with errors! Please review the log messages above.");
+      console.log("\n[WARNING] Workflow completed with warnings! Please review the log messages above.");
+      workflowData.workflowSuccess = false;
     }
     
+    // Display workflow summary
+    displayWorkflowSummary(workflowData);
+    
     // Provide next steps
-    logger.sectionHeader('NEXT STEPS');
-    logger.info(`You are on branch: ${branchName}`);
-    logger.info("What would you like to do next?");
-    logger.info("1. Continue working on this branch");
-    logger.info("2. Run preview deployment again: pnpm run preview");
-    logger.info("3. Create/update PR: pnpm run pr:create");
-    logger.info("4. Switch to main branch: git checkout main");
-    logger.info("5. Sync main with remote: pnpm run sync-main");
+    console.log('\nNEXT STEPS');
+    console.log('='.repeat(30));
+    console.log(`You are on branch: ${branchName}`);
+    console.log("What would you like to do next?");
+    console.log("1. Continue working on this branch");
+    console.log("2. Run preview deployment again: pnpm run preview");
+    console.log("3. Create/update PR: pnpm run pr:create");
+    console.log("4. Switch to main branch: git checkout main");
+    console.log("5. Sync main with remote: pnpm run sync-main");
     
     // Final prompt - this is just for UX completion, no action needed
     await prompt("Press Enter to exit...");
   } catch (error) {
-    logger.error(`Workflow error: ${error.message}`);
+    console.log(`\n[ERROR] Workflow error: ${error.message}`);
+    workflowData.workflowSuccess = false;
+    // Still show summary even if there was an error
+    displayWorkflowSummary(workflowData);
   } finally {
+    // Reset terminal title
+    resetTerminalTitle();
+    
+    // Clean up and free resources
+    stopProcessMonitoring();
+    commandCache.clear();
+    
     // Close the readline interface
     rl.close();
   }

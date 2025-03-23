@@ -43,10 +43,10 @@
  * progressTracker.finishProgress(true, 'Deployment successful!');
  */
 
+/* global console */
+
 import * as logger from './logger.js';
 import { colors, styled } from './colors.js';
-
-/* global process */
 
 // Track the current state
 let startTime = 0;
@@ -118,7 +118,18 @@ export function startStep(title) {
   stepStartTime = Date.now();
   
   // Format step counter
-  const stepCounter = `Step ${currentStep}${totalSteps ? '/' + totalSteps : ''}`;
+  let displayStep = currentStep;
+  
+  // If current step exceeds total steps, log a debug message but cap display value
+  if (totalSteps > 0 && currentStep > totalSteps) {
+    // Debug log if available
+    if (typeof logger.debug === 'function') {
+      logger.debug(`Warning: Current step (${currentStep}) exceeds total steps (${totalSteps})`);
+    }
+    displayStep = totalSteps;
+  }
+  
+  const stepCounter = `Step ${displayStep}${totalSteps ? '/' + totalSteps : ''}`;
   const stepInfo = styled.bold(`${colors.magenta}${stepCounter}:${colors.reset}`);
   
   // Print step header
@@ -182,65 +193,45 @@ export function completeStep(success = true, message) {
   const statusIcon = success ? styled.success('✓') : styled.error('✗');
   const timeText = styled.cyan(`(${elapsedSec}s)`);
   
+  // Display a cleaner output
   if (message) {
     logger.info(`  ${statusIcon} ${message} ${timeText}`);
   } else {
-    const status = success ? 'Completed' : 'Failed';
-    logger.info(`  ${statusIcon} Step ${status} ${timeText}`);
+    // If no message is provided, just show a simple status indicator with time
+    logger.info(`  ${statusIcon} ${timeText}`);
   }
   
   return elapsed;
 }
 
 /**
- * Finish the entire process and display a summary
+ * Finish and display the overall progress
  * 
- * @function finishProgress
- * @param {boolean} [success=true] - Whether the entire process was successful
- * @param {string} [message] - Optional completion message
- * @returns {Object} - Timing information object containing:
- *   - success {boolean}: Overall success status
- *   - elapsed {number}: Total elapsed time in milliseconds
- *   - steps {number}: Number of completed steps
- *   - stepTimes {number[]}: Array of individual step times in milliseconds
- * @description Completes the progress tracking process, displaying a summary with
- * the total time taken and success status. Returns comprehensive timing statistics
- * that can be used for logging or reporting purposes.
- * @example
- * // Finish a successful workflow with a message
- * const timing = progressTracker.finishProgress(true, 'Deployment completed successfully!');
- * console.log(`Total time: ${timing.elapsed/1000}s across ${timing.steps} steps`);
- * 
- * // Finish a failed workflow
- * progressTracker.finishProgress(false, 'Workflow failed during build step');
+ * @param {boolean} success - Whether the overall workflow was successful
+ * @param {string} message - Final message to display
  */
-export function finishProgress(success = true, message) {
-  // Complete the current step if one is active
-  if (currentStep > 0 && currentStep === totalSteps) {
-    completeStep(success);
+export function finishProgress(success, message) {
+  // Log total duration
+  const totalDuration = ((Date.now() - startTime) / 1000).toFixed(2);
+  
+  // Use appropriate styling for success/failure
+  console.log('\n');
+  
+  if (success) {
+    console.log('==================================================');
+    console.log(`\x1b[32m\x1b[1mCOMPLETED SUCCESSFULLY (${totalDuration}s)\x1b[0m`);
+    console.log(message);
+    console.log('==================================================');
+  } else {
+    console.log('==================================================');
+    console.log(`\x1b[31m\x1b[1mCOMPLETED WITH ERRORS (${totalDuration}s)\x1b[0m`);
+    console.log(`\x1b[31m${message}\x1b[0m`);
+    console.log('==================================================');
   }
   
-  const totalElapsed = Date.now() - startTime;
-  const totalSec = (totalElapsed / 1000).toFixed(1);
-  
-  const summaryTitle = success ? 'COMPLETED SUCCESSFULLY' : 'FAILED';
-  const summaryStyle = success ? styled.success : styled.error;
-  
-  logger.info('\n' + summaryStyle('='.repeat(50)));
-  logger.info(summaryStyle(`${summaryTitle} (${totalSec}s)`));
-  
-  if (message) {
-    logger.info(summaryStyle(message));
-  }
-  
-  logger.info(summaryStyle('='.repeat(50)) + '\n');
-  
-  return {
-    success,
-    elapsed: totalElapsed,
-    steps: currentStep,
-    stepTimes
-  };
+  // Reset state after completion
+  currentStep = 0;
+  totalSteps = 0;
 }
 
 /**
