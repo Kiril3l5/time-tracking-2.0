@@ -3,6 +3,14 @@
 /**
  * Preview Channel Cleanup Script
  * 
+ * DEPRECATED: This standalone script is deprecated. The functionality has been 
+ * integrated directly into the main preview.js workflow, which now handles
+ * channel cleanup automatically during deployment.
+ * 
+ * ⚠️ RECOMMENDATION: Use the preview.js workflow directly:
+ *   - Regular cleanup: node scripts/preview.js --skip-deploy --skip-build 
+ *   - Aggressive cleanup: Run with --aggressive-cleanup flag
+ * 
  * This script provides a standalone entry point for cleaning up old Firebase preview channels.
  * It can be run independently of the main preview deployment workflow to manage
  * the lifecycle of preview environments and maintain resource efficiency.
@@ -35,6 +43,10 @@
  * 
  * @module preview/cleanup
  */
+
+// Print deprecation warning
+console.warn('\n\x1b[33m⚠️  DEPRECATED: This script is deprecated in favor of the integrated cleanup in preview.js\x1b[0m');
+console.warn('\x1b[33m   For aggressive cleanup, use: node scripts/preview.js --skip-deploy --skip-build --aggressive-cleanup\x1b[0m\n');
 
 import * as logger from './core/logger.js';
 import * as commandRunner from './core/command-runner.js';

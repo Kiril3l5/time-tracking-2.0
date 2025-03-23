@@ -167,7 +167,8 @@ function parseArguments() {
     'keep-individual-reports': { type: 'boolean', default: false },
     'save-logs': { type: 'boolean', default: false },
     'verbose': { type: 'boolean', default: false },
-    'help': { type: 'boolean', default: false }
+    'help': { type: 'boolean', default: false },
+    'aggressive-cleanup': { type: 'boolean', default: false }
   };
   
   try {
@@ -239,6 +240,7 @@ ${styled.bold('Options:')}
   ${styled.green('Deployment Options:')}
   --skip-deploy         Skip deployment (only run checks)
   --skip-cleanup        Skip cleaning up old preview channels
+  --aggressive-cleanup  Aggressively clean up channels (keep only 3 most recent)
   
   ${styled.green('Reporting Options:')}
   --keep-individual-reports Keep individual JSON reports in the temp folder
@@ -265,6 +267,9 @@ ${styled.bold('Examples:')}
   
   ${styled.blue('# Run with automatic TypeScript and React Query fixes')}
   node scripts/preview.js --auto-fix-typescript --fix-query-types
+  
+  ${styled.blue('# Run aggressive channel cleanup only (keeps only 3 channels)')}
+  node scripts/preview.js --skip-deploy --skip-checks --aggressive-cleanup
   
   ${styled.blue('# Run dependency check only')}
   node scripts/preview.js --skip-lint --skip-typecheck --skip-tests --skip-build --skip-deploy
@@ -1805,6 +1810,9 @@ async function deployPreview(args) {
   // Instead of: await metrics.startStage('deployment');
   logger.startStep('Deploying preview');
   
+  // Flag to track if we've attempted quota cleanup
+  let quotaCleanupAttempted = false;
+  
   // We now use the module-level logWarningWithLevel function
   
   try {
@@ -1823,125 +1831,200 @@ async function deployPreview(args) {
       return true;
     }
     
-    // Generate channel ID
-    const channelId = generateChannelId();
-    
-    // Get Firebase config
-    const firebaseConfig = config.getFirebaseConfig();
-    const { projectId, site, buildDir = 'build' } = firebaseConfig;
-    
-    // Show deployment details
-    const branchName = gitAuth.getCurrentBranch();
-    logger.info(`Deploying branch '${branchName}' to Firebase preview channel`);
-    logger.info(`Channel: ${channelId}`);
-    logger.info(`Project: ${projectId}`);
-    logger.info(`Site: ${site}`);
-    logger.info(`Build directory: ${buildDir}`);
-    
-    // Create deployment message
-    let commitMessage = "Preview deployment";
-    
-    // Safely try to get the latest commit message if the function exists
-    if (gitAuth && typeof gitAuth.getLatestCommitMessage === 'function') {
-      try {
-        commitMessage = gitAuth.getLatestCommitMessage();
-      } catch (err) {
-        logWarningWithLevel(`Could not get latest commit message: ${err.message}`, 'info');
-      }
-    }
-    
-    const message = `Preview deployment for '${branchName}': ${commitMessage}`;
-    
-    // Deploy to Firebase hosting channel
-    const deployResult = await deployment.deployToPreviewChannel({
-      projectId,
-      site,
-      channelId,
-      buildDir,
-      message
-    });
-    
-    // Enhanced result analysis for deprecation warnings
-    let deploymentSuccess = deployResult.success;
-    let deploymentWarningsOnly = false;
-    
-    // Check if the only errors are deprecation warnings
-    if (!deploymentSuccess && 
-        deployResult.rawOutput && 
-        (deployResult.rawOutput.includes('[DEP0040]') || 
-         deployResult.rawOutput.includes('DeprecationWarning: The `punycode` module is deprecated')) && 
-        !deployResult.rawOutput.includes('Error:') && 
-        !deployResult.rawOutput.includes('Command failed with exit code')) {
+    // Try deployment function (for retries)
+    async function tryDeployment() {
+      // Generate channel ID
+      const channelId = generateChannelId();
       
-      logWarningWithLevel('Firebase CLI reported a Node.js deprecation warning, but this does not indicate a deployment failure', 'info');
-      logger.info('This is a benign warning about the punycode module being deprecated in Node.js');
-      deploymentWarningsOnly = true;
-      deploymentSuccess = true;
-    }
-    
-    if (deploymentSuccess) {
-      logger.success(`Deployment successful!`);
+      // Get Firebase config
+      const firebaseConfig = config.getFirebaseConfig();
+      const { projectId, site, buildDir = 'build' } = firebaseConfig;
       
-      // Extract URLs ONLY from the current deployment output - no fallbacks
-      const urls = extractPreviewUrlsFromOutput(deployResult.rawOutput || deployResult.output, true);
+      // Show deployment details
+      const branchName = gitAuth.getCurrentBranch();
+      logger.info(`Deploying branch '${branchName}' to Firebase preview channel`);
+      logger.info(`Channel: ${channelId}`);
+      logger.info(`Project: ${projectId}`);
+      logger.info(`Site: ${site}`);
+      logger.info(`Build directory: ${buildDir}`);
       
-      if (urls && Object.keys(urls).length > 0) {
-        logger.success('Successfully extracted preview URLs:');
-        if (urls.admin) logger.info(`ADMIN: ${urls.admin}`);
-        if (urls.hours) logger.info(`HOURS: ${urls.hours}`);
-        
-        // Save the URLs for use in the dashboard
-        savePreviewUrls(urls);
-        
-        // Display URLs with appropriate context
-        displayPreviewUrls(urls);
-      } else {
-        logWarningWithLevel('No preview URLs found in deployment output. This is unusual for a successful deployment.', 'warning');
-        
-        // Only in successful deployments, we check other logs as a fallback
-        const fallbackUrls = findUrlsInLogFiles();
-        if (fallbackUrls && Object.keys(fallbackUrls).length > 0) {
-          logger.info('Found preview URLs from previous deployments:');
-          if (fallbackUrls.admin) logger.info(`ADMIN (previous): ${fallbackUrls.admin}`);
-          if (fallbackUrls.hours) logger.info(`HOURS (previous): ${fallbackUrls.hours}`);
-          
-          // Save the URLs with a fallback flag
-          fallbackUrls.isFallback = true;
-          fallbackUrls.timestamp = new Date().toISOString();
-          savePreviewUrls(fallbackUrls);
+      // Create deployment message
+      let commitMessage = "Preview deployment";
+      
+      // Safely try to get the latest commit message if the function exists
+      if (gitAuth && typeof gitAuth.getLatestCommitMessage === 'function') {
+        try {
+          commitMessage = gitAuth.getLatestCommitMessage();
+        } catch (err) {
+          logWarningWithLevel(`Could not get latest commit message: ${err.message}`, 'info');
         }
       }
       
-      progressTracker.completeStep(true, deploymentWarningsOnly ? 
-        'Deployment completed with warnings' : 
-        'Deployment completed successfully');
-      return true;
-    } else {
-      logWarningWithLevel(`Deployment failed: ${deployResult.error || 'Unknown error'}`, 'critical');
+      const message = `Preview deployment for '${branchName}': ${commitMessage}`;
       
-      // Enhanced debugging information for failures
-      logger.error('=== DEPLOYMENT FAILURE DETAILS ===');
+      // Deploy to Firebase hosting channel
+      const deployResult = await deployment.deployToPreviewChannel({
+        projectId,
+        site,
+        channelId,
+        buildDir,
+        message
+      });
       
-      if (deployResult.deployOutput) {
-        logger.info('Command output:');
-        console.log(deployResult.deployOutput);
+      // Enhanced result analysis for deprecation warnings
+      let deploymentSuccess = deployResult.success;
+      let deploymentWarningsOnly = false;
+      
+      // Check if the only errors are deprecation warnings
+      if (!deploymentSuccess && 
+          deployResult.rawOutput && 
+          (deployResult.rawOutput.includes('[DEP0040]') || 
+           deployResult.rawOutput.includes('DeprecationWarning: The `punycode` module is deprecated')) && 
+          !deployResult.rawOutput.includes('Error:') && 
+          !deployResult.rawOutput.includes('Command failed with exit code')) {
+        
+        logWarningWithLevel('Firebase CLI reported a Node.js deprecation warning, but this does not indicate a deployment failure', 'info');
+        logger.info('This is a benign warning about the punycode module being deprecated in Node.js');
+        deploymentWarningsOnly = true;
+        deploymentSuccess = true;
       }
       
-      if (deployResult.deployError) {
-        logWarningWithLevel('Error details:', 'critical');
-        console.log(deployResult.deployError);
+      // Check for quota exceeded error
+      const isQuotaError = !deploymentSuccess && 
+        (deployResult.error?.includes('quota reached') || 
+         deployResult.error?.includes('HTTP Error: 429') || 
+         deployResult.rawOutput?.includes('quota reached') || 
+         deployResult.rawOutput?.includes('HTTP Error: 429'));
+      
+      // If it's a quota error and we haven't tried cleanup, do aggressive cleanup and retry
+      if (isQuotaError && !quotaCleanupAttempted) {
+        quotaCleanupAttempted = true;
+        logger.warn('Channel quota limit reached. Running aggressive cleanup...');
+        
+        // Do aggressive cleanup (keep only 3 channels)
+        await runAggressiveCleanup();
+        
+        // Retry deployment
+        logger.info('Retrying deployment after cleanup...');
+        return await tryDeployment();
       }
       
-      // Log helpful troubleshooting steps
-      logger.info('\nTroubleshooting steps:');
-      logger.info('1. Check if Firebase CLI is up to date (npm i -g firebase-tools)');
-      logger.info('2. Verify Firebase login status (firebase login:list)');
-      logger.info('3. Check build directory existence and contents');
-      logger.info(`4. Try manual deployment: firebase hosting:channel:deploy ${generateChannelId()} --project=${firebaseConfig.projectId}`);
-      
-      progressTracker.completeStep(false, 'Deployment failed');
-      return false;
+      // Process final deployment result
+      if (deploymentSuccess) {
+        logger.success(`Deployment successful!`);
+        
+        // Extract URLs ONLY from the current deployment output - no fallbacks
+        const urls = extractPreviewUrlsFromOutput(deployResult.rawOutput || deployResult.output, true);
+        
+        if (urls && Object.keys(urls).length > 0) {
+          logger.success('Successfully extracted preview URLs:');
+          if (urls.admin) logger.info(`ADMIN: ${urls.admin}`);
+          if (urls.hours) logger.info(`HOURS: ${urls.hours}`);
+          
+          // Save the URLs for use in the dashboard
+          savePreviewUrls(urls);
+          
+          // Display URLs with appropriate context
+          displayPreviewUrls(urls);
+        } else {
+          logWarningWithLevel('No preview URLs found in deployment output. This is unusual for a successful deployment.', 'warning');
+          
+          // Only in successful deployments, we check other logs as a fallback
+          const fallbackUrls = findUrlsInLogFiles();
+          if (fallbackUrls && Object.keys(fallbackUrls).length > 0) {
+            logger.info('Found preview URLs from previous deployments:');
+            if (fallbackUrls.admin) logger.info(`ADMIN (previous): ${fallbackUrls.admin}`);
+            if (fallbackUrls.hours) logger.info(`HOURS (previous): ${fallbackUrls.hours}`);
+            
+            // Save the URLs with a fallback flag
+            fallbackUrls.isFallback = true;
+            fallbackUrls.timestamp = new Date().toISOString();
+            savePreviewUrls(fallbackUrls);
+          }
+        }
+        
+        progressTracker.completeStep(true, deploymentWarningsOnly ? 
+          'Deployment completed with warnings' : 
+          'Deployment completed successfully');
+        return true;
+      } else {
+        // If it's a quota error and we've already tried cleanup, give a more helpful message
+        if (isQuotaError && quotaCleanupAttempted) {
+          logWarningWithLevel(`Deployment failed: Channel quota still reached even after cleanup`, 'critical');
+          logger.info('You might need to manually delete more channels or wait for existing ones to expire');
+        } else {
+          logWarningWithLevel(`Deployment failed: ${deployResult.error || 'Unknown error'}`, 'critical');
+        }
+        
+        // Enhanced debugging information for failures
+        logger.error('=== DEPLOYMENT FAILURE DETAILS ===');
+        
+        if (deployResult.deployOutput) {
+          logger.info('Command output:');
+          console.log(deployResult.deployOutput);
+        }
+        
+        if (deployResult.deployError) {
+          logWarningWithLevel('Error details:', 'critical');
+          console.log(deployResult.deployError);
+        }
+        
+        // Log helpful troubleshooting steps
+        logger.info('\nTroubleshooting steps:');
+        logger.info('1. Check if Firebase CLI is up to date (npm i -g firebase-tools)');
+        logger.info('2. Verify Firebase login status (firebase login:list)');
+        logger.info('3. Check build directory existence and contents');
+        logger.info(`4. Try manual deployment: firebase hosting:channel:deploy ${generateChannelId()} --project=${firebaseConfig.projectId}`);
+        
+        progressTracker.completeStep(false, 'Deployment failed');
+        return false;
+      }
     }
+    
+    // Add a helper function for aggressive cleanup
+    async function runAggressiveCleanup() {
+      const firebaseConfig = config.getFirebaseConfig();
+      const previewConfig = config.getPreviewConfig();
+      const { projectId } = firebaseConfig;
+      const { prefix } = previewConfig;
+      
+      // Sites to clean up
+      const sitesToCleanup = ['admin-autonomyhero-2024', 'hours-autonomyhero-2024'];
+      
+      logger.info('=== PERFORMING AGGRESSIVE CHANNEL CLEANUP ===');
+      logger.info(`Quota limit reached - cleaning up old channels aggressively`);
+      
+      // Aggressive cleanup - keep only 3 channels
+      const keepCount = 3;
+      
+      for (const site of sitesToCleanup) {
+        logger.info(`Cleaning up site: ${site}`);
+        
+        // Use channelCleanup directly to force cleanup
+        const cleanupResult = await channelCleanup.cleanupChannels({
+          projectId,
+          site,
+          keepCount,
+          prefix,
+          dryRun: false
+        });
+        
+        if (cleanupResult.success) {
+          if (cleanupResult.deleted && cleanupResult.deleted.length > 0) {
+            logger.success(`Successfully deleted ${cleanupResult.deleted.length} old channels for ${site}`);
+          } else {
+            logger.info(`No channels needed deletion for ${site}`);
+          }
+        } else {
+          logger.error(`Failed to clean up channels for ${site}`);
+        }
+      }
+      
+      logger.info('Channel cleanup completed - retrying deployment');
+    }
+    
+    // Start the deployment process
+    return await tryDeployment();
   } catch (error) {
     // Don't collect metrics, just throw the error
     handleError(error);
@@ -2028,9 +2111,18 @@ async function cleanupChannels(args) {
   const hoursSite = 'hours-autonomyhero-2024';
   sitesToCleanup.push(hoursSite);
   
+  // Use more aggressive cleanup settings if requested
+  const isAggressive = args['aggressive-cleanup'] === true;
+  const keepCount = isAggressive ? 3 : channelKeepCount;
+  const threshold = isAggressive ? 3 : channelThreshold;
+  
+  if (isAggressive) {
+    logger.warn('Running in aggressive cleanup mode - will keep only 3 most recent channels');
+  }
+  
   logger.info(`Found ${sitesToCleanup.length} sites to clean up: ${sitesToCleanup.join(', ')}`);
   logger.info(`Checking for old preview channels to clean up...`);
-  logger.info(`Will keep the ${channelKeepCount} most recent channels with prefix '${prefix}' for each site`);
+  logger.info(`Will keep the ${keepCount} most recent channels with prefix '${prefix}' for each site`);
   
   for (const site of sitesToCleanup) {
     logger.info(`Cleaning up site: ${site}`);
@@ -2039,8 +2131,8 @@ async function cleanupChannels(args) {
     const cleanupResult = await channelCleanup.checkAndCleanupIfNeeded({
       projectId,
       site,
-      threshold: channelThreshold,
-      keepCount: channelKeepCount,
+      threshold: threshold,
+      keepCount: keepCount,
       prefix,
       autoCleanup: true
     });
