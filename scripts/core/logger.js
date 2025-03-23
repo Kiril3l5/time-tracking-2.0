@@ -222,7 +222,8 @@ const ICONS = {
   command: '🔄',
   section: '📌',
   link: '🔗',
-  time: '⏱️'
+  time: '⏱️',
+  debug: '🔍'
 };
 
 // Timestamp function
@@ -261,6 +262,16 @@ export function warn(message) {
  */
 export function error(message) {
   console.log(`${COLORS.red}${ICONS.error} ${message}${COLORS.reset}`);
+}
+
+/**
+ * Log a debug message
+ * @param {string} message - The debug message to log
+ */
+export function debug(message) {
+  if (verbose) {
+    console.log(`${COLORS.dim}${ICONS.debug} ${message}${COLORS.reset}`);
+  }
 }
 
 /**
@@ -471,11 +482,17 @@ export default {
   success,
   warn,
   error,
+  debug,
   section,
   sectionHeader,
   setSteps,
   startStep,
   endStep,
   showProgress,
-  getColors
+  getColors,
+  command,
+  link,
+  timeStart,
+  timeEnd,
+  progressBar
 }; 
