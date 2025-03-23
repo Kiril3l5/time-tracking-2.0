@@ -706,7 +706,7 @@ async function runWorkflow() {
           const reportModule = await import('./reports/report-collector.js');
           
           // Try to extract URLs from the error output
-          previewUrls = reportModule.extractPreviewUrls(tempDir);
+          previewUrls = reportModule.extractPreviewUrls({tempDir});
           
           if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
             logger.success("Found preview URLs despite deployment errors!");
@@ -748,7 +748,7 @@ async function runWorkflow() {
         fs.writeFileSync(logFilePath, previewResult.output || '');
         
         // Extract URLs from the logs
-        previewUrls = reportModule.extractPreviewUrls(tempDir);
+        previewUrls = reportModule.extractPreviewUrls({tempDir});
         
         if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
           logger.success("Preview URLs extracted successfully!");
@@ -796,9 +796,67 @@ async function runWorkflow() {
     // Step 5: Offer to create a PR
     const shouldCreatePR = await prompt("Would you like to create a pull request? (Y/n): ");
     if (shouldCreatePR.toLowerCase() !== 'n') {
+      // Check for uncommitted changes that need to be committed before PR creation
+      if (hasUncommittedChanges()) {
+        logger.info("Uncommitted changes detected that should be committed before creating PR.");
+        logger.info("Modified files:");
+        console.log(executeCommand('git status --short'));
+        
+        // Offer to auto-commit all remaining changes
+        const shouldAutoCommit = await prompt("Would you like to automatically commit these changes before creating PR? (Y/n): ");
+        if (shouldAutoCommit.toLowerCase() !== 'n') {
+          // Ask for commit message
+          let defaultMessage = `Updates after successful preview deployment`;
+          const commitMessage = await prompt(`Enter commit message [${defaultMessage}]: `);
+          const finalMessage = commitMessage || defaultMessage;
+          
+          // Commit changes
+          logger.info("Auto-committing changes...");
+          executeCommand('git add .');
+          const commitResult = executeCommand(`git commit -m "${finalMessage}"`);
+          
+          if (commitResult.success) {
+            logger.success("Changes committed successfully!");
+          } else {
+            logger.error("Failed to commit changes. Please commit manually before creating PR.");
+            const shouldContinue = await prompt("Would you like to continue with PR creation anyway? (y/N): ");
+            if (shouldContinue.toLowerCase() !== 'y') {
+              logger.info("PR creation canceled. Commit your changes manually and try again.");
+              return;
+            }
+          }
+        } else {
+          // User chose not to auto-commit
+          logger.warn("Proceeding with PR creation with uncommitted changes.");
+          logger.warn("Note: You may encounter errors during PR creation due to uncommitted changes.");
+        }
+      }
+      
       // Generate PR title and description suggestions
       logger.info("Generating PR title and description suggestions based on your changes...");
       const suggestion = suggestPRContent();
+      
+      // Enhance description with preview URLs if available
+      if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
+        // Add preview links section to the suggested description
+        suggestion.description += "\n\n## Preview Deployment\n";
+        
+        if (previewUrls.admin) {
+          suggestion.description += `- [Admin Dashboard](${previewUrls.admin})\n`;
+        }
+        
+        if (previewUrls.hours) {
+          suggestion.description += `- [Hours App](${previewUrls.hours})\n`;
+        }
+        
+        if (previewUrls.urls && previewUrls.urls.length > 0) {
+          previewUrls.urls.forEach(url => {
+            suggestion.description += `- [Preview](${url})\n`;
+          });
+        }
+        
+        logger.info("Enhanced description with preview URLs from successful deployment.");
+      }
       
       // Ask for PR title with suggestion
       const prTitle = await prompt(`Enter PR title [${suggestion.title}]: `);
