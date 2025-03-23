@@ -920,5 +920,6 @@ If you encounter any of these issues, try these workarounds:
 For more information on specific workflows, consult these related guides:
 
 - [PR Creation Guide](./pr-creation-guide.md) - Learn how to automate Pull Request creation after preview deployments
+- [Automated Workflow Guide](./automated-workflow-guide.md) - Learn how to use the all-in-one workflow automation tool
 - [Firebase Hosting Documentation](https://firebase.google.com/docs/hosting) - Official Firebase Hosting documentation
 - [GitHub Actions Workflows](./.github/workflows) - CI/CD configuration for the project
