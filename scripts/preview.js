@@ -128,6 +128,12 @@ import { collectAndGenerateReport, cleanupTempDirectory, getHtmlReportPath, getR
 // Create central error tracker
 const errorTracker = new ErrorAggregator();
 
+// Store flat step structure for modules to reference
+const previewSteps = {
+  steps: [],
+  currentStepIndex: 0
+};
+
 /**
  * Parse command line arguments
  * @returns {Object} - Parsed arguments
@@ -293,10 +299,7 @@ export default async function main(args) {
     // Clean up temp directory at the start of the workflow
     cleanupTempDirectory();
     
-    // Initialize a step counter - use a flat numbering approach
-    let totalSteps = 0;
-    
-    // Create a list of steps that will run, to ensure proper sequential numbering
+    // Initialize a flat list of all steps including substeps
     const steps = [];
     
     // Dependency check step
@@ -307,14 +310,25 @@ export default async function main(args) {
     // Authentication step (always runs)
     steps.push('Firebase authentication');
     
-    // Quality checks are one step in the main flow 
-    if (!args['skip-all-quality-checks']) {
-      steps.push('Quality checks');
+    // Quality checks - expand into individual substeps
+    if (!args['skip-lint']) {
+      steps.push('ESLint checks');
     }
     
-    // Build step
+    if (!args['skip-typecheck']) {
+      steps.push('TypeScript checks');
+    }
+    
+    if (!args['skip-tests']) {
+      steps.push('Unit tests');
+    }
+    
+    // Build step - expand into individual substeps
     if (!args['skip-build']) {
+      steps.push('Setting up build environment');
+      steps.push('Cleaning build directory');
       steps.push('Building application');
+      steps.push('Validating build output');
     }
     
     // Additional quality checks, each as its own step
@@ -328,20 +342,24 @@ export default async function main(args) {
     // Deployment step
     if (!args['skip-deploy']) {
       steps.push('Deploying to Firebase');
+      // Add channel cleanup as explicit step when deploy is not skipped
+      if (!args['skip-cleanup']) {
+        steps.push('Cleaning up old channels');
+      }
     }
     
     // Report generation (always runs)
     steps.push('Generating reports');
     
-    // Set total steps based on the number of operations we'll perform
-    totalSteps = steps.length;
+    // Set total steps based on the total number of operations we'll perform
+    const totalSteps = steps.length;
     
     // Log skipped steps
     let skippedMessage = '';
     if (args['skip-dep-check']) skippedMessage += 'dependency check, ';
     if (args['skip-build']) skippedMessage += 'build step, ';
     if (args['skip-deploy']) skippedMessage += 'deploy step, ';
-    if (args['skip-all-quality-checks']) skippedMessage += 'all quality checks, ';
+    if (args['skip-lint'] && args['skip-typecheck'] && args['skip-tests']) skippedMessage += 'all quality checks, ';
     
     if (skippedMessage) {
       logger.info(`Skipping ${skippedMessage.slice(0, -2)}`);
@@ -356,9 +374,13 @@ export default async function main(args) {
     // Initialize progress tracker with the total steps
     progressTracker.initProgress(totalSteps, 'PREVIEW DEPLOYMENT');
     
+    // Save the flat step structure for modules to reference
+    previewSteps.steps = steps;
+    previewSteps.currentStepIndex = 0;
+    
     // Step 1: Verify dependencies (if not skipped)
     if (!args['skip-dep-check']) {
-      progressTracker.startStep('Verifying Dependencies');
+      progressTracker.startStep('Dependency verification');
       const depsResult = await runDependencyVerification({
         ...args,
         verifyPackages: args['verify-packages'] !== false,
@@ -379,7 +401,7 @@ export default async function main(args) {
     }
     
     // Step 2: Verify authentication
-    progressTracker.startStep('Verifying Authentication');
+    progressTracker.startStep('Firebase authentication');
     const authResult = await verifyAuthentication();
     
     if (!authResult) {
@@ -391,182 +413,138 @@ export default async function main(args) {
       process.exit(1);
     }
     
-    // Step 3: Run quality checks
-    if (args['skip-lint'] && args['skip-typecheck'] && args['skip-tests']) {
-      logger.info('Skipping all quality checks');
-    } else {
-      progressTracker.startStep('Running Quality Checks');
+    progressTracker.completeStep(true, 'Authentication verified');
+    
+    // Quality checks - run tests individually as separate steps
+    if (!args['skip-lint'] && !args['skip-typecheck'] && !args['skip-tests']) {
+      // Run quality checks in sequence, already has proper progress tracking inside
       const qualityResult = await runQualityChecks(args);
       
-      if (!qualityResult) {
+      if (!qualityResult && args['require-quality-checks']) {
+        logger.error('Quality checks failed and --require-quality-checks flag set');
+        logger.info('Fix quality issues before proceeding or try again with --skip-* flags');
+        
         const qualityError = new QualityCheckError(
-          'Quality checks failed. Aborting workflow.'
+          'Quality checks failed and are required to continue.'
         );
         errorTracker.addError(qualityError);
         errorTracker.logErrors();
         process.exit(1);
       }
+    } else {
+      // Skip tests entirely
+      logger.info('Skipping all quality checks');
     }
     
-    // Step 4: Build the application
-    if (args['skip-build']) {
-      logger.info('Skipping build step');
-    } else {
-      progressTracker.startStep('Building Application');
+    // Build application - already has proper progress tracking inside
+    if (!args['skip-build']) {
       const buildResult = await buildApplication(args);
       
       if (!buildResult) {
         const buildError = new BuildError(
-          'Application build failed. Aborting workflow.'
+          'Build failed. Cannot proceed with deployment.'
         );
         errorTracker.addError(buildError);
         errorTracker.logErrors();
+        
+        if (!args['skip-deploy']) {
+          logger.error('Skipping deployment due to build failure');
+        }
+        
         process.exit(1);
       }
     }
-
-    // Module Syntax Check - Run this earlier to avoid getting stuck at the end
+    
+    // Run additional checks, each as a separate step
     if (!args['skip-module-syntax']) {
-      progressTracker.startStep('Checking Module Syntax');
+      progressTracker.startStep('Module syntax check');
       const moduleSyntaxResult = await checkModuleSyntax(args);
-      progressTracker.completeStep(moduleSyntaxResult, 'Module syntax check completed');
+      progressTracker.completeStep(moduleSyntaxResult, moduleSyntaxResult ? 'Module syntax check passed' : 'Module syntax check failed');
     }
-
-    // Additional steps - Bundle Analysis
+    
     if (!args['skip-bundle-analysis']) {
-      progressTracker.startStep('Analyzing Bundle Sizes');
-      const bundleResult = await analyzeBundleSizes(args);
-      
-      if (!bundleResult) {
-        logger.warn('Bundle size analysis failed, but continuing workflow');
-      }
-      progressTracker.completeStep(bundleResult, 'Bundle analysis completed');
+      progressTracker.startStep('Bundle size analysis');
+      const bundleAnalysisResult = await analyzeBundleSizes(args);
+      progressTracker.completeStep(bundleAnalysisResult, bundleAnalysisResult ? 'Bundle analysis completed' : 'Bundle analysis failed');
     }
-
-    // Additional steps - Dependency Scanning
+    
     if (!args['skip-dependency-scan']) {
-      progressTracker.startStep('Scanning Dependencies');
-      const scanResult = await scanDependencies(args);
-      
-      if (!scanResult) {
-        logger.warn('Dependency scanning found issues, but continuing workflow');
-      }
-      progressTracker.completeStep(scanResult, 'Dependency scan completed');
+      progressTracker.startStep('Dependency scanning');
+      const dependencyScanResult = await scanDependencies(args);
+      progressTracker.completeStep(dependencyScanResult, dependencyScanResult ? 'Dependency scan completed' : 'Dependency scan failed');
     }
     
-    // Additional steps - Dead Code Detection
-    if (!args['skip-dead-code']) {
-      progressTracker.startStep('Detecting Dead Code');
+    if (!args['skip-dead-code-detection']) {
+      progressTracker.startStep('Dead code detection');
       const deadCodeResult = await detectDeadCode(args);
-      progressTracker.completeStep(true, 'Dead code detection completed');
+      progressTracker.completeStep(deadCodeResult, deadCodeResult ? 'Dead code detection completed' : 'Dead code detection failed');
     }
     
-    // Additional steps - Documentation Quality Check
     if (!args['skip-doc-quality']) {
-      progressTracker.startStep('Checking Documentation Quality');
+      progressTracker.startStep('Documentation quality');
       const docQualityResult = await checkDocumentationQuality(args);
-      progressTracker.completeStep(true, 'Documentation quality check completed');
+      progressTracker.completeStep(docQualityResult, docQualityResult ? 'Documentation quality check passed' : 'Documentation quality check failed');
     }
     
-    // Additional steps - Workflow Validation
     if (!args['skip-workflow-validation']) {
-      progressTracker.startStep('Validating Workflows');
+      progressTracker.startStep('Workflow validation');
       const workflowValidationResult = await workflowValidation.validateWorkflows({
         workflowDir: '.github/workflows',
         validateSyntax: true,
         validateActions: true,
         checkForDeprecation: true
       });
-      progressTracker.completeStep(true, 'Workflow validation completed');
+      progressTracker.completeStep(workflowValidationResult, workflowValidationResult ? 'Workflow validation passed' : 'Workflow validation failed');
     }
     
-    // Step 5: Deploy to Firebase
-    if (args['skip-deploy']) {
-      logger.info('Skipping deployment step');
-      logger.info('Deployment step skipped');
-    } else {
-      progressTracker.startStep('Deploying to Firebase');
-      const deployResult = await deployPreview(args);
-      
-      if (!deployResult) {
-        const deployError = new DeploymentError('Deployment failed');
-        errorTracker.addError(deployError);
-        errorTracker.logErrors();
-        process.exit(1);
-      }
-      
-      // Clean up old channels if needed
-      if (!args['skip-cleanup']) {
-        await cleanupChannels(args);
-      }
-      
-      progressTracker.completeStep(true, 'Deployment completed');
-    }
-    
-    // Final Step: Generate Consolidated Report
-    progressTracker.startStep('Generating Reports');
-
-    // Add debugging to see what files exist before trying to generate report
-    const tempDir = path.join(process.cwd(), 'temp');
-    if (fs.existsSync(tempDir)) {
-      const files = fs.readdirSync(tempDir);
-      logger.info(`Found ${files.length} files in temp directory: ${files.join(', ')}`);
-    }
-
-    // TEMPORARY: Create a test report file to verify the consolidation works
-    const testBundleReport = {
-      current: {
-        'admin': { total: 567650, files: { 'main.js': 567650 } },
-        'hours': { total: 567630, files: { 'main.js': 567630 } }
-      },
-      historical: {},
-      issues: [
-        { severity: 'warning', message: 'Test bundle size warning', details: 'This is a test report' }
-      ]
-    };
-
-    // Ensure we have at least one valid JSON report
-    const bundleJsonPath = getReportPath('bundle');
-    createJsonReport(testBundleReport, bundleJsonPath);
-    logger.info(`Created test bundle report at ${bundleJsonPath}`);
-
-    // Enhanced report collection with explicit paths
-    const reportResult = await collectAndGenerateReport({
-      reportPath: args.output || 'preview-dashboard.html',
-      title: `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`,
-      // Get preview URLs from JSON file or logs
-      previewUrls: extractPreviewUrls(),
-      // Don't cleanup reports unless specified
-      cleanupIndividualReports: !args['keep-individual-reports']
-    });
-    
-    if (reportResult) {
-      progressTracker.completeStep(true, 'Generated consolidated dashboard');
-      logger.success(`Preview dashboard generated at preview-dashboard.html`);
-    } else {
-      progressTracker.completeStep(false, 'No reports were generated');
-      logger.warn('Could not generate reports. Some report files may be missing.');
-    }
-    
-    logger.info('\nWorkflow completed successfully!');
-    
-    // If we made it here, print a success message
+    // Deploy to Firebase preview environment if not skipped
     if (!args['skip-deploy']) {
-      logger.success(`
-Preview deployment is complete!
-Preview dashboard is available at preview-dashboard.html
-`);
-    } else {
-      logger.success(`
-Quality checks and build are complete!
-Preview dashboard is available at preview-dashboard.html
-`);
+      progressTracker.startStep('Deploying to Firebase');
+      const deploymentResult = await deployPreview(args);
+      progressTracker.completeStep(deploymentResult, deploymentResult ? 'Deployment succeeded' : 'Deployment failed');
+      
+      // Channel cleanup step - if deployment was successful and cleanup not skipped
+      if (deploymentResult && !args['skip-cleanup']) {
+        progressTracker.startStep('Cleaning up old channels');
+        await cleanupChannels(args);
+        progressTracker.completeStep(true, 'Channel cleanup completed');
+      }
     }
     
-    return true;
+    // Generate reports
+    progressTracker.startStep('Generating reports');
+    const reportResult = await generateReports(args);
+    progressTracker.completeStep(reportResult, reportResult ? 'Reports generated' : 'Report generation failed');
+    
+    // Show final success message
+    if (!args['skip-deploy']) {
+      let deploymentMessage = 'Preview successfully deployed!';
+      
+      // Try to include the preview URL if available
+      const previewUrls = getPreviewUrls();
+      if (previewUrls) {
+        if (previewUrls.admin) {
+          deploymentMessage += `\nAdmin preview URL: ${previewUrls.admin}`;
+        }
+        if (previewUrls.hours) {
+          deploymentMessage += `\nHours preview URL: ${previewUrls.hours}`;
+        }
+      }
+      
+      progressTracker.finishProgress(true, deploymentMessage);
+    } else {
+      progressTracker.finishProgress(true, 'Preview checks completed successfully');
+    }
+    
+    return {
+      success: true,
+      report: getReportPath('summary')
+    };
   } catch (error) {
-    handleError('Unexpected error in workflow', error);
-    return false;
+    handleError(error);
+    return { success: false };
+  } finally {
+    stopProcessMonitoring();
   }
 }
 
@@ -680,7 +658,6 @@ async function runQualityChecks(args) {
   logger.sectionHeader('Running Quality Checks');
   
   // If all quality checks are skipped, return success without tracking progress
-  // This is now handled in the main function
   if (args['skip-lint'] && args['skip-typecheck'] && args['skip-tests']) {
     logger.info('All quality checks skipped');
     return true;
@@ -751,29 +728,135 @@ async function runQualityChecks(args) {
     });
   }
   
-  // If no individual tests to run (but function was still called),
-  // then some checks are enabled but all specific tests are disabled
   if (tests.length === 0) {
-    logger.info('No individual quality checks enabled');
-    progressTracker.completeStep(true, 'Quality checks skipped');
+    logger.info('No quality checks to run');
     return true;
   }
   
-  // Run the tests
-  const testResults = await testRunner.runTests(tests, {
-    stopOnFailure: true,
-    verbose: args.verbose
-  });
+  // Instead of having testRunner create its own progress tracker,
+  // we'll run each test as a separate step in our flat step count
+  const results = [];
+  let allPassed = true;
   
-  if (testResults.success) {
-    logger.success('All quality checks passed!');
-    progressTracker.completeStep(true, 'All quality checks passed');
-  } else {
-    logger.error('Some quality checks failed');
-    progressTracker.completeStep(false, 'Some quality checks failed');
+  for (const test of tests) {
+    const testName = test.name;
+    
+    // Find the matching step in our flat step list
+    let stepName;
+    if (testName.includes('ESLint')) {
+      stepName = 'ESLint checks';
+    } else if (testName.includes('TypeScript')) {
+      stepName = 'TypeScript checks';
+    } else if (testName.includes('Unit Tests')) {
+      stepName = 'Unit tests';
+    }
+    
+    if (stepName) {
+      // Start the step using the main progress tracker
+      progressTracker.startStep(stepName);
+    }
+    
+    logger.info(`Running test: ${testName}`);
+    logger.info(`Command: ${test.command}`);
+    
+    const startTime = Date.now();
+    
+    const result = await commandRunner.runCommandAsync(test.command, {
+      ignoreError: true,
+      verbose: args.verbose
+    });
+    
+    const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
+    
+    // Run custom validator if provided
+    let valid = true;
+    let validationError = null;
+    
+    if (test.validator && typeof test.validator === 'function') {
+      try {
+        const validationResult = test.validator(result.output, result);
+        valid = validationResult.valid !== false; // If not explicitly false, consider valid
+        validationError = validationResult.error;
+      } catch (error) {
+        valid = false;
+        validationError = `Validator function threw an error: ${error.message}`;
+      }
+    } else {
+      // Default validation: command success
+      valid = result.success;
+    }
+    
+    const testResult = {
+      name: testName,
+      success: valid,
+      elapsed: elapsedTime,
+      error: validationError || result.error,
+      output: result.output,
+      command: test.command
+    };
+    
+    if (valid) {
+      logger.success(`✓ Test passed: ${testName} (${elapsedTime}s)`);
+    } else {
+      logger.error(`✗ Test failed: ${testName} (${elapsedTime}s)`);
+      logger.error(`Error: ${validationError || result.error || 'Test failed'}`);
+      
+      // Try to run onFailure handler if available
+      if (!valid && test.onFailure && typeof test.onFailure === 'function') {
+        try {
+          const recoveryResult = await test.onFailure(result.output, result);
+          testResult.recoveryAttempted = true;
+          testResult.recoverySuccess = recoveryResult;
+          
+          if (recoveryResult) {
+            logger.success(`✓ Recovery successful for ${testName}`);
+          } else {
+            logger.error(`✗ Recovery failed for ${testName}`);
+          }
+        } catch (error) {
+          logger.error(`Error during recovery attempt: ${error.message}`);
+          testResult.recoveryAttempted = true;
+          testResult.recoverySuccess = false;
+        }
+      }
+      
+      allPassed = false;
+    }
+    
+    results.push(testResult);
+    
+    // Complete the step using the main progress tracker
+    if (stepName) {
+      progressTracker.completeStep(valid, valid ? `${testName} passed` : `${testName} failed`);
+    }
+    
+    // If this test failed and stopOnFailure is true, break the loop
+    if (!valid && args.stopOnFailure !== false) {
+      logger.warn('Stopping quality checks due to failure');
+      break;
+    }
   }
   
-  return testResults.success;
+  // Don't need to complete a separate overall step since we tracked each test individually
+
+  if (allPassed) {
+    logger.success('All quality checks passed!');
+    return true;
+  } else {
+    logger.error('Some quality checks failed');
+    
+    // Add errors to the error tracker
+    const failedTests = results.filter(r => !r.success);
+    for (const failedTest of failedTests) {
+      const testError = new QualityCheckError(
+        `${failedTest.name} failed: ${failedTest.error || 'Unknown error'}`,
+        { test: failedTest.name, command: failedTest.command }
+      );
+      errorTracker.addError(testError);
+    }
+    
+    return false;
+  }
 }
 
 /**
@@ -895,66 +978,139 @@ async function tryFixTypeScriptErrors(args) {
  * @returns {Promise<boolean>} - Whether the build succeeded
  */
 async function buildApplication(args) {
-  // We now handle skipping in the main function, so this function is only called when we're actually building
+  if (args['skip-build']) {
+    logger.info('Build step skipped');
+    return true;
+  }
+
   logger.sectionHeader('Building Application');
   
-  // Get config options
-  const buildConfig = config.getBuildConfig();
-  const buildScript = buildConfig.script || 'build';
-  const buildEnv = environment.generateDeploymentEnv({
-    envType: 'preview',
-    additionalVars: buildConfig.env || {}
-  });
-  
-  // Run the build
-  const buildResult = await buildManager.runBuild({
-    buildScript,
-    envType: 'preview',
-    clean: true,
-    buildDir: config.getFirebaseConfig().buildDir || 'build',
-    env: buildEnv,
-    verbose: args.verbose
-  });
-  
-  if (buildResult.success) {
-    // Get build size info
-    const sizeInfo = buildManager.getBuildSize({
-      buildDir: config.getFirebaseConfig().buildDir || 'build'
+  try {
+    // Determine which build script to use based on configuration
+    const buildConfig = config.getBuildConfig();
+    const buildScript = buildConfig.script || 'build';
+    
+    // Generate environment for preview build
+    const buildEnv = environment.generateDeploymentEnv({
+      envType: 'preview',
+      additionalVars: args.env || {}
     });
     
-    if (sizeInfo.success) {
-      logger.info(`Build size: ${sizeInfo.formattedSize}`);
-    }
+    // Run each build step as separate steps with our flat progress tracker
     
-    logger.success('Build successful!');
-    progressTracker.completeStep(true, 'Build completed successfully');
-    return true;
-  } else {
-    logger.error(`Build failed: ${buildResult.error}`);
+    // Step 1: Setting up environment
+    progressTracker.startStep('Setting up build environment');
+    const envFile = environment.writeEnvFile(buildEnv, {
+      path: '.env.build',
+      keepExisting: args.preserveExistingEnv
+    });
+    logger.info(`Environment prepared with ${Object.keys(buildEnv).length} variables`);
+    logger.debug(`Environment written to: ${envFile}`);
+    progressTracker.completeStep(true, 'Environment setup complete');
     
-    // Try to recover from build failure
-    logger.info('Attempting to recover from build failure...');
-    
-    const recoveryResult = await buildFallback.recoverFromBuildFailure({
-      packageManager: 'pnpm',
-      packageDirectories: [
-        '.',
-        'packages/common',
-        'packages/admin',
-        'packages/hours'
-      ],
-      fullCleanup: true
+    // Step 2: Cleaning build directory
+    progressTracker.startStep('Cleaning build directory');
+    const cleanResult = await buildManager.cleanBuildDirectory({ 
+      buildDir: buildConfig.buildDir 
     });
     
-    if (recoveryResult.success) {
-      logger.success('Build recovery succeeded!');
-      progressTracker.completeStep(true, 'Build recovery succeeded');
-      return true;
-    } else {
-      logger.error(`Build recovery failed: ${recoveryResult.error}`);
-      progressTracker.completeStep(false, 'Build failed and recovery unsuccessful');
+    if (!cleanResult.success) {
+      logger.error(`Failed to clean build directory: ${cleanResult.error || 'Unknown error'}`);
+      progressTracker.completeStep(false, 'Failed to clean build directory');
       return false;
     }
+    
+    progressTracker.completeStep(true, 'Build directory cleaned');
+    
+    // Step 3: Building application
+    progressTracker.startStep('Building application');
+    logger.info(`Running build script: ${buildScript}`);
+    
+    const buildCommand = getPackageManagerCommand(buildScript);
+    const buildResult = await commandRunner.runCommandAsync(buildCommand, {
+      env: process.env,
+      verbose: args.verbose,
+      timeout: args.buildTimeout || 5 * 60 * 1000 // 5 minutes default timeout
+    });
+    
+    if (!buildResult.success) {
+      logger.error(`Build failed: ${buildResult.error || 'Unknown error'}`);
+      logger.debug('Build output:');
+      logger.debug(buildResult.output);
+      
+      // Try fallback if available
+      if (args['auto-retry-build']) {
+        logger.info('Attempting fallback build...');
+        const fallbackResult = await buildFallback.tryFallbackBuild({
+          script: buildScript,
+          origError: buildResult.error
+        });
+        
+        if (fallbackResult.success) {
+          logger.success('Fallback build successful!');
+          progressTracker.completeStep(true, 'Fallback build successful');
+          return true;
+        } else {
+          logger.error(`Fallback build also failed: ${fallbackResult.error}`);
+          progressTracker.completeStep(false, 'Build failed');
+          return false;
+        }
+      }
+      
+      progressTracker.completeStep(false, 'Build failed');
+      return false;
+    }
+    
+    // Step 4: Validating build output
+    progressTracker.startStep('Validating build output');
+    
+    // Check if build directory exists
+    const buildDir = buildConfig.buildDir || 'build';
+    if (!fs.existsSync(buildDir)) {
+      logger.error(`Build directory '${buildDir}' does not exist after build!`);
+      progressTracker.completeStep(false, 'Build validation failed');
+      return false;
+    }
+    
+    // Check for key files to ensure build was successful
+    const keyFiles = ['index.html', 'static'];
+    const missingFiles = [];
+    
+    for (const file of keyFiles) {
+      const filePath = path.join(buildDir, file);
+      if (!fs.existsSync(filePath)) {
+        missingFiles.push(file);
+      }
+    }
+    
+    if (missingFiles.length > 0) {
+      logger.error(`Build validation failed: Missing key files in build directory: ${missingFiles.join(', ')}`);
+      progressTracker.completeStep(false, 'Build validation failed');
+      return false;
+    }
+    
+    // Log build size
+    const buildStats = buildManager.calculateBuildSize(buildDir);
+    logger.info(`Build size: ${buildStats.totalSizeMB.toFixed(2)} MB (${buildStats.fileCount} files)`);
+    
+    progressTracker.completeStep(true, 'Build validated successfully');
+    
+    logger.success('Build completed successfully!');
+    return true;
+  } catch (error) {
+    logger.error(`Error during build: ${error.message}`);
+    if (error.stack) {
+      logger.debug(`Stack trace: ${error.stack}`);
+    }
+    
+    // Attempt to complete the current step
+    try {
+      progressTracker.completeStep(false, `Build error: ${error.message}`);
+    } catch (e) {
+      // If step wasn't started, ignore
+    }
+    
+    return false;
   }
 }
 
@@ -1142,313 +1298,6 @@ async function detectDeadCode(args) {
     logger.error('Error during dead code detection: ' + error.message);
     // Don't fail the workflow for dead code detection issues
     return true;
-  }
-}
-
-/**
- * Generate a unique channel ID based on Git info
- * @returns {string} - Generated channel ID
- */
-function generateChannelId() {
-  const branchName = gitAuth.getCurrentBranch() || 'unknown';
-  let prNumber = null;
-  
-  // Try to get PR number, safely checking if the function exists
-  if (gitAuth && typeof gitAuth.getPullRequestNumber === 'function') {
-    try {
-      prNumber = gitAuth.getPullRequestNumber();
-    } catch (err) {
-      logger.warn(`Could not get PR number: ${err.message}`);
-    }
-  } else {
-    // Alternative: try to extract PR number from branch name (if it's a PR branch)
-    const prMatch = branchName.match(/^pr-(\d+)$/);
-    if (prMatch) {
-      prNumber = prMatch[1];
-    }
-  }
-  
-  // Base the channel ID on the PR if available, otherwise use branch and timestamp
-  if (prNumber) {
-    return `pr-${prNumber}`;
-  } else {
-    // Sanitize branch name for use in channel ID
-    const sanitizedBranch = branchName
-      .toLowerCase()
-      .replace(/[^a-z0-9-]/g, '-')
-      .replace(/-+/g, '-')
-      .substring(0, 15);
-    
-    // Add timestamp to ensure uniqueness
-    return `${sanitizedBranch}-${Date.now().toString().substring(0, 10)}`;
-  }
-}
-
-/**
- * Extract preview URLs from deployment output
- * 
- * @param {string} output - Deployment output
- * @returns {Object|null} - Object with admin and hours URLs or null
- */
-function extractPreviewUrlsFromOutput(output) {
-  if (!output) return null;
-  
-  const urls = {};
-  let allUrls = [];
-  
-  // Try multiple patterns to extract URLs
-  const urlPatterns = [
-    // Firebase CLI v13.34.0 format with dash prefix
-    {
-      pattern: /(?:^|\s)-\s+(https:\/\/[^\s]+\.web\.app)/gm,
-      matchGroup: 1
-    },
-    // Look for labeled URLs in our custom format
-    {
-      pattern: /ADMIN:?\s+(https:\/\/[^\s,]+)/i,
-      matchGroup: 1,
-      target: 'admin'
-    },
-    {
-      pattern: /HOURS:?\s+(https:\/\/[^\s,]+)/i,
-      matchGroup: 1,
-      target: 'hours'
-    },
-    // Firebase CLI v9+ hosting URL format
-    {
-      pattern: /(?:Channel URL|Hosting URL|Live URL|Preview URL)(?:\s*\([^)]*\))?:\s+(https:\/\/[^\s]+)/gi,
-      matchGroup: 1
-    },
-    // Standard Firebase hosting URL patterns
-    {
-      pattern: /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.web\.app/g,
-      matchGroup: 0
-    },
-    {
-      pattern: /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.firebaseapp\.com/g,
-      matchGroup: 0
-    }
-  ];
-  
-  // Extract URLs using all patterns
-  for (const { pattern, matchGroup, target } of urlPatterns) {
-    let match;
-    while ((match = pattern.exec(output)) !== null) {
-      const url = match[matchGroup].trim();
-      
-      if (target) {
-        // Direct assignment for patterns with specific targets
-        urls[target] = url;
-      } else {
-        // Add to general list for categorization later
-        allUrls.push(url);
-      }
-    }
-  }
-  
-  // If we have collected general URLs, categorize them
-  if (allUrls.length > 0) {
-    for (const url of allUrls) {
-      if (url.includes('admin') && !urls.admin) {
-        urls.admin = url;
-      } else if (url.includes('hours') && !urls.hours) {
-        urls.hours = url;
-      } else if (!urls.admin) {
-        urls.admin = url;
-      } else if (!urls.hours) {
-        urls.hours = url;
-      }
-    }
-  }
-  
-  // If we have any URLs that weren't categorized, store them as generic URLs
-  if (allUrls.length > 0 && !urls.admin && !urls.hours) {
-    urls.urls = allUrls;
-  }
-  
-  return Object.keys(urls).length > 0 ? urls : null;
-}
-
-/**
- * Save preview URLs to file
- * @param {Object} urls - URLs to save
- * @returns {boolean} - Whether save was successful
- */
-function savePreviewUrls(urls) {
-  if (!urls || Object.keys(urls).length === 0) {
-    return false;
-  }
-
-  try {
-    const tempDir = path.join(process.cwd(), 'temp');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-
-    const filePath = path.join(tempDir, 'preview-urls.json');
-    fs.writeFileSync(filePath, JSON.stringify(urls, null, 2));
-    logger.success(`Preview URLs saved to ${filePath}`);
-    
-    // Also log them clearly for immediate visibility
-    logger.info('Preview URLs:');
-    if (urls.admin) logger.info(`- ADMIN: ${urls.admin}`);
-    if (urls.hours) logger.info(`- HOURS: ${urls.hours}`);
-    if (urls.urls) {
-      urls.urls.forEach(url => logger.info(`- ${url}`));
-    }
-    
-    return true;
-  } catch (error) {
-    logger.error(`Failed to save preview URLs: ${error.message}`);
-    return false;
-  }
-}
-
-/**
- * Deploy to Firebase preview channel
- * @param {Object} args - Command line arguments
- * @returns {Promise<boolean>} - Whether the deployment succeeded
- */
-async function deployPreview(args) {
-  // Instead of: await metrics.startStage('deployment');
-  logger.startStep('Deploying preview');
-  
-  try {
-    // Verify Firebase authentication first
-    const authResult = await verifyAuthentication();
-    if (!authResult) {
-      logger.error('Authentication failed. Cannot proceed with deployment.');
-      progressTracker.completeStep(false, 'Deployment aborted due to authentication failure');
-      return false;
-    }
-    
-    // Generate channel ID
-    const channelId = generateChannelId();
-    
-    // Get Firebase config
-    const firebaseConfig = config.getFirebaseConfig();
-    const { projectId, site, buildDir = 'build' } = firebaseConfig;
-    
-    // Show deployment details
-    const branchName = gitAuth.getCurrentBranch();
-    logger.info(`Deploying branch '${branchName}' to Firebase preview channel`);
-    logger.info(`Channel: ${channelId}`);
-    logger.info(`Project: ${projectId}`);
-    logger.info(`Site: ${site}`);
-    logger.info(`Build directory: ${buildDir}`);
-    
-    // Create deployment message
-    let commitMessage = "Preview deployment";
-    
-    // Safely try to get the latest commit message if the function exists
-    if (gitAuth && typeof gitAuth.getLatestCommitMessage === 'function') {
-      try {
-        commitMessage = gitAuth.getLatestCommitMessage();
-      } catch (err) {
-        logger.warn(`Could not get latest commit message: ${err.message}`);
-      }
-    }
-    
-    const message = `Preview deployment for '${branchName}': ${commitMessage}`;
-    
-    // Deploy to Firebase hosting channel
-    const deployResult = await deployment.deployToPreviewChannel({
-      projectId,
-      site,
-      channelId,
-      buildDir,
-      message
-    });
-    
-    if (deployResult.success) {
-      logger.success(`Deployment successful!`);
-      
-      // Extract and process the preview URLs
-      const urls = extractPreviewUrlsFromOutput(deployResult.rawOutput || deployResult.output);
-      
-      if (urls && Object.keys(urls).length > 0) {
-        logger.success('Successfully extracted preview URLs:');
-        if (urls.admin) logger.info(`ADMIN: ${urls.admin}`);
-        if (urls.hours) logger.info(`HOURS: ${urls.hours}`);
-        
-        // Save the URLs for use in the dashboard
-        savePreviewUrls(urls);
-      } else {
-        logger.warn('No preview URLs found in deployment output');
-      }
-      
-      progressTracker.completeStep(true, 'Deployment completed successfully');
-      return true;
-    } else {
-      logger.error(`Deployment failed: ${deployResult.error}`);
-      if (deployResult.deployOutput) {
-        logger.debug('Deployment output:');
-        logger.debug(deployResult.deployOutput);
-      }
-      if (deployResult.deployError) {
-        logger.error('Deployment error details:');
-        logger.error(deployResult.deployError);
-      }
-      
-      progressTracker.completeStep(false, 'Deployment failed');
-      return false;
-    }
-  } catch (error) {
-    // Don't collect metrics, just throw the error
-    handleError(error);
-    progressTracker.completeStep(false, `Deployment failed with error: ${error.message}`);
-    return false;
-  } finally {
-    // Instead of: await metrics.endStage('deployment');
-  }
-}
-
-/**
- * Clean up old preview channels if needed
- * @param {Object} args - Command line arguments
- * @returns {Promise<void>}
- */
-async function cleanupChannels(args) {
-  if (args['skip-cleanup']) {
-    logger.info('Skipping channel cleanup');
-    return;
-  }
-  
-  logger.sectionHeader('Cleaning Up Old Channels');
-  
-  // Get Firebase and preview config
-  const firebaseConfig = config.getFirebaseConfig();
-  const previewConfig = config.getPreviewConfig();
-  const { projectId, site } = firebaseConfig;
-  const { prefix, channelKeepCount = 5, channelThreshold = 8 } = previewConfig;
-  
-  logger.info(`Checking for old preview channels to clean up...`);
-  logger.info(`Will keep the ${channelKeepCount} most recent channels with prefix '${prefix}'`);
-  
-  // Check and clean up if needed
-  const cleanupResult = await channelCleanup.checkAndCleanupIfNeeded({
-    projectId,
-    site,
-    threshold: channelThreshold,
-    keepCount: channelKeepCount,
-    prefix,
-    autoCleanup: true
-  });
-  
-  if (cleanupResult.needsCleanup) {
-    const siteResults = cleanupResult.sites[site];
-    
-    if (siteResults && siteResults.cleanup) {
-      if (siteResults.cleanup.deleted && siteResults.cleanup.deleted.length > 0) {
-        logger.success(`Cleaned up ${siteResults.cleanup.deleted.length} old channels`);
-      } 
-      
-      if (siteResults.cleanup.failed && siteResults.cleanup.failed.length > 0) {
-        logger.warn(`Failed to delete ${siteResults.cleanup.failed.length} channels`);
-      }
-    }
-  } else {
-    logger.info('No channel cleanup needed');
   }
 }
 
@@ -1753,6 +1602,313 @@ async function runDependencyVerification(args) {
 }
 
 /**
+ * Deploy to Firebase preview channel
+ * @param {Object} args - Command line arguments
+ * @returns {Promise<boolean>} - Whether the deployment succeeded
+ */
+async function deployPreview(args) {
+  // Instead of: await metrics.startStage('deployment');
+  logger.startStep('Deploying preview');
+  
+  try {
+    // Verify Firebase authentication first
+    const authResult = await verifyAuthentication();
+    if (!authResult) {
+      logger.error('Authentication failed. Cannot proceed with deployment.');
+      progressTracker.completeStep(false, 'Deployment aborted due to authentication failure');
+      return false;
+    }
+    
+    // Generate channel ID
+    const channelId = generateChannelId();
+    
+    // Get Firebase config
+    const firebaseConfig = config.getFirebaseConfig();
+    const { projectId, site, buildDir = 'build' } = firebaseConfig;
+    
+    // Show deployment details
+    const branchName = gitAuth.getCurrentBranch();
+    logger.info(`Deploying branch '${branchName}' to Firebase preview channel`);
+    logger.info(`Channel: ${channelId}`);
+    logger.info(`Project: ${projectId}`);
+    logger.info(`Site: ${site}`);
+    logger.info(`Build directory: ${buildDir}`);
+    
+    // Create deployment message
+    let commitMessage = "Preview deployment";
+    
+    // Safely try to get the latest commit message if the function exists
+    if (gitAuth && typeof gitAuth.getLatestCommitMessage === 'function') {
+      try {
+        commitMessage = gitAuth.getLatestCommitMessage();
+      } catch (err) {
+        logger.warn(`Could not get latest commit message: ${err.message}`);
+      }
+    }
+    
+    const message = `Preview deployment for '${branchName}': ${commitMessage}`;
+    
+    // Deploy to Firebase hosting channel
+    const deployResult = await deployment.deployToPreviewChannel({
+      projectId,
+      site,
+      channelId,
+      buildDir,
+      message
+    });
+    
+    if (deployResult.success) {
+      logger.success(`Deployment successful!`);
+      
+      // Extract and process the preview URLs
+      const urls = extractPreviewUrlsFromOutput(deployResult.rawOutput || deployResult.output);
+      
+      if (urls && Object.keys(urls).length > 0) {
+        logger.success('Successfully extracted preview URLs:');
+        if (urls.admin) logger.info(`ADMIN: ${urls.admin}`);
+        if (urls.hours) logger.info(`HOURS: ${urls.hours}`);
+        
+        // Save the URLs for use in the dashboard
+        savePreviewUrls(urls);
+      } else {
+        logger.warn('No preview URLs found in deployment output');
+      }
+      
+      progressTracker.completeStep(true, 'Deployment completed successfully');
+      return true;
+    } else {
+      logger.error(`Deployment failed: ${deployResult.error}`);
+      if (deployResult.deployOutput) {
+        logger.debug('Deployment output:');
+        logger.debug(deployResult.deployOutput);
+      }
+      if (deployResult.deployError) {
+        logger.error('Deployment error details:');
+        logger.error(deployResult.deployError);
+      }
+      
+      progressTracker.completeStep(false, 'Deployment failed');
+      return false;
+    }
+  } catch (error) {
+    // Don't collect metrics, just throw the error
+    handleError(error);
+    progressTracker.completeStep(false, `Deployment failed with error: ${error.message}`);
+    return false;
+  } finally {
+    // Instead of: await metrics.endStage('deployment');
+  }
+}
+
+/**
+ * Clean up old preview channels if needed
+ * @param {Object} args - Command line arguments
+ * @returns {Promise<void>}
+ */
+async function cleanupChannels(args) {
+  if (args['skip-cleanup']) {
+    logger.info('Skipping channel cleanup');
+    return;
+  }
+  
+  logger.sectionHeader('Cleaning Up Old Channels');
+  
+  // Get Firebase and preview config
+  const firebaseConfig = config.getFirebaseConfig();
+  const previewConfig = config.getPreviewConfig();
+  const { projectId, site } = firebaseConfig;
+  const { prefix, channelKeepCount = 5, channelThreshold = 8 } = previewConfig;
+  
+  logger.info(`Checking for old preview channels to clean up...`);
+  logger.info(`Will keep the ${channelKeepCount} most recent channels with prefix '${prefix}'`);
+  
+  // Check and clean up if needed
+  const cleanupResult = await channelCleanup.checkAndCleanupIfNeeded({
+    projectId,
+    site,
+    threshold: channelThreshold,
+    keepCount: channelKeepCount,
+    prefix,
+    autoCleanup: true
+  });
+  
+  if (cleanupResult.needsCleanup) {
+    const siteResults = cleanupResult.sites[site];
+    
+    if (siteResults && siteResults.cleanup) {
+      if (siteResults.cleanup.deleted && siteResults.cleanup.deleted.length > 0) {
+        logger.success(`Cleaned up ${siteResults.cleanup.deleted.length} old channels`);
+      } 
+      
+      if (siteResults.cleanup.failed && siteResults.cleanup.failed.length > 0) {
+        logger.warn(`Failed to delete ${siteResults.cleanup.failed.length} channels`);
+      }
+    }
+  } else {
+    logger.info('No channel cleanup needed');
+  }
+}
+
+/**
+ * Generate a unique channel ID based on Git info
+ * @returns {string} - Generated channel ID
+ */
+function generateChannelId() {
+  const branchName = gitAuth.getCurrentBranch() || 'unknown';
+  let prNumber = null;
+  
+  // Try to get PR number, safely checking if the function exists
+  if (gitAuth && typeof gitAuth.getPullRequestNumber === 'function') {
+    try {
+      prNumber = gitAuth.getPullRequestNumber();
+    } catch (err) {
+      logger.warn(`Could not get PR number: ${err.message}`);
+    }
+  } else {
+    // Alternative: try to extract PR number from branch name (if it's a PR branch)
+    const prMatch = branchName.match(/^pr-(\d+)$/);
+    if (prMatch) {
+      prNumber = prMatch[1];
+    }
+  }
+  
+  // Base the channel ID on the PR if available, otherwise use branch and timestamp
+  if (prNumber) {
+    return `pr-${prNumber}`;
+  } else {
+    // Sanitize branch name for use in channel ID
+    const sanitizedBranch = branchName
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/-+/g, '-')
+      .substring(0, 15);
+    
+    // Add timestamp to ensure uniqueness
+    return `${sanitizedBranch}-${Date.now().toString().substring(0, 10)}`;
+  }
+}
+
+/**
+ * Extract preview URLs from deployment output
+ * 
+ * @param {string} output - Deployment output
+ * @returns {Object|null} - Object with admin and hours URLs or null
+ */
+function extractPreviewUrlsFromOutput(output) {
+  if (!output) return null;
+  
+  const urls = {};
+  let allUrls = [];
+  
+  // Try multiple patterns to extract URLs
+  const urlPatterns = [
+    // Firebase CLI v13.34.0 format with dash prefix
+    {
+      pattern: /(?:^|\s)-\s+(https:\/\/[^\s]+\.web\.app)/gm,
+      matchGroup: 1
+    },
+    // Look for labeled URLs in our custom format
+    {
+      pattern: /ADMIN:?\s+(https:\/\/[^\s,]+)/i,
+      matchGroup: 1,
+      target: 'admin'
+    },
+    {
+      pattern: /HOURS:?\s+(https:\/\/[^\s,]+)/i,
+      matchGroup: 1,
+      target: 'hours'
+    },
+    // Firebase CLI v9+ hosting URL format
+    {
+      pattern: /(?:Channel URL|Hosting URL|Live URL|Preview URL)(?:\s*\([^)]*\))?:\s+(https:\/\/[^\s]+)/gi,
+      matchGroup: 1
+    },
+    // Standard Firebase hosting URL patterns
+    {
+      pattern: /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.web\.app/g,
+      matchGroup: 0
+    },
+    {
+      pattern: /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.firebaseapp\.com/g,
+      matchGroup: 0
+    }
+  ];
+  
+  // Extract URLs using all patterns
+  for (const { pattern, matchGroup, target } of urlPatterns) {
+    let match;
+    while ((match = pattern.exec(output)) !== null) {
+      const url = match[matchGroup].trim();
+      
+      if (target) {
+        // Direct assignment for patterns with specific targets
+        urls[target] = url;
+      } else {
+        // Add to general list for categorization later
+        allUrls.push(url);
+      }
+    }
+  }
+  
+  // If we have collected general URLs, categorize them
+  if (allUrls.length > 0) {
+    for (const url of allUrls) {
+      if (url.includes('admin') && !urls.admin) {
+        urls.admin = url;
+      } else if (url.includes('hours') && !urls.hours) {
+        urls.hours = url;
+      } else if (!urls.admin) {
+        urls.admin = url;
+      } else if (!urls.hours) {
+        urls.hours = url;
+      }
+    }
+  }
+  
+  // If we have any URLs that weren't categorized, store them as generic URLs
+  if (allUrls.length > 0 && !urls.admin && !urls.hours) {
+    urls.urls = allUrls;
+  }
+  
+  return Object.keys(urls).length > 0 ? urls : null;
+}
+
+/**
+ * Save preview URLs to file
+ * @param {Object} urls - URLs to save
+ * @returns {boolean} - Whether save was successful
+ */
+function savePreviewUrls(urls) {
+  if (!urls || Object.keys(urls).length === 0) {
+    return false;
+  }
+
+  try {
+    const tempDir = path.join(process.cwd(), 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const filePath = path.join(tempDir, 'preview-urls.json');
+    fs.writeFileSync(filePath, JSON.stringify(urls, null, 2));
+    logger.success(`Preview URLs saved to ${filePath}`);
+    
+    // Also log them clearly for immediate visibility
+    logger.info('Preview URLs:');
+    if (urls.admin) logger.info(`- ADMIN: ${urls.admin}`);
+    if (urls.hours) logger.info(`- HOURS: ${urls.hours}`);
+    if (urls.urls) {
+      urls.urls.forEach(url => logger.info(`- ${url}`));
+    }
+    
+    return true;
+  } catch (error) {
+    logger.error(`Failed to save preview URLs: ${error.message}`);
+    return false;
+  }
+}
+
+/**
  * Deploy the project to Firebase
  * 
  * @param {string} channel - The Firebase Hosting preview channel to deploy to
@@ -1905,6 +2061,67 @@ function ensureDirExists(dirPath) {
     fs.mkdirSync(dirPath, { recursive: true });
     logger.debug(`Created directory: ${dirPath}`);
   }
+}
+
+/**
+ * Generate consolidated reports
+ * @param {Object} args - Command line arguments
+ * @returns {Promise<boolean>} - Whether report generation succeeded
+ */
+async function generateReports(args) {
+  logger.sectionHeader('Generating Reports');
+  
+  try {
+    // Enhanced report collection
+    const reportResult = await collectAndGenerateReport({
+      reportPath: args.output || 'preview-dashboard.html',
+      title: `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`,
+      // Get preview URLs from JSON file or logs
+      previewUrls: extractPreviewUrls(),
+      // Don't cleanup reports unless specified
+      cleanupIndividualReports: !args['keep-individual-reports']
+    });
+    
+    if (reportResult) {
+      logger.success(`Preview dashboard generated at preview-dashboard.html`);
+      return true;
+    } else {
+      logger.warn('Could not generate reports. Some report files may be missing.');
+      return false;
+    }
+  } catch (error) {
+    logger.error(`Error generating reports: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Get saved preview URLs
+ * @returns {Object|null} - Saved preview URLs or null
+ */
+function getPreviewUrls() {
+  try {
+    const tempDir = path.join(process.cwd(), 'temp');
+    const filePath = path.join(tempDir, 'preview-urls.json');
+    
+    if (fs.existsSync(filePath)) {
+      const data = fs.readFileSync(filePath, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    logger.debug(`Failed to read preview URLs: ${error.message}`);
+  }
+  
+  return null;
+}
+
+/**
+ * Stop monitoring process resources
+ */
+function stopProcessMonitoring() {
+  // This is a placeholder function since we don't have the actual implementation
+  // In a real implementation, this would likely clear intervals and release resources
+  logger.debug('Stopping process monitoring');
 }
 
 // Run the main function with parsed arguments

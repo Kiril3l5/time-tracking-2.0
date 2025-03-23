@@ -189,6 +189,7 @@ function showWorkflowProgress(stepId) {
   updateTerminalTitle(`${step.name}`);
   
   console.log('\n');
+  // Display the step without numbering, just the name and description
   console.log(`${step.name}`);
   console.log('='.repeat(50));
   console.log(`${step.description}`);
