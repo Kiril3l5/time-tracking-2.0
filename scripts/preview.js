@@ -378,6 +378,14 @@ export default async function main(args) {
     previewSteps.steps = steps;
     previewSteps.currentStepIndex = 0;
     
+    // Track critical steps status
+    let dependencyCheckSuccess = true;
+    let authenticationSuccess = true;
+    let qualityCheckSuccess = true;
+    let buildSuccess = true;
+    let deploymentSuccess = true;
+    let isDryRun = args['dry-run'] === true;
+    
     // Step 1: Verify dependencies (if not skipped)
     if (!args['skip-dep-check']) {
       progressTracker.startStep('Dependency verification');
@@ -387,6 +395,8 @@ export default async function main(args) {
         verifyTools: args['verify-tools'] !== false,
         verifyEnv: args['verify-env'] !== false
       });
+      
+      dependencyCheckSuccess = depsResult;
       
       if (!depsResult) {
         const depsError = new DependencyError(
@@ -404,6 +414,8 @@ export default async function main(args) {
     progressTracker.startStep('Firebase authentication');
     const authResult = await verifyAuthentication();
     
+    authenticationSuccess = authResult;
+    
     if (!authResult) {
       const authError = new AuthenticationError(
         'Authentication verification failed. Aborting workflow.'
@@ -419,6 +431,8 @@ export default async function main(args) {
     if (!args['skip-lint'] && !args['skip-typecheck'] && !args['skip-tests']) {
       // Run quality checks in sequence, already has proper progress tracking inside
       const qualityResult = await runQualityChecks(args);
+      
+      qualityCheckSuccess = qualityResult;
       
       if (!qualityResult && args['require-quality-checks']) {
         logger.error('Quality checks failed and --require-quality-checks flag set');
@@ -439,6 +453,8 @@ export default async function main(args) {
     // Build application - already has proper progress tracking inside
     if (!args['skip-build']) {
       const buildResult = await buildApplication(args);
+      
+      buildSuccess = buildResult;
       
       if (!buildResult) {
         const buildError = new BuildError(
@@ -501,6 +517,21 @@ export default async function main(args) {
     if (!args['skip-deploy']) {
       progressTracker.startStep('Deploying to Firebase');
       const deploymentResult = await deployPreview(args);
+      deploymentSuccess = deploymentResult;
+      
+      // In dry-run mode, we should consider deployment a success even though we didn't actually deploy
+      if (isDryRun && deploymentResult) {
+        // Create a mock successful URL file for dry-run mode
+        const mockUrlData = {
+          admin: "https://dry-run-admin-mock-url.web.app",
+          hours: "https://dry-run-hours-mock-url.web.app",
+          timestamp: new Date().toISOString(),
+          deploymentStatus: 'success',
+          isDryRun: true
+        };
+        savePreviewUrls(mockUrlData);
+      }
+      
       progressTracker.completeStep(deploymentResult, deploymentResult ? 'Deployment succeeded' : 'Deployment failed');
       
       // Channel cleanup step - if deployment was successful and cleanup not skipped
@@ -516,28 +547,45 @@ export default async function main(args) {
     const reportResult = await generateReports(args);
     progressTracker.completeStep(reportResult, reportResult ? 'Reports generated' : 'Report generation failed');
     
+    // Determine the overall success status
+    const criticalStepsSucceeded = ((!args['skip-deploy'] ? deploymentSuccess : true) && 
+                                 (!args['skip-build'] ? buildSuccess : true) &&
+                                 dependencyCheckSuccess && 
+                                 authenticationSuccess) || isDryRun;
+    
     // Show final success message
     if (!args['skip-deploy']) {
-      let deploymentMessage = 'Preview successfully deployed!';
-      
-      // Try to include the preview URL if available
-      const previewUrls = getPreviewUrls();
-      if (previewUrls) {
-        if (previewUrls.admin) {
-          deploymentMessage += `\nAdmin preview URL: ${previewUrls.admin}`;
+      if (deploymentSuccess) {
+        let deploymentMessage = isDryRun ? 
+                             'Preview workflow completed (dry-run mode)' : 
+                             'Preview successfully deployed!';
+        
+        // Try to include the preview URL if available and not in dry-run mode
+        if (!isDryRun) {
+          const previewUrls = getPreviewUrls();
+          if (previewUrls) {
+            if (previewUrls.admin) {
+              deploymentMessage += `\nAdmin preview URL: ${previewUrls.admin}`;
+            }
+            if (previewUrls.hours) {
+              deploymentMessage += `\nHours preview URL: ${previewUrls.hours}`;
+            }
+          }
         }
-        if (previewUrls.hours) {
-          deploymentMessage += `\nHours preview URL: ${previewUrls.hours}`;
-        }
+        
+        progressTracker.finishProgress(true, deploymentMessage);
+      } else {
+        progressTracker.finishProgress(false, 'Preview deployment failed! Check logs for details.');
       }
-      
-      progressTracker.finishProgress(true, deploymentMessage);
     } else {
-      progressTracker.finishProgress(true, 'Preview checks completed successfully');
+      const checkMessage = criticalStepsSucceeded ? 
+        'Preview checks completed successfully' : 
+        'Preview checks completed with errors';
+      progressTracker.finishProgress(criticalStepsSucceeded, checkMessage);
     }
     
     return {
-      success: true,
+      success: criticalStepsSucceeded,
       report: getReportPath('summary')
     };
   } catch (error) {
@@ -1730,6 +1778,25 @@ async function runDependencyVerification(args) {
 }
 
 /**
+ * Enhanced warning logger with severity levels
+ * @param {string} message - The warning message to log
+ * @param {string} level - Warning level: 'info', 'warning', or 'critical'
+ */
+function logWarningWithLevel(message, level = 'warning') {
+  const levels = {
+    info: { prefix: '[INFO]', color: '\x1b[36m' },         // Cyan for info
+    warning: { prefix: '[WARNING]', color: '\x1b[33m' },    // Yellow for minor warnings
+    critical: { prefix: '[CRITICAL]', color: '\x1b[31m' }   // Red for major warnings
+  };
+  
+  const style = levels[level] || levels.warning;
+  const resetColor = '\x1b[0m';
+  const icon = level === 'critical' ? '🛑' : level === 'info' ? 'ℹ️' : '⚠️';
+  
+  console.warn(`${style.color}${icon} ${style.prefix} ${message}${resetColor}`);
+}
+
+/**
  * Deploy to Firebase preview channel
  * @param {Object} args - Command line arguments
  * @returns {Promise<boolean>} - Whether the deployment succeeded
@@ -1738,20 +1805,7 @@ async function deployPreview(args) {
   // Instead of: await metrics.startStage('deployment');
   logger.startStep('Deploying preview');
   
-  // Enhanced warning functions for this deployment
-  const logWarningWithLevel = (message, level) => {
-    const levels = {
-      info: { prefix: '[INFO]', color: '\x1b[36m' },         // Cyan for info
-      warning: { prefix: '[WARNING]', color: '\x1b[33m' },    // Yellow for minor warnings
-      critical: { prefix: '[CRITICAL]', color: '\x1b[31m' }   // Red for major warnings
-    };
-    
-    const style = levels[level] || levels.warning;
-    const resetColor = '\x1b[0m';
-    const icon = level === 'critical' ? '🛑' : level === 'info' ? 'ℹ️' : '⚠️';
-    
-    console.warn(`${style.color}${icon} ${style.prefix} ${message}${resetColor}`);
-  };
+  // We now use the module-level logWarningWithLevel function
   
   try {
     // Verify Firebase authentication first
@@ -1760,6 +1814,13 @@ async function deployPreview(args) {
       logWarningWithLevel('Authentication failed. Cannot proceed with deployment.', 'critical');
       progressTracker.completeStep(false, 'Deployment aborted due to authentication failure');
       return false;
+    }
+    
+    // Skip deployment in dry-run mode
+    if (args['dry-run']) {
+      logger.info('Skipping actual deployment in dry-run mode');
+      progressTracker.completeStep(true, 'Deployment skipped in dry-run mode');
+      return true;
     }
     
     // Generate channel ID
@@ -1807,10 +1868,11 @@ async function deployPreview(args) {
     // Check if the only errors are deprecation warnings
     if (!deploymentSuccess && 
         deployResult.rawOutput && 
-        deployResult.rawOutput.includes('[DEP0040]') && 
-        deployResult.rawOutput.includes('punycode') && 
+        (deployResult.rawOutput.includes('[DEP0040]') || 
+         deployResult.rawOutput.includes('DeprecationWarning: The `punycode` module is deprecated')) && 
         !deployResult.rawOutput.includes('Error:') && 
         !deployResult.rawOutput.includes('Command failed with exit code')) {
+      
       logWarningWithLevel('Firebase CLI reported a Node.js deprecation warning, but this does not indicate a deployment failure', 'info');
       logger.info('This is a benign warning about the punycode module being deprecated in Node.js');
       deploymentWarningsOnly = true;
@@ -1820,8 +1882,8 @@ async function deployPreview(args) {
     if (deploymentSuccess) {
       logger.success(`Deployment successful!`);
       
-      // Extract and process the preview URLs
-      const urls = extractPreviewUrlsFromOutput(deployResult.rawOutput || deployResult.output, deploymentSuccess);
+      // Extract URLs ONLY from the current deployment output - no fallbacks
+      const urls = extractPreviewUrlsFromOutput(deployResult.rawOutput || deployResult.output, true);
       
       if (urls && Object.keys(urls).length > 0) {
         logger.success('Successfully extracted preview URLs:');
@@ -1834,7 +1896,20 @@ async function deployPreview(args) {
         // Display URLs with appropriate context
         displayPreviewUrls(urls);
       } else {
-        logWarningWithLevel('No preview URLs found in deployment output', 'warning');
+        logWarningWithLevel('No preview URLs found in deployment output. This is unusual for a successful deployment.', 'warning');
+        
+        // Only in successful deployments, we check other logs as a fallback
+        const fallbackUrls = findUrlsInLogFiles();
+        if (fallbackUrls && Object.keys(fallbackUrls).length > 0) {
+          logger.info('Found preview URLs from previous deployments:');
+          if (fallbackUrls.admin) logger.info(`ADMIN (previous): ${fallbackUrls.admin}`);
+          if (fallbackUrls.hours) logger.info(`HOURS (previous): ${fallbackUrls.hours}`);
+          
+          // Save the URLs with a fallback flag
+          fallbackUrls.isFallback = true;
+          fallbackUrls.timestamp = new Date().toISOString();
+          savePreviewUrls(fallbackUrls);
+        }
       }
       
       progressTracker.completeStep(true, deploymentWarningsOnly ? 
@@ -1842,15 +1917,27 @@ async function deployPreview(args) {
         'Deployment completed successfully');
       return true;
     } else {
-      logWarningWithLevel(`Deployment failed: ${deployResult.error}`, 'critical');
+      logWarningWithLevel(`Deployment failed: ${deployResult.error || 'Unknown error'}`, 'critical');
+      
+      // Enhanced debugging information for failures
+      logger.error('=== DEPLOYMENT FAILURE DETAILS ===');
+      
       if (deployResult.deployOutput) {
-        logger.debug('Deployment output:');
-        logger.debug(deployResult.deployOutput);
+        logger.info('Command output:');
+        console.log(deployResult.deployOutput);
       }
+      
       if (deployResult.deployError) {
-        logWarningWithLevel('Deployment error details:', 'critical');
-        logWarningWithLevel(deployResult.deployError, 'critical');
+        logWarningWithLevel('Error details:', 'critical');
+        console.log(deployResult.deployError);
       }
+      
+      // Log helpful troubleshooting steps
+      logger.info('\nTroubleshooting steps:');
+      logger.info('1. Check if Firebase CLI is up to date (npm i -g firebase-tools)');
+      logger.info('2. Verify Firebase login status (firebase login:list)');
+      logger.info('3. Check build directory existence and contents');
+      logger.info(`4. Try manual deployment: firebase hosting:channel:deploy ${generateChannelId()} --project=${firebaseConfig.projectId}`);
       
       progressTracker.completeStep(false, 'Deployment failed');
       return false;
@@ -1864,6 +1951,51 @@ async function deployPreview(args) {
   } finally {
     // Instead of: await metrics.endStage('deployment');
   }
+}
+
+/**
+ * Find URLs in log files as a last resort
+ * Only used when deployment was successful but no URLs found in output
+ * @returns {Object|null} - Object with admin and hours URLs or null
+ */
+function findUrlsInLogFiles() {
+  logger.debug('Searching log files for preview URLs...');
+  const tempDir = path.join(process.cwd(), 'temp');
+  const logsDir = path.join(process.cwd(), 'logs');
+  
+  // First check the deploy log
+  const deployLogFile = path.join(tempDir, 'firebase-deploy.log');
+  
+  if (fs.existsSync(deployLogFile)) {
+    logger.debug(`Checking ${deployLogFile} for URLs`);
+    const logContent = fs.readFileSync(deployLogFile, 'utf8');
+    const urls = extractPreviewUrlsFromOutput(logContent, true);
+    if (urls && Object.keys(urls).length > 0) {
+      logger.debug('Found URLs in deploy log');
+      return urls;
+    }
+  }
+  
+  // Check for other deployment logs in the logs directory
+  if (fs.existsSync(logsDir)) {
+    const files = fs.readdirSync(logsDir)
+      .filter(file => file.includes('preview-') && file.endsWith('.log'))
+      .sort((a, b) => fs.statSync(path.join(logsDir, b)).mtime.getTime() - 
+                       fs.statSync(path.join(logsDir, a)).mtime.getTime());
+    
+    for (const file of files.slice(0, 3)) { // Check up to 3 most recent logs
+      const logPath = path.join(logsDir, file);
+      logger.debug(`Checking ${logPath} for URLs`);
+      const logContent = fs.readFileSync(logPath, 'utf8');
+      const urls = extractPreviewUrlsFromOutput(logContent, true);
+      if (urls && Object.keys(urls).length > 0) {
+        logger.debug(`Found URLs in ${file}`);
+        return urls;
+      }
+    }
+  }
+  
+  return null;
 }
 
 /**
@@ -1882,36 +2014,52 @@ async function cleanupChannels(args) {
   // Get Firebase and preview config
   const firebaseConfig = config.getFirebaseConfig();
   const previewConfig = config.getPreviewConfig();
-  const { projectId, site } = firebaseConfig;
+  const { projectId } = firebaseConfig;
   const { prefix, channelKeepCount = 5, channelThreshold = 8 } = previewConfig;
   
+  // Get both target sites from .firebaserc
+  const sitesToCleanup = [];
+  
+  // Get the admin site
+  const adminSite = 'admin-autonomyhero-2024';
+  sitesToCleanup.push(adminSite);
+  
+  // Get the hours site
+  const hoursSite = 'hours-autonomyhero-2024';
+  sitesToCleanup.push(hoursSite);
+  
+  logger.info(`Found ${sitesToCleanup.length} sites to clean up: ${sitesToCleanup.join(', ')}`);
   logger.info(`Checking for old preview channels to clean up...`);
-  logger.info(`Will keep the ${channelKeepCount} most recent channels with prefix '${prefix}'`);
+  logger.info(`Will keep the ${channelKeepCount} most recent channels with prefix '${prefix}' for each site`);
   
-  // Check and clean up if needed
-  const cleanupResult = await channelCleanup.checkAndCleanupIfNeeded({
-    projectId,
-    site,
-    threshold: channelThreshold,
-    keepCount: channelKeepCount,
-    prefix,
-    autoCleanup: true
-  });
-  
-  if (cleanupResult.needsCleanup) {
-    const siteResults = cleanupResult.sites[site];
+  for (const site of sitesToCleanup) {
+    logger.info(`Cleaning up site: ${site}`);
     
-    if (siteResults && siteResults.cleanup) {
-      if (siteResults.cleanup.deleted && siteResults.cleanup.deleted.length > 0) {
-        logger.success(`Cleaned up ${siteResults.cleanup.deleted.length} old channels`);
-      } 
+    // Check and clean up if needed
+    const cleanupResult = await channelCleanup.checkAndCleanupIfNeeded({
+      projectId,
+      site,
+      threshold: channelThreshold,
+      keepCount: channelKeepCount,
+      prefix,
+      autoCleanup: true
+    });
+    
+    if (cleanupResult.needsCleanup) {
+      const siteResults = cleanupResult.sites[site];
       
-      if (siteResults.cleanup.failed && siteResults.cleanup.failed.length > 0) {
-        logger.warn(`Failed to delete ${siteResults.cleanup.failed.length} channels`);
+      if (siteResults && siteResults.cleanup) {
+        if (siteResults.cleanup.deleted && siteResults.cleanup.deleted.length > 0) {
+          logger.success(`Cleaned up ${siteResults.cleanup.deleted.length} old channels for site ${site}`);
+        } 
+        
+        if (siteResults.cleanup.failed && siteResults.cleanup.failed.length > 0) {
+          logger.warn(`Failed to delete ${siteResults.cleanup.failed.length} channels for site ${site}`);
+        }
       }
+    } else {
+      logger.info(`No channel cleanup needed for site ${site}`);
     }
-  } else {
-    logger.info('No channel cleanup needed');
   }
 }
 
@@ -2037,14 +2185,17 @@ function extractPreviewUrlsFromOutput(output, deploymentSuccess = true) {
     urls.urls = allUrls;
   }
   
-  // Add deployment status metadata
+  // Add deployment status metadata and detailed information
   if (Object.keys(urls).length > 0) {
     urls.deploymentStatus = deploymentSuccess ? 'success' : 'failed';
     urls.timestamp = new Date().toISOString();
+    urls.extractionTime = new Date().toISOString();
+    urls.source = 'current-deployment';
     
     // If deployment failed, add warning to URLs object
     if (!deploymentSuccess) {
       urls.warning = "Deployment reported errors - these URLs may not be functional";
+      urls.errorDetails = "Check logs for detailed error information";
     }
   }
   
@@ -2308,25 +2459,131 @@ async function generateReports(args) {
   logger.sectionHeader('Generating Reports');
   
   try {
+    // Check if we're in dry-run mode
+    if (args['dry-run']) {
+      logger.info('Running in dry-run mode - generating mock report');
+      
+      // Generate a simple HTML report for dry-run mode
+      const reportPath = args.output || 'preview-dashboard.html';
+      const reportTitle = `Preview Workflow Dry Run (${new Date().toLocaleDateString()})`;
+      const mockReportContent = `<!DOCTYPE html>
+<html>
+<head>
+  <title>${reportTitle}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
+    h1 { color: #0066cc; }
+    .info { background-color: #e6f3ff; padding: 15px; border-radius: 5px; }
+    .success { color: #2e7d32; background-color: #e8f5e9; padding: 10px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>${reportTitle}</h1>
+  
+  <div class="info">
+    <h2>Dry Run Mode</h2>
+    <p>This report was generated in dry-run mode. No actual deployment was performed.</p>
+    <p>All checks and validations were executed, but the deployment step was skipped.</p>
+  </div>
+  
+  <h2>Mock Preview URLs</h2>
+  <p>In an actual deployment, preview URLs would be displayed here.</p>
+  <ul>
+    <li>Admin: https://admin-example--preview-12345.web.app</li>
+    <li>Hours: https://hours-example--preview-12345.web.app</li>
+  </ul>
+  
+  <div class="success">
+    <h2>Workflow Summary</h2>
+    <p>Workflow completed successfully in dry-run mode!</p>
+    <p>Generated on: ${new Date().toLocaleString()}</p>
+  </div>
+</body>
+</html>`;
+      
+      fs.writeFileSync(reportPath, mockReportContent);
+      logger.success(`Generated mock dashboard for dry-run at ${reportPath}`);
+      progressTracker.completeStep(true, 'Mock reports generated for dry-run');
+      return true;
+    }
+    
+    // Check if deployment was successful
+    const tempDir = path.join(process.cwd(), 'temp');
+    const urlsFile = path.join(tempDir, 'preview-urls.json');
+    let deploymentSuccessful = false;
+    let deploymentStatus = 'failed';
+    let urls = null;
+    
+    // Read deployment status from URL file if it exists
+    if (fs.existsSync(urlsFile)) {
+      try {
+        urls = JSON.parse(fs.readFileSync(urlsFile, 'utf8'));
+        deploymentSuccessful = urls.deploymentStatus === 'success';
+        deploymentStatus = urls.deploymentStatus || 'unknown';
+        
+        // Check if this is from dry-run mode
+        if (urls.isDryRun) {
+          logger.info('Using mock URLs from dry-run mode');
+          deploymentSuccessful = true;
+        }
+        // Log URL source information
+        else if (urls.isFallback) {
+          logWarningWithLevel('Using URLs from a previous deployment because current deployment did not generate URLs', 'warning');
+        }
+      } catch (err) {
+        logger.warn(`Error reading preview URLs file: ${err.message}`);
+      }
+    }
+    
+    // If deployment failed and no URLs exist, provide clear information
+    if (!deploymentSuccessful && (!urls || Object.keys(urls).length === 0)) {
+      logger.error('No preview URLs available due to deployment failure');
+      logger.info('Generating error report...');
+      
+      // Generate a simple error report
+      const errorReportPath = args.output || 'preview-dashboard.html';
+      const errorTitle = `Preview Deployment Failed (${new Date().toLocaleDateString()})`;
+      const errorMessage = 'The Firebase deployment failed. Please check the logs for details.';
+      
+      generateBasicErrorReport(errorReportPath, errorTitle, errorMessage);
+      logger.info(`Error report generated at ${errorReportPath}`);
+      
+      // Complete step with warning status
+      progressTracker.completeStep(false, 'Reports generated with deployment failure information');
+      return false;
+    }
+    
     // Enhanced report collection
     const reportResult = await collectAndGenerateReport({
       reportPath: args.output || 'preview-dashboard.html',
       title: `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`,
-      // Get preview URLs from JSON file or logs
-      previewUrls: extractPreviewUrls(),
+      // Get preview URLs from JSON file or logs - but now we're explicit about success state
+      previewUrls: urls || extractPreviewUrls(),
+      deploymentStatus: deploymentStatus,
       // Don't cleanup reports unless specified
       cleanupIndividualReports: !args['keep-individual-reports']
     });
     
     if (reportResult) {
-      logger.success(`Preview dashboard generated at preview-dashboard.html`);
-      return true;
+      if (deploymentSuccessful) {
+        logger.success(`Preview dashboard generated at preview-dashboard.html`);
+      } else {
+        logger.warn(`Preview dashboard generated with deployment failure information at preview-dashboard.html`);
+      }
+      
+      progressTracker.completeStep(true, deploymentSuccessful ? 
+        'Reports generated successfully' : 
+        'Reports generated with deployment failure information');
+      
+      return deploymentSuccessful;
     } else {
       logger.warn('Could not generate reports. Some report files may be missing.');
+      progressTracker.completeStep(false, 'Failed to generate reports');
       return false;
     }
   } catch (error) {
     logger.error(`Error generating reports: ${error.message}`);
+    progressTracker.completeStep(false, `Error generating reports: ${error.message}`);
     return false;
   }
 }
