@@ -82,14 +82,56 @@ export function checkFirebaseAuth() {
     // If projects:list fails, token is likely expired
     if (!projectsResult.success || projectsResult.output?.includes('Error: Failed to get Firebase projects')) {
       logger.warn('Firebase token may be expired or invalid');
+      
+      // Immediately run reauth as requested
+      logger.info('Initiating Firebase reauthentication...');
+      const reAuthResult = commandRunner.runCommand('firebase login --reauth', {
+        stdio: 'inherit', // Allow interactive input
+        shell: true
+      });
+      
+      // If reauth succeeded, try projects:list again
+      if (reAuthResult.success) {
+        logger.success('Firebase reauthentication successful');
+        
+        // Verify authentication again after successful reauth
+        const newProjectsResult = commandRunner.runCommand('firebase projects:list', {
+          stdio: 'pipe',
+          ignoreError: true
+        });
+        
+        if (newProjectsResult.success) {
+          // Continue with the normal flow to extract email
+          const emailResult = commandRunner.runCommand('firebase login:list', {
+            stdio: 'pipe',
+            ignoreError: true
+          });
+          
+          if (emailResult.success) {
+            const output = emailResult.output || '';
+            const emailMatch = output.match(/User: ([^\s]+)/);
+            const email = emailMatch ? emailMatch[1] : 'Unknown';
+            
+            logger.success(`Firebase reauthenticated as: ${email}`);
+            return {
+              authenticated: true,
+              email
+            };
+          }
+        }
+      } else {
+        logger.error('Firebase reauthentication failed');
+      }
+      
+      // If we get here, either reauth failed or verification after reauth failed
       return {
         authenticated: false,
         error: 'Firebase token expired or invalid',
-        errorDetails: projectsResult.error || 'Token validation failed'
+        errorDetails: 'Reauthentication failed or insufficient'
       };
     }
     
-    // Now check with login:list to get the email
+    // Normal flow continues if projects:list succeeded initially
     const result = commandRunner.runCommand('firebase login:list', {
       stdio: 'pipe',
       ignoreError: true

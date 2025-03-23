@@ -577,11 +577,8 @@ async function verifyAuthentication() {
     // Check when the last successful authentication was performed
     const authTokens = _getAuthTokens();
     const currentTime = new Date().getTime();
-    const tokenAge = authTokens && authTokens.lastAuthenticated 
-      ? (currentTime - authTokens.lastAuthenticated) / (1000 * 60 * 60) // Convert to hours
-      : 24; // If no record, assume it's been 24 hours
     
-    // Check authentication
+    // Verify authentication - reauthentication is now handled in checkFirebaseAuth itself
     const authResult = await authManager.verifyAllAuth();
     
     if (!authResult.success) {
@@ -589,44 +586,7 @@ async function verifyAuthentication() {
       
       if (!authResult.services.firebase.authenticated) {
         logger.error('Firebase authentication failed');
-        
-        // Run reauth directly without any extra conditions 
-        logger.info('Initiating Firebase reauthentication...');
-          
-        try {
-          // Just run the reauth command as requested
-          const reAuthResult = await commandRunner.runCommandAsync('firebase login --reauth', { 
-            stdio: 'inherit', // Use inherit to allow interactive prompts
-            shell: true 
-          });
-            
-          if (reAuthResult.success) {
-            logger.success('Firebase reauthentication successful');
-            // Update the last authentication time
-            _saveAuthTokens({
-              ...authTokens,
-              lastAuthenticated: currentTime
-            });
-              
-            // Verify auth again after reauth 
-            const newAuthResult = await authManager.verifyAllAuth();
-            if (newAuthResult.success) {
-              logger.success(`Firebase authenticated as: ${newAuthResult.services.firebase.email || 'Unknown'}`);
-              logger.success(`Git user: ${newAuthResult.services.gitAuth.name} <${newAuthResult.services.gitAuth.email}>`);
-              progressTracker.completeStep(true, 'Authentication verified after reauthentication');
-              return true;
-            }
-          } else {
-            logger.error('Firebase reauthentication failed');
-            logger.error(reAuthResult.error || 'Unknown error during reauthentication');
-            progressTracker.completeStep(false, 'Firebase reauthentication failed');
-            return false;
-          }
-        } catch (error) {
-          logger.error(`Error during Firebase reauthentication: ${error.message}`);
-          progressTracker.completeStep(false, 'Error during Firebase reauthentication');
-          return false;
-        }
+        logger.info('Please run: firebase login');
       }
       
       if (!authResult.services.gitAuth.authenticated) {
@@ -639,6 +599,12 @@ async function verifyAuthentication() {
       progressTracker.completeStep(false, 'Authentication verification failed');
       return false;
     }
+    
+    // Update the last authentication time after successful verification
+    _saveAuthTokens({
+      ...authTokens,
+      lastAuthenticated: currentTime
+    });
     
     logger.success(`Firebase authenticated as: ${authResult.services.firebase.email || 'Unknown'}`);
     logger.success(`Git user: ${authResult.services.gitAuth.name} <${authResult.services.gitAuth.email}>`);
