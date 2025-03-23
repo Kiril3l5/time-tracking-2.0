@@ -1080,7 +1080,7 @@ async function buildApplication(args) {
     const packageDirs = ['packages/admin/dist', 'packages/hours/dist'];
     for (const dir of packageDirs) {
       if (fs.existsSync(dir)) {
-        const stats = buildManager.calculateBuildSize(dir);
+        const stats = calculateBuildSize(dir);
         totalSize += stats.totalSizeMB;
         totalFiles += stats.fileCount;
         logger.info(`${dir} size: ${stats.totalSizeMB.toFixed(2)} MB (${stats.fileCount} files)`);
@@ -2178,6 +2178,50 @@ function stopProcessMonitoring() {
   // This is a placeholder function since we don't have the actual implementation
   // In a real implementation, this would likely clear intervals and release resources
   logger.debug('Stopping process monitoring');
+}
+
+/**
+ * Calculate the size of a build directory
+ * @param {string} buildDir - The build directory to calculate
+ * @returns {Object} - The size information
+ */
+function calculateBuildSize(buildDir) {
+  if (!fs.existsSync(buildDir)) {
+    return { totalSizeMB: 0, fileCount: 0 };
+  }
+  
+  let totalSize = 0;
+  let fileCount = 0;
+  
+  function scanDir(dirPath) {
+    try {
+      const entries = fs.readdirSync(dirPath);
+      
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry);
+        const stats = fs.statSync(fullPath);
+        
+        if (stats.isDirectory()) {
+          scanDir(fullPath); // Recursively scan subdirectories
+        } else {
+          totalSize += stats.size;
+          fileCount++;
+        }
+      }
+    } catch (error) {
+      logger.warn(`Error scanning directory ${dirPath}: ${error.message}`);
+    }
+  }
+  
+  scanDir(buildDir);
+  
+  // Convert to MB
+  const totalSizeMB = totalSize / (1024 * 1024);
+  
+  return {
+    totalSizeMB,
+    fileCount
+  };
 }
 
 // Run the main function with parsed arguments
