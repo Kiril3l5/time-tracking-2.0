@@ -481,7 +481,6 @@ if (process.argv[1] === import.meta.url) {
 // Export the functions
 export {
   collectAndGenerateReport,
-  extractPreviewUrls,
   REPORT_PATHS,
   TEMP_DIR
 };
