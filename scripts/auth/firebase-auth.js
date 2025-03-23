@@ -40,6 +40,7 @@
 
 import * as commandRunner from '../core/command-runner.js';
 import * as logger from '../core/logger.js';
+import { execSync } from 'child_process';
 
 /* global process */
 
@@ -83,52 +84,45 @@ export function checkFirebaseAuth() {
     if (!projectsResult.success || projectsResult.output?.includes('Error: Failed to get Firebase projects')) {
       logger.warn('Firebase token may be expired or invalid');
       
-      // Immediately run reauth as requested
+      // Immediately run reauth as requested - but use runCommandAsync as it's an interactive command
       logger.info('Initiating Firebase reauthentication...');
-      const reAuthResult = commandRunner.runCommand('firebase login --reauth', {
-        stdio: 'inherit', // Allow interactive input
-        shell: true
-      });
       
-      // If reauth succeeded, try projects:list again
-      if (reAuthResult.success) {
+      // We need to run this synchronously to block until auth is complete
+      // But we must make sure to run it in a way that allows terminal interaction
+      try {
+        // Using execSync directly to ensure proper interactive handling
+        execSync('firebase login --reauth', { 
+          stdio: 'inherit', // This is critical for interactive commands
+          shell: true
+        });
+        
         logger.success('Firebase reauthentication successful');
         
-        // Verify authentication again after successful reauth
-        const newProjectsResult = commandRunner.runCommand('firebase projects:list', {
+        // After successful reauth, continue normal flow to get email
+        const emailResult = commandRunner.runCommand('firebase login:list', {
           stdio: 'pipe',
           ignoreError: true
         });
         
-        if (newProjectsResult.success) {
-          // Continue with the normal flow to extract email
-          const emailResult = commandRunner.runCommand('firebase login:list', {
-            stdio: 'pipe',
-            ignoreError: true
-          });
+        if (emailResult.success) {
+          const output = emailResult.output || '';
+          const emailMatch = output.match(/User: ([^\s]+)/);
+          const email = emailMatch ? emailMatch[1] : 'Unknown';
           
-          if (emailResult.success) {
-            const output = emailResult.output || '';
-            const emailMatch = output.match(/User: ([^\s]+)/);
-            const email = emailMatch ? emailMatch[1] : 'Unknown';
-            
-            logger.success(`Firebase reauthenticated as: ${email}`);
-            return {
-              authenticated: true,
-              email
-            };
-          }
+          logger.success(`Firebase reauthenticated as: ${email}`);
+          return {
+            authenticated: true,
+            email
+          };
         }
-      } else {
-        logger.error('Firebase reauthentication failed');
+      } catch (error) {
+        logger.error(`Firebase reauthentication failed: ${error.message}`);
+        return {
+          authenticated: false,
+          error: 'Firebase token expired or invalid',
+          errorDetails: `Reauthentication failed: ${error.message}`
+        };
       }
-      
-      // If we get here, either reauth failed or verification after reauth failed
-      return {
-        authenticated: false,
-        error: 'Firebase token expired or invalid',
-        errorDetails: 'Reauthentication failed or insufficient'
-      };
     }
     
     // Normal flow continues if projects:list succeeded initially
