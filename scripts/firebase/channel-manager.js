@@ -330,6 +330,17 @@ export async function deleteChannel(options) {
     return { success: false, error: 'Project ID, site, and channel ID are required' };
   }
   
+  // Never attempt to delete the 'live' channel as it's a special reserved channel
+  if (channelId === 'live') {
+    if (!quiet) {
+      logger.info(`Skipping deletion of 'live' channel which cannot be deleted`);
+    }
+    return { 
+      success: false, 
+      error: `Cannot delete the live channel of site "${site}"`
+    };
+  }
+  
   if (!quiet) {
     logger.info(`Deleting channel: ${channelId}`);
   }
@@ -339,21 +350,42 @@ export async function deleteChannel(options) {
   
   const result = await commandRunner.runCommandAsync(command, {
     ignoreError: true,
+    captureOutput: true,
     silent: quiet
   });
   
-  if (result.success) {
-    if (!quiet) {
-      logger.success(`Successfully deleted channel: ${channelId}`);
+  // Check for special error cases
+  if (!result.success) {
+    // Check if the error mentions "Cannot delete the live channel"
+    if (result.error && typeof result.error === 'string' && 
+        result.error.includes("Cannot delete the live channel")) {
+      logger.error(`Cannot delete the live channel of site "${site}"`);
+      return { 
+        success: false, 
+        error: `Cannot delete the live channel of site "${site}"`,
+        isLiveChannel: true
+      };
     }
-    return { success: true };
-  } else {
-    logger.error(`Failed to delete channel: ${channelId}`);
+    
+    if (!quiet) {
+      logger.error(`Failed to delete channel: ${channelId}`);
+    }
+    
     return { 
       success: false, 
-      error: result.error || 'Delete command failed'
+      error: result.error || 'Delete command failed',
+      rawOutput: result.output
     };
   }
+  
+  if (!quiet) {
+    logger.success(`Successfully deleted channel: ${channelId}`);
+  }
+  
+  return { 
+    success: true,
+    channelId
+  };
 }
 
 /**

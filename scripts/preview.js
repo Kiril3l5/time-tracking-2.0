@@ -1949,6 +1949,12 @@ async function deployPreview(args) {
           }
         }
         
+        // Run cleanup after successful deployment if not skipped
+        if (!args['skip-cleanup'] && !args['dry-run']) {
+          logger.info('Running channel cleanup after successful deployment...');
+          await cleanupChannels({ ...args, quiet: true });
+        }
+        
         progressTracker.completeStep(true, deploymentWarningsOnly ? 
           'Deployment completed with warnings' : 
           'Deployment completed successfully');
@@ -2098,7 +2104,14 @@ async function cleanupChannels(args) {
     return;
   }
   
-  logger.sectionHeader('Cleaning Up Old Channels');
+  // Default to quiet mode unless explicitly disabled
+  const quiet = args.quiet !== false;
+  
+  if (!quiet) {
+    logger.sectionHeader('Cleaning Up Old Channels');
+  } else {
+    logger.info('Cleaning up old preview channels...');
+  }
   
   // Get Firebase and preview config
   const firebaseConfig = config.getFirebaseConfig();
@@ -2125,12 +2138,18 @@ async function cleanupChannels(args) {
   const hoursSite = 'hours-autonomyhero-2024';
   sitesToCleanup.push(hoursSite);
   
-  logger.info(`Found ${sitesToCleanup.length} sites to clean up: ${sitesToCleanup.join(', ')}`);
-  logger.info(`Checking for old preview channels to clean up...`);
-  logger.info(`Will keep only the ${keepCount} most recent channels across all prefixes for each site`);
+  if (!quiet) {
+    logger.info(`Found ${sitesToCleanup.length} sites to clean up: ${sitesToCleanup.join(', ')}`);
+    logger.info(`Checking for old preview channels to clean up...`);
+    logger.info(`Will keep only the ${keepCount} most recent channels across all prefixes for each site`);
+  }
+  
+  let totalDeleted = 0;
   
   for (const site of sitesToCleanup) {
-    logger.info(`Cleaning up site: ${site}`);
+    if (!quiet) {
+      logger.info(`Cleaning up site: ${site}`);
+    }
     
     // Check and clean up ALL channels, keeping only the most recent ones
     const cleanupResult = await channelCleanup.checkAndCleanupIfNeeded({
@@ -2140,7 +2159,7 @@ async function cleanupChannels(args) {
       keepCount: keepCount,
       prefix: null, // No prefix filter = clean up ALL channels
       autoCleanup: true,
-      quiet: args.quiet
+      quiet: quiet
     });
     
     if (cleanupResult.needsCleanup) {
@@ -2148,17 +2167,28 @@ async function cleanupChannels(args) {
       
       if (siteResults && siteResults.cleanup) {
         if (siteResults.cleanup.deleted && siteResults.cleanup.deleted.length > 0) {
-          logger.success(`Cleaned up ${siteResults.cleanup.deleted.length} old channels for site ${site}`);
+          totalDeleted += siteResults.cleanup.deleted.length;
+          if (!quiet) {
+            logger.success(`Cleaned up ${siteResults.cleanup.deleted.length} old channels for site ${site}`);
+          }
         } 
         
         if (siteResults.cleanup.failed && siteResults.cleanup.failed.length > 0) {
-          logger.warn(`Failed to delete ${siteResults.cleanup.failed.length} channels for site ${site}`);
+          if (!quiet) {
+            logger.warn(`Failed to delete ${siteResults.cleanup.failed.length} channels for site ${site}`);
+          }
         }
       }
-    } else {
+    } else if (!quiet) {
       logger.info(`Site ${site} has ${cleanupResult.sites[site]?.channelCount || 0} channels, below threshold (${threshold})`);
       logger.info(`No channel cleanup needed for site ${site}`);
     }
+  }
+  
+  if (totalDeleted > 0) {
+    logger.success(`Cleaned up ${totalDeleted} old channels in total`);
+  } else {
+    logger.info('No channels needed cleanup');
   }
 }
 

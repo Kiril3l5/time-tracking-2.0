@@ -43,28 +43,30 @@ export async function cleanupChannels(options) {
     prefix = null, 
     keepCount = 5,
     dryRun = false,
-    quiet = false,
+    quiet = true, // Default to quiet mode to reduce logging
     batchSize = 5,
-    delayBetweenBatches = 2000
+    delayBetweenBatches = 1000 // Reduced delay to make it faster
   } = options;
   
-  logger.info(`Cleaning up old preview channels for site: ${site}`);
+  if (!quiet) {
+    logger.info(`Cleaning up old preview channels for site: ${site}`);
   
-  if (prefix) {
-    logger.info(`Will keep ${keepCount} most recent channels with prefix '${prefix}'`);
-  } else {
-    logger.info(`Will keep ${keepCount} most recent channels (all prefixes included)`);
-  }
+    if (prefix) {
+      logger.info(`Will keep ${keepCount} most recent channels with prefix '${prefix}'`);
+    } else {
+      logger.info(`Will keep ${keepCount} most recent channels (all prefixes included)`);
+    }
   
-  if (dryRun) {
-    logger.info('Running in dry-run mode, no channels will be deleted');
+    if (dryRun) {
+      logger.info('Running in dry-run mode, no channels will be deleted');
+    }
   }
   
   // List all channels
   const listResult = await channelManager.listChannels({ 
     projectId, 
     site,
-    quiet 
+    quiet: true // Always use quiet mode for listing
   });
   
   if (!listResult.success) {
@@ -81,10 +83,13 @@ export async function cleanupChannels(options) {
   // Filter for channels with the specified prefix if provided and not null
   if (prefix) {
     channels = channels.filter(channel => channel.id.startsWith(prefix));
-    logger.info(`Found ${channels.length} channels with prefix '${prefix}'`);
+    if (!quiet) logger.info(`Found ${channels.length} channels with prefix '${prefix}'`);
   } else {
-    logger.info(`Found ${channels.length} total channels (no prefix filter)`);
+    if (!quiet) logger.info(`Found ${channels.length} total channels (no prefix filter)`);
   }
+  
+  // IMPORTANT: Filter out the 'live' channel which cannot be deleted
+  channels = channels.filter(channel => channel.id !== 'live');
   
   // Sort channels by creation time (newest first)
   // For channels without creation time, assume they're older
@@ -99,14 +104,14 @@ export async function cleanupChannels(options) {
   const channelsToDelete = channels.slice(keepCount);
   
   if (channelsToDelete.length === 0) {
-    logger.info('No channels need to be deleted');
+    if (!quiet) logger.info('No channels need to be deleted');
     return {
       success: true,
       deleted: []
     };
   }
   
-  logger.info(`Keeping ${channelsToKeep.length} channels, deleting ${channelsToDelete.length} old channels`);
+  if (!quiet) logger.info(`Keeping ${channelsToKeep.length} channels, deleting ${channelsToDelete.length} old channels`);
   
   // Only log detailed channel information if not in quiet mode
   if (!quiet && channelsToDelete.length > 0) {
@@ -127,12 +132,12 @@ export async function cleanupChannels(options) {
     batches.push(channelsToDelete.slice(i, i + batchSize));
   }
   
-  logger.info(`Processing ${batches.length} batches of up to ${batchSize} channels each`);
+  if (!quiet) logger.info(`Processing ${batches.length} batches of up to ${batchSize} channels each`);
   
   // Process each batch with delay between batches
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
     const batch = batches[batchIndex];
-    logger.info(`Processing batch ${batchIndex + 1}/${batches.length} with ${batch.length} channels`);
+    if (!quiet) logger.info(`Processing batch ${batchIndex + 1}/${batches.length} with ${batch.length} channels`);
     
     // Process each channel in the batch
     for (const channel of batch) {
@@ -149,11 +154,18 @@ export async function cleanupChannels(options) {
       // Retry loop for each channel
       while (retry < maxRetries && !success) {
         try {
+          // Skip the 'live' channel (shouldn't get here due to earlier filter, but just to be safe)
+          if (channel.id === 'live') {
+            if (!quiet) logger.info(`Skipping 'live' channel which cannot be deleted`);
+            success = true;
+            continue;
+          }
+          
           const deleteResult = await channelManager.deleteChannel({
             projectId,
             site,
             channelId: channel.id,
-            quiet
+            quiet: true // Always use quiet mode for deletion to reduce noise
           });
           
           if (deleteResult.success) {
@@ -163,32 +175,44 @@ export async function cleanupChannels(options) {
             }
             success = true;
           } else {
-            // If we failed but no exception was thrown, increment retry
+            // Check if the error mentions "Cannot delete the live channel"
+            if (deleteResult.error && deleteResult.error.includes("Cannot delete the live channel")) {
+              if (!quiet) logger.info(`Skipping 'live' channel which cannot be deleted`);
+              success = true; // Mark as success to avoid retries, but don't count it as deleted
+            } else {
+              // If we failed but no exception was thrown, increment retry
+              retry++;
+              if (retry < maxRetries) {
+                if (!quiet) logger.warn(`Failed to delete channel: ${channel.id} (retry ${retry}/${maxRetries})`);
+                // Wait a moment before retry
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              } else {
+                failedChannels.push({
+                  id: channel.id,
+                  error: deleteResult.error || 'Unknown error'
+                });
+                if (!quiet) logger.warn(`Failed to delete channel after ${maxRetries} attempts: ${channel.id}`);
+              }
+            }
+          }
+        } catch (error) {
+          // Check if the error mentions "Cannot delete the live channel"
+          if (error.message && error.message.includes("Cannot delete the live channel")) {
+            if (!quiet) logger.info(`Skipping 'live' channel which cannot be deleted`);
+            success = true; // Mark as success to avoid retries, but don't count it as deleted
+          } else {
             retry++;
             if (retry < maxRetries) {
-              logger.warn(`Failed to delete channel: ${channel.id} (retry ${retry}/${maxRetries})`);
+              if (!quiet) logger.warn(`Error deleting channel: ${channel.id} - ${error.message} (retry ${retry}/${maxRetries})`);
               // Wait a moment before retry
               await new Promise(resolve => setTimeout(resolve, 1000));
             } else {
               failedChannels.push({
                 id: channel.id,
-                error: deleteResult.error || 'Unknown error'
+                error: error.message || 'Unknown error'
               });
-              logger.warn(`Failed to delete channel after ${maxRetries} attempts: ${channel.id}`);
+              if (!quiet) logger.warn(`Failed to delete channel after ${maxRetries} attempts: ${channel.id}`);
             }
-          }
-        } catch (error) {
-          retry++;
-          if (retry < maxRetries) {
-            logger.warn(`Error deleting channel: ${channel.id} - ${error.message} (retry ${retry}/${maxRetries})`);
-            // Wait a moment before retry
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          } else {
-            failedChannels.push({
-              id: channel.id,
-              error: error.message || 'Unknown error'
-            });
-            logger.warn(`Failed to delete channel after ${maxRetries} attempts: ${channel.id}`);
           }
         }
       }
@@ -196,18 +220,18 @@ export async function cleanupChannels(options) {
     
     // Add delay between batches to avoid rate limiting
     if (batchIndex < batches.length - 1) {
-      logger.info(`Waiting ${delayBetweenBatches/1000} seconds before processing next batch...`);
+      if (!quiet) logger.info(`Waiting ${delayBetweenBatches/1000} seconds before processing next batch...`);
       await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
     }
   }
   
   if (dryRun) {
-    logger.info(`[DRY RUN] Would have deleted ${deletedChannels.length} channels`);
+    if (!quiet) logger.info(`[DRY RUN] Would have deleted ${deletedChannels.length} channels`);
   } else {
-    logger.success(`Successfully deleted ${deletedChannels.length} channels`);
+    if (!quiet) logger.success(`Successfully deleted ${deletedChannels.length} channels`);
   }
   
-  if (failedChannels.length > 0) {
+  if (failedChannels.length > 0 && !quiet) {
     logger.warn(`Failed to delete ${failedChannels.length} channels`);
     failedChannels.forEach(failed => {
       logger.warn(`  - ${failed.id}: ${failed.error}`);
