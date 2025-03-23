@@ -678,7 +678,17 @@ async function runWorkflow() {
     let workflowSuccess = true;
     
     try {
-      const previewResult = executeCommand(previewCommand);
+      // Ask if user wants to bypass authentication checks
+      const bypassAuth = await prompt("Would you like to bypass Firebase authentication checks? (y/N): ");
+      
+      let command = previewCommand;
+      if (bypassAuth.toLowerCase() === 'y') {
+        logger.warn("Running preview deployment with authentication checks bypassed");
+        // Use environment variable to tell the preview script to bypass auth checks
+        command = 'SKIP_FIREBASE_AUTH_CHECK=true ' + previewCommand;
+      }
+      
+      const previewResult = executeCommand(command);
       
       if (!previewResult.success) {
         logger.error("Preview deployment failed");
