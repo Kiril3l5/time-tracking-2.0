@@ -300,9 +300,18 @@ ${styled.bold('Report files:')}
  */
 export default async function main(args) {
   try {
-    // Don't log to file, just output to console
-    if (args['save-logs']) {
-      console.warn('File logging has been disabled to reduce unnecessary log files.');
+    // Parse arguments if not already parsed
+    args = parseArguments(args);
+    
+    // Set verbose mode based on args
+    if (args.verbose) {
+      logger.setVerbose(true);
+    }
+    
+    // Show help if requested
+    if (args.help) {
+      showHelp();
+      return;
     }
     
     logger.info('Starting preview deployment workflow...');
@@ -310,300 +319,110 @@ export default async function main(args) {
     // Clean up temp directory at the start of the workflow
     cleanupTempDirectory();
     
-    // Initialize a flat list of all steps including substeps
-    const steps = [];
+    // Set up steps to execute in order
+    const steps = [
+      { name: 'Dependency Verification', func: runDependencyVerification, skip: args['skip-checks'] },
+      { name: 'Authentication Check', func: verifyAuthentication, skip: args['skip-auth'] },
+      { name: 'Quality Checks', func: runQualityChecks, skip: args['skip-checks'] || args.quick },
+      { name: 'Fix Test Dependencies', func: fixTestDependencies, skip: args['skip-fixes'] },
+      { name: 'Fix React Query Types', func: fixReactQueryTypes, skip: args['skip-fixes'] },
+      { name: 'Fix TypeScript Errors', func: tryFixTypeScriptErrors, skip: args['skip-fixes'] },
+      { name: 'Scan Dependencies', func: scanDependencies, skip: args['skip-scan'] },
+      { name: 'Detect Dead Code', func: detectDeadCode, skip: args['skip-deadcode'] },
+      { name: 'Check Documentation', func: checkDocumentationQuality, skip: args['skip-docs'] },
+      { name: 'Check Module Syntax', func: checkModuleSyntax, skip: args['skip-module-check'] },
+      { name: 'Build Application', func: buildApplication, skip: args['skip-build'] || args['build-only'] === false },
+      { name: 'Validate Builds', func: validateBuilds, skip: args['skip-validate'] },
+      { name: 'Analyze Bundle Sizes', func: analyzeBundleSizes, skip: args['skip-analyze'] },
+      { name: 'Deployment', func: deployPreview, skip: args['skip-deploy'] },
+      // Remove the redundant cleanup step - it's now handled within deployPreview
+      { name: 'Generating Reports', func: generateReports, skip: args['skip-reports'] },
+    ];
     
-    // Dependency check step
-    if (!args['skip-dep-check']) {
-      steps.push('Dependency verification');
-    }
+    // Count how many steps we're actually going to execute
+    const allSteps = [];
+    let totalSteps = 0;
     
-    // Authentication step (always runs)
-    steps.push('Firebase authentication');
-    
-    // Quality checks - expand into individual substeps
-    if (!args['skip-lint']) {
-      steps.push('ESLint checks');
-    }
-    
-    if (!args['skip-typecheck']) {
-      steps.push('TypeScript checks');
-    }
-    
-    if (!args['skip-tests']) {
-      steps.push('Unit tests');
-    }
-    
-    // Build step - expand into individual substeps
-    if (!args['skip-build']) {
-      steps.push('Setting up build environment');
-      steps.push('Cleaning build directory');
-      steps.push('Building application');
-      steps.push('Validating build output');
-    }
-    
-    // Additional quality checks, each as its own step
-    if (!args['skip-module-syntax']) steps.push('Module syntax check');
-    if (!args['skip-bundle-analysis']) steps.push('Bundle size analysis');
-    if (!args['skip-dependency-scan']) steps.push('Dependency scanning');
-    if (!args['skip-dead-code-detection']) steps.push('Dead code detection');
-    if (!args['skip-doc-quality']) steps.push('Documentation quality');
-    if (!args['skip-workflow-validation']) steps.push('Workflow validation');
-    
-    // Deployment step
-    if (!args['skip-deploy']) {
-      steps.push('Deploying to Firebase');
-      // Add channel cleanup as explicit step when deploy is not skipped
-      if (!args['skip-cleanup']) {
-        steps.push('Cleaning up old channels');
+    for (const step of steps) {
+      if (!step.skip) {
+        totalSteps++;
+        allSteps.push(step);
       }
-    }
-    
-    // Report generation (always runs)
-    steps.push('Generating reports');
-    
-    // Set total steps based on the total number of operations we'll perform
-    const totalSteps = steps.length;
-    
-    // Log skipped steps
-    let skippedMessage = '';
-    if (args['skip-dep-check']) skippedMessage += 'dependency check, ';
-    if (args['skip-build']) skippedMessage += 'build step, ';
-    if (args['skip-deploy']) skippedMessage += 'deploy step, ';
-    if (args['skip-lint'] && args['skip-typecheck'] && args['skip-tests']) skippedMessage += 'all quality checks, ';
-    
-    if (skippedMessage) {
-      logger.info(`Skipping ${skippedMessage.slice(0, -2)}`);
     }
     
     logger.info(`Workflow will execute ${totalSteps} steps in total`);
     
-    logger.sectionHeader('PREVIEW DEPLOYMENT');
-    
-    const errorTracker = new ErrorAggregator();
-    
-    // Initialize progress tracker with the total steps
+    // Initialize progress tracking with the correct function
     progressTracker.initProgress(totalSteps, 'PREVIEW DEPLOYMENT');
     
-    // Save the flat step structure for modules to reference
-    previewSteps.steps = steps;
-    previewSteps.currentStepIndex = 0;
+    // Execute each step in order
+    let lastStepSuccess = true;
+    let deploymentResult = false;
     
-    // Track critical steps status
-    let dependencyCheckSuccess = true;
-    let authenticationSuccess = true;
-    let qualityCheckSuccess = true;
-    let buildSuccess = true;
-    let deploymentSuccess = true;
-    let isDryRun = args['dry-run'] === true;
-    
-    // Step 1: Verify dependencies (if not skipped)
-    if (!args['skip-dep-check']) {
-      progressTracker.startStep('Dependency verification');
-      const depsResult = await runDependencyVerification({
-        ...args,
-        verifyPackages: args['verify-packages'] !== false,
-        verifyTools: args['verify-tools'] !== false,
-        verifyEnv: args['verify-env'] !== false
-      });
-      
-      dependencyCheckSuccess = depsResult;
-      
-      if (!depsResult) {
-        const depsError = new DependencyError(
-          'Dependency verification failed. Please install required dependencies.'
-        );
-        errorTracker.addError(depsError);
-        errorTracker.logErrors();
-        process.exit(1);
+    for (const step of steps) {
+      if (step.skip) {
+        continue;
       }
       
-      progressTracker.completeStep(true, 'Dependencies verified');
+      try {
+        logger.sectionHeader(step.name.toUpperCase());
+        
+        progressTracker.startStep(step.name);
+        
+        // Special handling for deployment result
+        if (step.name === 'Deployment') {
+          deploymentResult = await step.func(args);
+          lastStepSuccess = deploymentResult;
+        } else {
+          lastStepSuccess = await step.func(args);
+        }
+        
+        if (!lastStepSuccess) {
+          logger.error(`Step ${step.name} failed`);
+          break;
+        }
+        
+        // Mark the step as completed
+        progressTracker.completeStep(true, `${step.name} completed successfully`);
+        
+      } catch (error) {
+        // If we're debugging, show the full stack trace
+        if (args.debug) {
+          console.error(error);
+        } else {
+          handleError(error);
+        }
+        
+        progressTracker.completeStep(false, `Step ${step.name} failed with an error`);
+        lastStepSuccess = false;
+        break;
+      }
     }
     
-    // Step 2: Verify authentication
-    progressTracker.startStep('Firebase authentication');
-    const authResult = await verifyAuthentication();
+    // Cleanup phase is now integrated in the deployment step, so we don't need this anymore
     
-    authenticationSuccess = authResult;
-    
-    if (!authResult) {
-      const authError = new AuthenticationError(
-        'Authentication verification failed. Aborting workflow.'
-      );
-      errorTracker.addError(authError);
-      errorTracker.logErrors();
+    // Final report
+    if (lastStepSuccess) {
+      progressTracker.finishProgress(true, `Preview workflow completed successfully in ${progressTracker.formatDuration(progressTracker.getElapsedTime())}`);
+      
+      if (deploymentResult && !args['skip-deploy']) {
+        const previewUrls = getPreviewUrls();
+        if (previewUrls) {
+          logger.info('\nPREVIEW URLs:');
+          if (previewUrls.admin) logger.info(`ADMIN: ${previewUrls.admin}`);
+          if (previewUrls.hours) logger.info(`HOURS: ${previewUrls.hours}`);
+        }
+      }
+      
+      process.exit(0);
+    } else {
+      progressTracker.finishProgress(false, `Preview workflow failed after ${progressTracker.formatDuration(progressTracker.getElapsedTime())}`);
       process.exit(1);
     }
-    
-    progressTracker.completeStep(true, 'Authentication verified');
-    
-    // Quality checks - run tests individually as separate steps
-    if (!args['skip-lint'] && !args['skip-typecheck'] && !args['skip-tests']) {
-      // Run quality checks in sequence, already has proper progress tracking inside
-      const qualityResult = await runQualityChecks(args);
-      
-      qualityCheckSuccess = qualityResult;
-      
-      if (!qualityResult && args['require-quality-checks']) {
-        logger.error('Quality checks failed and --require-quality-checks flag set');
-        logger.info('Fix quality issues before proceeding or try again with --skip-* flags');
-        
-        const qualityError = new QualityCheckError(
-          'Quality checks failed and are required to continue.'
-        );
-        errorTracker.addError(qualityError);
-        errorTracker.logErrors();
-        process.exit(1);
-      }
-    } else {
-      // Skip tests entirely
-      logger.info('Skipping all quality checks');
-    }
-    
-    // Build application - already has proper progress tracking inside
-    if (!args['skip-build']) {
-      const buildResult = await buildApplication(args);
-      
-      buildSuccess = buildResult;
-      
-      if (!buildResult) {
-        const buildError = new BuildError(
-          'Build failed. Cannot proceed with deployment.'
-        );
-        errorTracker.addError(buildError);
-        errorTracker.logErrors();
-        
-        if (!args['skip-deploy']) {
-          logger.error('Skipping deployment due to build failure');
-        }
-        
-        process.exit(1);
-      }
-    }
-    
-    // Run additional checks, each as a separate step
-    if (!args['skip-module-syntax']) {
-      progressTracker.startStep('Module syntax check');
-      const moduleSyntaxResult = await checkModuleSyntax(args);
-      progressTracker.completeStep(moduleSyntaxResult, moduleSyntaxResult ? 'Module syntax check passed' : 'Module syntax check failed');
-    }
-    
-    if (!args['skip-bundle-analysis']) {
-      progressTracker.startStep('Bundle size analysis');
-      const bundleAnalysisResult = await analyzeBundleSizes(args);
-      progressTracker.completeStep(bundleAnalysisResult, bundleAnalysisResult ? 'Bundle analysis completed' : 'Bundle analysis failed');
-    }
-    
-    if (!args['skip-dependency-scan']) {
-      progressTracker.startStep('Dependency scanning');
-      const dependencyScanResult = await scanDependencies(args);
-      progressTracker.completeStep(dependencyScanResult, dependencyScanResult ? 'Dependency scan completed' : 'Dependency scan failed');
-    }
-    
-    if (!args['skip-dead-code-detection']) {
-      progressTracker.startStep('Dead code detection');
-      const deadCodeResult = await detectDeadCode(args);
-      progressTracker.completeStep(deadCodeResult, deadCodeResult ? 'Dead code detection completed' : 'Dead code detection failed');
-    }
-    
-    if (!args['skip-doc-quality']) {
-      progressTracker.startStep('Documentation quality');
-      const docQualityResult = await checkDocumentationQuality(args);
-      progressTracker.completeStep(docQualityResult, docQualityResult ? 'Documentation quality check passed' : 'Documentation quality check failed');
-    }
-    
-    if (!args['skip-workflow-validation']) {
-      progressTracker.startStep('Workflow validation');
-      const workflowValidationResult = await workflowValidation.validateWorkflows({
-        workflowDir: '.github/workflows',
-        validateSyntax: true,
-        validateActions: true,
-        checkForDeprecation: true
-      });
-      progressTracker.completeStep(workflowValidationResult, workflowValidationResult ? 'Workflow validation passed' : 'Workflow validation failed');
-    }
-    
-    // Deploy to Firebase preview environment if not skipped
-    if (!args['skip-deploy']) {
-      progressTracker.startStep('Deploying to Firebase');
-      const deploymentResult = await deployPreview(args);
-      deploymentSuccess = deploymentResult;
-      
-      // In dry-run mode, we should consider deployment a success even though we didn't actually deploy
-      if (isDryRun && deploymentResult) {
-        // Create a mock successful URL file for dry-run mode
-        const mockUrlData = {
-          admin: "https://dry-run-admin-mock-url.web.app",
-          hours: "https://dry-run-hours-mock-url.web.app",
-          timestamp: new Date().toISOString(),
-          deploymentStatus: 'success',
-          isDryRun: true
-        };
-        savePreviewUrls(mockUrlData);
-      }
-      
-      progressTracker.completeStep(deploymentResult, deploymentResult ? 'Deployment succeeded' : 'Deployment failed');
-      
-      // Channel cleanup step - if deployment was successful and cleanup not skipped
-      if (deploymentResult && !args['skip-cleanup']) {
-        progressTracker.startStep('Cleaning up old channels');
-        await cleanupChannels(args);
-        progressTracker.completeStep(true, 'Channel cleanup completed');
-      }
-    }
-    
-    // Generate reports
-    progressTracker.startStep('Generating reports');
-    const reportResult = await generateReports(args);
-    progressTracker.completeStep(reportResult, reportResult ? 'Reports generated' : 'Report generation failed');
-    
-    // Determine the overall success status
-    const criticalStepsSucceeded = ((!args['skip-deploy'] ? deploymentSuccess : true) && 
-                                 (!args['skip-build'] ? buildSuccess : true) &&
-                                 dependencyCheckSuccess && 
-                                 authenticationSuccess) || isDryRun;
-    
-    // Show final success message
-    if (!args['skip-deploy']) {
-      if (deploymentSuccess) {
-        let deploymentMessage = isDryRun ? 
-                             'Preview workflow completed (dry-run mode)' : 
-                             'Preview successfully deployed!';
-        
-        // Try to include the preview URL if available and not in dry-run mode
-        if (!isDryRun) {
-          const previewUrls = getPreviewUrls();
-          if (previewUrls) {
-            if (previewUrls.admin) {
-              deploymentMessage += `\nAdmin preview URL: ${previewUrls.admin}`;
-            }
-            if (previewUrls.hours) {
-              deploymentMessage += `\nHours preview URL: ${previewUrls.hours}`;
-            }
-          }
-        }
-        
-        progressTracker.finishProgress(true, deploymentMessage);
-      } else {
-        progressTracker.finishProgress(false, 'Preview deployment failed! Check logs for details.');
-      }
-    } else {
-      const checkMessage = criticalStepsSucceeded ? 
-        'Preview checks completed successfully' : 
-        'Preview checks completed with errors';
-      progressTracker.finishProgress(criticalStepsSucceeded, checkMessage);
-    }
-    
-    return {
-      success: criticalStepsSucceeded,
-      report: getReportPath('summary')
-    };
   } catch (error) {
     handleError(error);
-    return { success: false };
-  } finally {
-    stopProcessMonitoring();
+    logger.error('FATAL ERROR: Workflow terminated unexpectedly');
+    process.exit(1);
   }
 }
 
@@ -1813,13 +1632,11 @@ function logWarningWithLevel(message, level = 'warning') {
  * @returns {Promise<boolean>} - Whether the deployment succeeded
  */
 async function deployPreview(args) {
-  // Instead of: await metrics.startStage('deployment');
+  // Start step tracking
   logger.startStep('Deploying preview');
   
   // Flag to track if we've attempted quota cleanup
   let quotaCleanupAttempted = false;
-  
-  // We now use the module-level logWarningWithLevel function
   
   try {
     // Verify Firebase authentication first
@@ -1950,9 +1767,12 @@ async function deployPreview(args) {
         }
         
         // Run cleanup after successful deployment if not skipped
+        // Force quiet mode to avoid duplicate verbose output
         if (!args['skip-cleanup'] && !args['dry-run']) {
-          logger.info('Running channel cleanup after successful deployment...');
-          await cleanupChannels({ ...args, quiet: true });
+          const cleanupResult = await cleanupChannels({ ...args, quiet: true }, true);
+          logger.info(`Cleanup complete: ${cleanupResult.cleaned > 0 ? 
+            `Removed ${cleanupResult.cleaned} old channels` : 
+            'No channels needed cleanup'}`);
         }
         
         progressTracker.completeStep(true, deploymentWarningsOnly ? 
@@ -2096,16 +1916,17 @@ function findUrlsInLogFiles() {
 /**
  * Clean up old preview channels if needed
  * @param {Object} args - Command line arguments
- * @returns {Promise<void>}
+ * @param {boolean} [forceQuiet=false] - Whether to force quiet mode regardless of args
+ * @returns {Promise<Object>} - Cleanup results
  */
-async function cleanupChannels(args) {
+async function cleanupChannels(args, forceQuiet = false) {
   if (args['skip-cleanup']) {
     logger.info('Skipping channel cleanup');
-    return;
+    return { success: true, skipped: true };
   }
   
-  // Default to quiet mode unless explicitly disabled
-  const quiet = args.quiet !== false;
+  // Default to quiet mode unless explicitly disabled, and respect forceQuiet
+  const quiet = forceQuiet || args.quiet !== false;
   
   if (!quiet) {
     logger.sectionHeader('Cleaning Up Old Channels');
@@ -2115,7 +1936,6 @@ async function cleanupChannels(args) {
   
   // Get Firebase and preview config
   const firebaseConfig = config.getFirebaseConfig();
-  const previewConfig = config.getPreviewConfig();
   const { projectId } = firebaseConfig;
   
   // Override the prefix to null to clean up ALL channels regardless of prefix
@@ -2127,69 +1947,78 @@ async function cleanupChannels(args) {
   const keepCount = 5;
   const threshold = 5;
   
-  // Get both target sites from .firebaserc
-  const sitesToCleanup = [];
-  
-  // Get the admin site
-  const adminSite = 'admin-autonomyhero-2024';
-  sitesToCleanup.push(adminSite);
-  
-  // Get the hours site
-  const hoursSite = 'hours-autonomyhero-2024';
-  sitesToCleanup.push(hoursSite);
+  // Get both target sites
+  const sitesToCleanup = ['admin-autonomyhero-2024', 'hours-autonomyhero-2024'];
   
   if (!quiet) {
     logger.info(`Found ${sitesToCleanup.length} sites to clean up: ${sitesToCleanup.join(', ')}`);
-    logger.info(`Checking for old preview channels to clean up...`);
     logger.info(`Will keep only the ${keepCount} most recent channels across all prefixes for each site`);
   }
   
   let totalDeleted = 0;
+  let totalSites = 0;
+  let siteResults = {};
   
-  for (const site of sitesToCleanup) {
-    if (!quiet) {
-      logger.info(`Cleaning up site: ${site}`);
-    }
-    
-    // Check and clean up ALL channels, keeping only the most recent ones
-    const cleanupResult = await channelCleanup.checkAndCleanupIfNeeded({
+  // Create an array of promises to check all sites in parallel
+  const siteCheckPromises = sitesToCleanup.map(async (site) => {
+    // First check if cleanup is needed (without doing cleanup yet)
+    const checkResult = await channelCleanup.isCleanupNeeded({
       projectId,
       site,
-      threshold: threshold,
-      keepCount: keepCount,
-      prefix: null, // No prefix filter = clean up ALL channels
-      autoCleanup: true,
-      quiet: quiet
+      threshold,
+      quiet: true // Always quiet for the check
     });
     
-    if (cleanupResult.needsCleanup) {
-      const siteResults = cleanupResult.sites[site];
-      
-      if (siteResults && siteResults.cleanup) {
-        if (siteResults.cleanup.deleted && siteResults.cleanup.deleted.length > 0) {
-          totalDeleted += siteResults.cleanup.deleted.length;
-          if (!quiet) {
-            logger.success(`Cleaned up ${siteResults.cleanup.deleted.length} old channels for site ${site}`);
-          }
-        } 
-        
-        if (siteResults.cleanup.failed && siteResults.cleanup.failed.length > 0) {
-          if (!quiet) {
-            logger.warn(`Failed to delete ${siteResults.cleanup.failed.length} channels for site ${site}`);
-          }
-        }
-      }
-    } else if (!quiet) {
-      logger.info(`Site ${site} has ${cleanupResult.sites[site]?.channelCount || 0} channels, below threshold (${threshold})`);
-      logger.info(`No channel cleanup needed for site ${site}`);
-    }
+    return { site, checkResult };
+  });
+  
+  // Wait for all site checks to complete
+  const siteChecks = await Promise.all(siteCheckPromises);
+  
+  // Only clean up sites that need it
+  const sitesNeedingCleanup = siteChecks.filter(({ checkResult }) => checkResult.needed);
+  
+  if (sitesNeedingCleanup.length === 0) {
+    if (!quiet) logger.info('No sites need channel cleanup');
+    return { success: true, cleaned: 0 };
   }
   
+  // Create an array of promises to clean up all sites in parallel
+  const cleanupPromises = sitesNeedingCleanup.map(async ({ site }) => {
+    totalSites++;
+    
+    // Clean up ALL channels, keeping only the most recent ones
+    const cleanupResult = await channelCleanup.cleanupChannels({
+      projectId,
+      site,
+      prefix,  // No prefix filter = clean up ALL channels
+      keepCount,
+      quiet: true // Always use quiet mode for consistent output
+    });
+    
+    siteResults[site] = cleanupResult;
+    
+    if (cleanupResult.deleted && cleanupResult.deleted.length > 0) {
+      totalDeleted += cleanupResult.deleted.length;
+    }
+    
+    return { site, result: cleanupResult };
+  });
+  
+  // Wait for all cleanups to complete
+  await Promise.all(cleanupPromises);
+  
   if (totalDeleted > 0) {
-    logger.success(`Cleaned up ${totalDeleted} old channels in total`);
-  } else {
+    logger.success(`Cleaned up ${totalDeleted} old channels across ${totalSites} sites`);
+  } else if (!quiet) {
     logger.info('No channels needed cleanup');
   }
+  
+  return { 
+    success: true, 
+    cleaned: totalDeleted,
+    sites: siteResults
+  };
 }
 
 /**

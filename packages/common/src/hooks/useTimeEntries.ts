@@ -9,6 +9,7 @@ import {
   deleteTimeEntry as apiDeleteTimeEntry,
 } from '../services/api/time-entries';
 import { timeEntryService } from '../firebase/firestore/firestore-service';
+import type { QueryKey, QueryFunction } from '@tanstack/react-query';
 
 /**
  * Hook for fetching time entries with optional filters
