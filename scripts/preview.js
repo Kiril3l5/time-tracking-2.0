@@ -67,6 +67,15 @@ import { parseArgs } from 'node:util';
 import { setTimeout } from 'node:timers/promises';
 import path from 'path';
 import fs from 'node:fs';
+import { fileURLToPath } from 'url';
+
+// Initialize directory paths
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = path.resolve(__dirname, '..');
+
+// Define the auth token file path
+const AUTH_TOKEN_FILE = path.join(rootDir, '.auth-tokens.json');
 
 // Import core modules
 import * as logger from './core/logger.js';
@@ -554,132 +563,122 @@ Preview dashboard is available at preview-dashboard.html
 }
 
 /**
- * Verify authentication and prerequisites
- * @returns {Promise<boolean>} - Whether authentication checks passed
+ * Verifies Firebase and Git authentication
+ * 
+ * @async
+ * @function verifyAuthentication
+ * @returns {Promise<boolean>} True if authentication is successful, false otherwise
  */
 async function verifyAuthentication() {
   // Instead of: await metrics.startStage('authentication');
   logger.startStep('Verifying authentication');
   
   try {
-    // Check for authentication using the auth manager
+    // Check when the last successful authentication was performed
+    const authTokens = _getAuthTokens();
+    const currentTime = new Date().getTime();
+    const tokenAge = authTokens && authTokens.lastAuthenticated 
+      ? (currentTime - authTokens.lastAuthenticated) / (1000 * 60 * 60) // Convert to hours
+      : 24; // If no record, assume it's been 24 hours
+    
+    // If token is older than 12 hours, force reauthentication
+    if (tokenAge >= 12) {
+      logger.info(`Firebase token might be expired (last auth was ${Math.round(tokenAge)} hours ago)`);
+      logger.info('Initiating Firebase reauthentication...');
+      
+      try {
+        const reAuthResult = await commandRunner.runCommandAsync('firebase login --reauth', {
+          timeout: 120000, // 2 minute timeout
+          shell: true
+        });
+        
+        if (reAuthResult.success) {
+          logger.success('Firebase reauthentication successful');
+          // Update the last authentication time
+          _saveAuthTokens({
+            ...authTokens,
+            lastAuthenticated: currentTime
+          });
+        } else {
+          logger.error('Firebase reauthentication failed');
+          logger.error(reAuthResult.error || 'Unknown error during reauthentication');
+          logger.info('Please try manually running: firebase login');
+          progressTracker.completeStep(false, 'Firebase reauthentication failed');
+          return false;
+        }
+      } catch (error) {
+        logger.error(`Error during Firebase reauthentication: ${error.message}`);
+        logger.info('Please try manually running: firebase login');
+        progressTracker.completeStep(false, 'Error during Firebase reauthentication');
+        return false;
+      }
+    }
+    
+    // Verify authentication after potential reauthentication
     const authResult = await authManager.verifyAllAuth();
     
-    if (!authResult.services.firebase.authenticated) {
-      logger.info('Firebase authentication failed. Attempting to reauthenticate...');
+    if (!authResult.success) {
+      logger.error('Authentication verification failed');
       
-      // Maximum number of retries for Firebase commands
-      const MAX_RETRIES = 3;
-      let retryCount = 0;
-      let success = false;
-      
-      while (!success && retryCount < MAX_RETRIES) {
-        try {
-          // Run Firebase reauthentication command with a timeout
-          retryCount++;
-          const reAuthResult = await commandRunner.runCommandAsync('firebase login --reauth', {
-            timeout: 60000, // 60 second timeout
-            shell: true
-          });
-          
-          if (reAuthResult.success) {
-            logger.success('Firebase reauthentication successful');
-            // Verify again after reauthentication
-            const retryResult = await firebaseAuth.verifyAuth();
-            
-            if (retryResult.authenticated) {
-              logger.success(`Authentication verified after retry ${retryCount}`);
-              progressTracker.completeStep(true, 'Firebase authentication successful');
-              return authResult.services.gitAuth.configured && retryResult.authenticated;
-            } else {
-              logger.error(`Firebase authentication still failed after retry ${retryCount}`);
-              // If this was the last retry, handle failure
-              if (retryCount >= MAX_RETRIES) {
-                progressTracker.completeStep(false, 'Firebase authentication failed even after multiple reauthentication attempts');
-                return false;
-              }
-              // Otherwise, retry again
-              logger.info(`Retrying authentication... (Attempt ${retryCount + 1}/${MAX_RETRIES})`);
-            }
-          } else {
-            logger.error(`Firebase reauthentication failed (Attempt ${retryCount}/${MAX_RETRIES})`);
-            
-            // If this was the last retry, handle failure and provide more detailed guidance
-            if (retryCount >= MAX_RETRIES) {
-              logger.error('Maximum retries exceeded. Please try these steps:');
-              logger.info('1. Run "firebase logout" manually');
-              logger.info('2. Run "firebase login" to authenticate with a new session');
-              logger.info('3. Verify you have proper permissions to the Firebase project');
-              logger.info('4. Try running the preview deployment again');
-              progressTracker.completeStep(false, 'Firebase reauthentication failed after multiple attempts');
-              return false;
-            }
-            
-            // Otherwise, retry again after a short delay
-            logger.info(`Waiting for 2 seconds before retrying... (Attempt ${retryCount + 1}/${MAX_RETRIES})`);
-            await setTimeout(2000); // 2 second delay before retry
-          }
-        } catch (error) {
-          logger.error(`Error during Firebase reauthentication (Attempt ${retryCount}/${MAX_RETRIES}): ${error.message}`);
-          
-          // Check for specific error conditions and provide targeted recovery suggestions
-          if (error.message.includes('ENOENT')) {
-            logger.error('Firebase CLI not found. Please install the Firebase CLI:');
-            logger.info('pnpm add -g firebase-tools');
-            progressTracker.completeStep(false, 'Firebase CLI not found');
-            return false;
-          }
-          
-          if (error.message.includes('ETIMEDOUT') || error.message.includes('ECONNREFUSED')) {
-            logger.error('Network error during authentication. Please check your internet connection.');
-            
-            // If this was the last retry, handle failure
-            if (retryCount >= MAX_RETRIES) {
-              progressTracker.completeStep(false, 'Firebase authentication failed due to network issues');
-              return false;
-            }
-            
-            // Otherwise, retry again after a longer delay for network issues
-            logger.info(`Waiting for 5 seconds before retrying... (Attempt ${retryCount + 1}/${MAX_RETRIES})`);
-            await setTimeout(5000); // 5 second delay for network issues
-          } else {
-            // For other errors, if we've reached the max retries, give up
-            if (retryCount >= MAX_RETRIES) {
-              logger.error('Maximum retries exceeded.');
-              progressTracker.completeStep(false, 'Error during Firebase reauthentication');
-              return false;
-            }
-            
-            // Otherwise, retry after a standard delay
-            logger.info(`Retrying authentication... (Attempt ${retryCount + 1}/${MAX_RETRIES})`);
-            await setTimeout(2000);
-          }
-        }
+      if (!authResult.services.firebase.authenticated) {
+        logger.error('Firebase authentication failed');
+        logger.info('Please run: firebase login');
       }
       
-      // If we reach here, all retries have failed
-      progressTracker.completeStep(false, 'Firebase authentication failed after multiple attempts');
+      if (!authResult.services.gitAuth.authenticated) {
+        logger.error('Git authentication failed');
+        logger.info('Please configure Git user name and email:');
+        logger.info('git config --global user.name "Your Name"');
+        logger.info('git config --global user.email "your.email@example.com"');
+      }
+      
+      progressTracker.completeStep(false, 'Authentication verification failed');
       return false;
     }
     
-    // Check if Git authentication passed
-    if (!authResult.services.gitAuth.configured) {
-      logger.error('Git configuration check failed');
-      logger.info('Please configure your Git user name and email:');
-      logger.info('git config --global user.name "Your Name"');
-      logger.info('git config --global user.email "your.email@example.com"');
-      progressTracker.completeStep(false, 'Git configuration check failed');
-      return false;
-    }
-    
-    // All authentication checks passed
+    logger.success(`Firebase authenticated as: ${authResult.services.firebase.email || 'Unknown'}`);
+    logger.success(`Git user: ${authResult.services.gitAuth.name} <${authResult.services.gitAuth.email}>`);
     progressTracker.completeStep(true, 'Authentication verified');
     return true;
   } catch (error) {
-    // Don't collect metrics, just throw the error to stop workflow
-    handleError(error);
-  } finally {
-    // Instead of: await metrics.endStage('authentication');
+    logger.error(`Error during authentication verification: ${error.message}`);
+    progressTracker.completeStep(false, 'Error during authentication verification');
+    return false;
+  }
+}
+
+/**
+ * Get stored authentication tokens
+ * 
+ * @function _getAuthTokens
+ * @returns {Object|null} Authentication tokens or null if not found
+ * @private
+ */
+function _getAuthTokens() {
+  try {
+    if (fs.existsSync(AUTH_TOKEN_FILE)) {
+      const data = fs.readFileSync(AUTH_TOKEN_FILE, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    logger.debug(`Failed to read auth tokens: ${error.message}`);
+  }
+  return null;
+}
+
+/**
+ * Save authentication tokens
+ * 
+ * @function _saveAuthTokens
+ * @param {Object} tokens - Authentication tokens to save
+ * @private
+ */
+function _saveAuthTokens(tokens) {
+  try {
+    fs.writeFileSync(AUTH_TOKEN_FILE, JSON.stringify(tokens, null, 2), 'utf8');
+    logger.debug('Saved auth tokens');
+  } catch (error) {
+    logger.debug(`Failed to save auth tokens: ${error.message}`);
   }
 }
 

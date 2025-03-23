@@ -71,48 +71,89 @@ import * as logger from '../core/logger.js';
 export function checkFirebaseAuth() {
   logger.info('Checking Firebase CLI authentication...');
   
-  const result = commandRunner.runCommand('firebase login:list', {
-    stdio: 'pipe',
-    ignoreError: true
-  });
+  try {
+    // Run additional command that requires valid token to double-check authentication
+    // This is more reliable than just using login:list which might show logged in even with expired token
+    const projectsResult = commandRunner.runCommand('firebase projects:list', {
+      stdio: 'pipe',
+      ignoreError: true
+    });
+  
+    // If projects:list fails, token is likely expired
+    if (!projectsResult.success || projectsResult.output?.includes('Error: Failed to get Firebase projects')) {
+      logger.warn('Firebase token may be expired or invalid');
+      return {
+        authenticated: false,
+        error: 'Firebase token expired or invalid',
+        errorDetails: projectsResult.error || 'Token validation failed'
+      };
+    }
+    
+    // Now check with login:list to get the email
+    const result = commandRunner.runCommand('firebase login:list', {
+      stdio: 'pipe',
+      ignoreError: true
+    });
 
-  if (!result.success) {
-    logger.error('Failed to check Firebase authentication status');
-    logger.error('Make sure the Firebase CLI is installed:');
-    logger.info('npm install -g firebase-tools');
+    if (!result.success) {
+      logger.error('Failed to check Firebase authentication status');
+      logger.error('Make sure the Firebase CLI is installed:');
+      logger.info('npm install -g firebase-tools');
+      
+      return {
+        authenticated: false,
+        error: 'Firebase CLI command failed',
+        errorDetails: result.error
+      };
+    }
+
+    const output = result.output || '';
+    
+    // Check if any users are logged in
+    if (output.includes('No users signed in')) {
+      logger.error('No Firebase users signed in');
+      logger.info('To authenticate, run:');
+      logger.info('firebase login');
+      
+      return {
+        authenticated: false,
+        error: 'No Firebase users signed in'
+      };
+    }
+    
+    // If we get here, there should be a logged in user
+    // Extract email using regex
+    const emailMatch = output.match(/User: ([^\s]+)/);
+    const email = emailMatch ? emailMatch[1] : 'Unknown';
+    
+    if (email === 'Unknown') {
+      logger.warn('Failed to extract user email from Firebase authentication');
+      logger.warn('This might indicate an issue with the Firebase CLI or token');
+      
+      // If email is Unknown but we passed the project list check, still consider it authenticated
+      // but with a warning
+      logger.success(`Firebase authenticated but unable to identify user email`);
+      return {
+        authenticated: true,
+        email: 'Unknown',
+        warning: 'Unable to determine user email'
+      };
+    }
+    
+    logger.success(`Firebase authenticated as: ${email}`);
     
     return {
-      authenticated: false,
-      error: 'Firebase CLI command failed',
-      errorDetails: result.error
+      authenticated: true,
+      email
     };
-  }
-
-  const output = result.output || '';
-  
-  // Check if any users are logged in
-  if (output.includes('No users signed in')) {
-    logger.error('No Firebase users signed in');
-    logger.info('To authenticate, run:');
-    logger.info('firebase login');
-    
+  } catch (error) {
+    logger.error(`Unexpected error checking Firebase authentication: ${error.message}`);
     return {
       authenticated: false,
-      error: 'No Firebase users signed in'
+      error: 'Exception while checking Firebase authentication',
+      errorDetails: error.message
     };
   }
-  
-  // If we get here, there should be a logged in user
-  // Extract email using regex
-  const emailMatch = output.match(/User: ([^\s]+)/);
-  const email = emailMatch ? emailMatch[1] : 'Unknown';
-  
-  logger.success(`Firebase authenticated as: ${email}`);
-  
-  return {
-    authenticated: true,
-    email
-  };
 }
 
 /**

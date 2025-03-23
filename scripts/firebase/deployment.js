@@ -152,17 +152,51 @@ export async function deployToPreviewChannel(options) {
   // Deploy to Firebase
   logger.info('Deploying to Firebase...');
   
-  // Use a simpler command format without problematic parameters, similar to legacy deploy-test.js
-  const deployCommand = `firebase hosting:channel:deploy ${channelId} --project=${projectId}`;
+  // Format the channel ID for Firebase CLI (clean up any potentially invalid characters)
+  const cleanChannelId = channelId.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
   
-  const deployResult = await commandRunner.runCommandAsync(deployCommand);
+  // Use a platform-independent command format with proper escaping
+  const isWindows = process.platform === 'win32';
+  const deployCommand = isWindows
+    ? `firebase hosting:channel:deploy ${cleanChannelId} --project=${projectId} --json`
+    : `firebase hosting:channel:deploy ${cleanChannelId} --project=${projectId} --json`;
+  
+  logger.info(`Running command: ${deployCommand}`);
+  
+  // Increase timeout for Windows environments which might be slower
+  const timeout = isWindows ? 300000 : 180000; // 5 minutes on Windows, 3 minutes elsewhere
+  
+  const deployResult = await commandRunner.runCommandAsync(deployCommand, {
+    ignoreError: true, // Handle errors ourselves for better error messages
+    timeout,
+    shell: true // Use shell on all platforms for better compatibility
+  });
   
   if (!deployResult.success) {
     logger.error('Firebase deployment failed');
+    
+    // Provide more specific error information and recovery steps
+    if (deployResult.stderr?.includes('not authorized')) {
+      logger.error('Authorization error: You are not authorized to deploy to this Firebase project');
+      logger.info('Please verify:');
+      logger.info('1. You are logged in with the correct account (firebase login)');
+      logger.info('2. Your account has permission to deploy to this project');
+      logger.info('3. The project ID is correct');
+    } else if (deployResult.stderr?.includes('not found')) {
+      logger.error(`Project or site not found: ${projectId}`);
+      logger.info('Please verify the project exists and is correctly specified');
+    } else if (deployResult.stderr?.includes('ETIMEDOUT') || deployResult.stderr?.includes('ECONNREFUSED')) {
+      logger.error('Network error: Unable to connect to Firebase servers');
+      logger.info('Please check your internet connection and try again');
+    } else {
+      logger.error(`Deployment error: ${deployResult.stderr || deployResult.error || 'Unknown error'}`);
+    }
+    
     return {
       success: false,
       error: 'Firebase deployment failed',
-      deployOutput: deployResult.output
+      deployOutput: deployResult.output,
+      deployError: deployResult.stderr
     };
   }
   

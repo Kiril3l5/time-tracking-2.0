@@ -124,14 +124,30 @@ export function extractHostingUrls(options) {
   
   try {
     // Extract all hosting URLs (both web.app and firebaseapp.com)
+    // Original regex patterns
     const webAppUrlRegex = /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.web\.app/g;
     const firebaseUrlRegex = /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.firebaseapp\.com/g;
     
-    const webAppUrls = [...new Set(deploymentOutput.match(webAppUrlRegex) || [])];
-    const firebaseUrls = [...new Set(deploymentOutput.match(firebaseUrlRegex) || [])];
+    // Enhanced patterns to handle more URL formats, including site URLs without channels
+    const enhancedWebAppUrlRegex = /https:\/\/([a-zA-Z0-9][a-zA-Z0-9-]*(?:--[a-zA-Z0-9][a-zA-Z0-9-]*)?)\.web\.app/g;
+    const enhancedFirebaseUrlRegex = /https:\/\/([a-zA-Z0-9][a-zA-Z0-9-]*(?:--[a-zA-Z0-9][a-zA-Z0-9-]*)?)\.firebaseapp\.com/g;
+    
+    // Also check for the Channel URL format in the output
+    const channelUrlRegex = /Channel URL \([^)]+\): (https:\/\/[^\s]+)/g;
+    
+    // Extract URLs using all patterns
+    const webAppUrls = [...new Set(deploymentOutput.match(enhancedWebAppUrlRegex) || [])];
+    const firebaseUrls = [...new Set(deploymentOutput.match(enhancedFirebaseUrlRegex) || [])];
+    
+    // Also check for channel URLs directly mentioned
+    let channelUrls = [];
+    const channelMatches = [...deploymentOutput.matchAll(channelUrlRegex)];
+    if (channelMatches.length > 0) {
+      channelUrls = channelMatches.map(match => match[1]);
+    }
     
     // Combine and deduplicate URLs
-    const allUrls = [...new Set([...webAppUrls, ...firebaseUrls])];
+    const allUrls = [...new Set([...webAppUrls, ...firebaseUrls, ...channelUrls])];
     
     if (allUrls.length === 0) {
       if (verbose) {
