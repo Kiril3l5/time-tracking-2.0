@@ -475,6 +475,30 @@ async function runWorkflow() {
     let branchName = currentBranch;
     let createdNewBranch = false;
     
+    // Check if Firebase authentication should be refreshed first
+    const checkAuth = await prompt("Would you like to verify Firebase authentication first? (y/N): ");
+    if (checkAuth.toLowerCase() === 'y') {
+      logger.info("Running Firebase login to refresh authentication...");
+      try {
+        const loginResult = executeCommand('firebase login', { stdio: 'inherit' });
+        if (loginResult.success) {
+          logger.success("Firebase authentication successful!");
+        } else {
+          logger.error("Firebase authentication failed. The workflow may encounter issues.");
+          
+          const shouldContinue = await prompt("Would you like to continue anyway? (y/N): ");
+          if (shouldContinue.toLowerCase() !== 'y') {
+            logger.info("Exiting workflow. Please fix authentication issues and try again.");
+            rl.close();
+            return;
+          }
+        }
+      } catch (error) {
+        logger.error(`Error during Firebase authentication: ${error.message}`);
+        logger.warn("Continuing workflow, but deployment steps may fail.");
+      }
+    }
+    
     // Check if they want to sync main first
     if (currentBranch !== 'main' && currentBranch !== 'master') {
       const shouldSyncMain = await prompt("Would you like to sync your local main branch with remote first? (y/N): ");
@@ -646,78 +670,237 @@ async function runWorkflow() {
     logger.sectionHeader('RUNNING PREVIEW DEPLOYMENT');
     logger.info("Starting preview deployment. This may take a few minutes...");
     
+    // Run the preview workflow with better error handling
+    const previewCommand = 'pnpm run preview';
+    logger.info("\nRunning preview deployment workflow...");
+    
+    // Track overall workflow success
+    let workflowSuccess = true;
+    let previewUrls = null;
+    
     try {
-      // Run preview with output streaming to console
-      executeCommand('pnpm run preview', { stdio: 'inherit' });
+      // Execute the preview command
+      const previewResult = executeCommand(previewCommand, { 
+        stdio: 'pipe',
+        suppressErrors: true 
+      });
       
-      // Check if preview was successful
-      logger.success("Preview deployment completed!");
-      
-      // Open dashboard if available
-      if (fs.existsSync(path.join(rootDir, 'preview-dashboard.html'))) {
-        logger.info("Opening preview dashboard...");
+      if (!previewResult.success) {
+        logger.error("Preview deployment encountered errors");
         
-        // Different commands based on OS
+        // Save the output to a log file for URL extraction
+        const tempDir = path.join(process.cwd(), 'temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+        
+        const logFilePath = path.join(tempDir, 'preview-deploy-error.log');
+        fs.writeFileSync(logFilePath, previewResult.output || '');
+        
+        // Check if deployment actually completed despite errors
+        logger.info("Checking for preview URLs in deployment output...");
+        
         try {
-          if (process.platform === 'win32') {
-            executeCommand('start preview-dashboard.html');
-          } else if (process.platform === 'darwin') {
-            executeCommand('open preview-dashboard.html');
+          // Attempt to extract URLs from the output
+          // Import report collector functions dynamically
+          const reportModule = await import('./reports/report-collector.js');
+          
+          // Try to extract URLs from the error output
+          previewUrls = reportModule.extractPreviewUrls({tempDir});
+          
+          if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
+            logger.success("Found preview URLs despite deployment errors!");
+            
+            // Display the URLs
+            if (previewUrls.admin) {
+              logger.info(`Admin Dashboard URL: ${previewUrls.admin}`);
+            }
+            
+            if (previewUrls.hours) {
+              logger.info(`Hours App URL: ${previewUrls.hours}`);
+            }
+            
+            // Mark as partial success
+            logger.warn("Deployment completed with warnings. Preview URLs are available.");
+            workflowSuccess = true;
           } else {
-            executeCommand('xdg-open preview-dashboard.html');
+            logger.error("Could not find valid preview URLs. Deployment likely failed.");
+            workflowSuccess = false;
           }
-        } catch (error) {
-          logger.warn("Could not automatically open dashboard. Please open preview-dashboard.html manually.");
+        } catch (extractError) {
+          logger.error(`Error extracting preview URLs: ${extractError.message}`);
+          workflowSuccess = false;
+        }
+      } else {
+        logger.success("Preview deployment command completed successfully!");
+        
+        // Import report collector functions dynamically
+        const reportModule = await import('./reports/report-collector.js');
+        
+        // Extract URLs from the command output
+        const tempDir = path.join(process.cwd(), 'temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+        
+        // Save output to a log file for URL extraction
+        const logFilePath = path.join(tempDir, 'preview-deploy.log');
+        fs.writeFileSync(logFilePath, previewResult.output || '');
+        
+        // Extract URLs from the logs
+        previewUrls = reportModule.extractPreviewUrls({tempDir});
+        
+        if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
+          logger.success("Preview URLs extracted successfully!");
+          
+          // Display the URLs
+          if (previewUrls.admin) {
+            logger.info(`Admin Dashboard URL: ${previewUrls.admin}`);
+          }
+          
+          if (previewUrls.hours) {
+            logger.info(`Hours App URL: ${previewUrls.hours}`);
+          }
+          
+          workflowSuccess = true;
+        } else {
+          logger.warn("Could not extract preview URLs from deployment logs.");
+          logger.warn("Deployment may have succeeded, but no URLs were found.");
+          workflowSuccess = true; // Command succeeded, but URL extraction failed
         }
       }
       
-      // Step 5: Offer to create a PR
-      const shouldCreatePR = await prompt("Would you like to create a pull request? (Y/n): ");
-      if (shouldCreatePR.toLowerCase() !== 'n') {
-        // Generate PR title and description suggestions
-        logger.info("Generating PR title and description suggestions based on your changes...");
-        const suggestion = suggestPRContent();
+      if (!workflowSuccess) {
+        logger.warn("The preview deployment encountered errors. Please address them before continuing.");
+        logger.info("You might need to run 'firebase login' to refresh your authentication.");
         
-        // Ask for PR title with suggestion
-        const prTitle = await prompt(`Enter PR title [${suggestion.title}]: `);
-        const finalTitle = prTitle || suggestion.title;
-        
-        // Show suggested description
-        logger.info("Suggested PR description:");
-        console.log("------------------------");
-        console.log(suggestion.description);
-        console.log("------------------------");
-        
-        // Ask if user wants to use suggestion or provide custom
-        const useDefault = await prompt("Use this description? (Y/n): ");
-        let finalDescription = suggestion.description;
-        
-        if (useDefault.toLowerCase() === 'n') {
-          logger.info("Enter your PR description (end with a line containing only 'END'):");
-          let customDescription = "";
-          let line;
-          while ((line = await prompt("")) !== "END") {
-            customDescription += line + "\n";
-          }
-          finalDescription = customDescription;
-        }
-        
-        // Create PR with better error handling
-        const prSuccess = await createPullRequest(finalTitle, finalDescription);
-        
-        // If PR was successful, offer guidance on post-PR workflow
-        if (prSuccess) {
-          logger.sectionHeader('AFTER PR IS MERGED');
-          logger.info("After your PR is merged on GitHub, follow these steps:");
-          logger.info("1. Switch to main branch: git checkout main");
-          logger.info("2. Pull latest changes: git pull origin main");
-          logger.info("3. Start a new feature with: pnpm run workflow:new");
-          logger.info("\nYou can run 'pnpm run sync-main' at any time to update your local main branch.");
+        const shouldContinue = await prompt("Would you still like to continue with the workflow? (y/N): ");
+        if (shouldContinue.toLowerCase() !== 'y') {
+          logger.info("Exiting workflow. Please fix the issues and try again.");
+          rl.close();
+          return;
         }
       }
     } catch (error) {
-      logger.error("Preview deployment failed:", error.message);
-      logger.info("Review the error message above and fix any issues before trying again.");
+      logger.error(`Error running preview: ${error.message}`);
+      workflowSuccess = false;
+      
+      const shouldContinue = await prompt("Would you like to continue with the workflow despite the error? (y/N): ");
+      if (shouldContinue.toLowerCase() !== 'y') {
+        logger.info("Exiting workflow. Please fix the issues and try again.");
+        rl.close();
+        return;
+      }
+    }
+    
+    // Step 5: Offer to create a PR
+    const shouldCreatePR = await prompt("Would you like to create a pull request? (Y/n): ");
+    if (shouldCreatePR.toLowerCase() !== 'n') {
+      // Check for uncommitted changes that need to be committed before PR creation
+      if (hasUncommittedChanges()) {
+        logger.info("Uncommitted changes detected that should be committed before creating PR.");
+        logger.info("Modified files:");
+        console.log(executeCommand('git status --short'));
+        
+        // Offer to auto-commit all remaining changes
+        const shouldAutoCommit = await prompt("Would you like to automatically commit these changes before creating PR? (Y/n): ");
+        if (shouldAutoCommit.toLowerCase() !== 'n') {
+          // Ask for commit message
+          let defaultMessage = `Updates after successful preview deployment`;
+          const commitMessage = await prompt(`Enter commit message [${defaultMessage}]: `);
+          const finalMessage = commitMessage || defaultMessage;
+          
+          // Commit changes
+          logger.info("Auto-committing changes...");
+          executeCommand('git add .');
+          const commitResult = executeCommand(`git commit -m "${finalMessage}"`);
+          
+          if (commitResult.success) {
+            logger.success("Changes committed successfully!");
+          } else {
+            logger.error("Failed to commit changes. Please commit manually before creating PR.");
+            const shouldContinue = await prompt("Would you like to continue with PR creation anyway? (y/N): ");
+            if (shouldContinue.toLowerCase() !== 'y') {
+              logger.info("PR creation canceled. Commit your changes manually and try again.");
+              return;
+            }
+          }
+        } else {
+          // User chose not to auto-commit
+          logger.warn("Proceeding with PR creation with uncommitted changes.");
+          logger.warn("Note: You may encounter errors during PR creation due to uncommitted changes.");
+        }
+      }
+      
+      // Generate PR title and description suggestions
+      logger.info("Generating PR title and description suggestions based on your changes...");
+      const suggestion = suggestPRContent();
+      
+      // Enhance description with preview URLs if available
+      if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
+        // Add preview links section to the suggested description
+        suggestion.description += "\n\n## Preview Deployment\n";
+        
+        if (previewUrls.admin) {
+          suggestion.description += `- [Admin Dashboard](${previewUrls.admin})\n`;
+        }
+        
+        if (previewUrls.hours) {
+          suggestion.description += `- [Hours App](${previewUrls.hours})\n`;
+        }
+        
+        if (previewUrls.urls && previewUrls.urls.length > 0) {
+          previewUrls.urls.forEach(url => {
+            suggestion.description += `- [Preview](${url})\n`;
+          });
+        }
+        
+        logger.info("Enhanced description with preview URLs from successful deployment.");
+      }
+      
+      // Ask for PR title with suggestion
+      const prTitle = await prompt(`Enter PR title [${suggestion.title}]: `);
+      const finalTitle = prTitle || suggestion.title;
+      
+      // Show suggested description
+      logger.info("Suggested PR description:");
+      console.log("------------------------");
+      console.log(suggestion.description);
+      console.log("------------------------");
+      
+      // Ask if user wants to use suggestion or provide custom
+      const useDefault = await prompt("Use this description? (Y/n): ");
+      let finalDescription = suggestion.description;
+      
+      if (useDefault.toLowerCase() === 'n') {
+        logger.info("Enter your PR description (end with a line containing only 'END'):");
+        let customDescription = "";
+        let line;
+        while ((line = await prompt("")) !== "END") {
+          customDescription += line + "\n";
+        }
+        finalDescription = customDescription;
+      }
+      
+      // Create PR with better error handling
+      const prSuccess = await createPullRequest(finalTitle, finalDescription);
+      
+      // If PR was successful, offer guidance on post-PR workflow
+      if (prSuccess) {
+        logger.sectionHeader('AFTER PR IS MERGED');
+        logger.info("After your PR is merged on GitHub, follow these steps:");
+        logger.info("1. Switch to main branch: git checkout main");
+        logger.info("2. Pull latest changes: git pull origin main");
+        logger.info("3. Start a new feature with: pnpm run workflow:new");
+        logger.info("\nYou can run 'pnpm run sync-main' at any time to update your local main branch.");
+      }
+    }
+    
+    // Final status message
+    if (workflowSuccess) {
+      logger.success("\nWorkflow completed successfully! 🎉");
+    } else {
+      logger.warn("\nWorkflow completed with errors! Please review the log messages above.");
     }
     
     // Provide next steps
@@ -732,12 +915,11 @@ async function runWorkflow() {
     
     // Final prompt - this is just for UX completion, no action needed
     await prompt("Press Enter to exit...");
-    
-    rl.close();
   } catch (error) {
-    logger.error("Workflow automation failed:", error.message);
+    logger.error(`Workflow error: ${error.message}`);
+  } finally {
+    // Close the readline interface
     rl.close();
-    process.exit(1);
   }
 }
 

@@ -40,6 +40,8 @@
 
 import * as commandRunner from '../core/command-runner.js';
 import * as logger from '../core/logger.js';
+import { execSync } from 'child_process';
+import { spawn } from 'child_process';
 
 /* global process */
 
@@ -68,51 +70,133 @@ import * as logger from '../core/logger.js';
  *   console.error(`Run 'firebase login' to authenticate`);
  * }
  */
-export function checkFirebaseAuth() {
+export async function checkFirebaseAuth() {
   logger.info('Checking Firebase CLI authentication...');
   
-  const result = commandRunner.runCommand('firebase login:list', {
-    stdio: 'pipe',
-    ignoreError: true
-  });
-
-  if (!result.success) {
-    logger.error('Failed to check Firebase authentication status');
-    logger.error('Make sure the Firebase CLI is installed:');
-    logger.info('npm install -g firebase-tools');
+  try {
+    // Start by checking the current auth state with login:list
+    const loginListResult = commandRunner.runCommand('firebase login:list', {
+      stdio: 'pipe',
+      ignoreError: true
+    });
     
+    // Check if login:list was successful and shows a user is logged in
+    const isLoggedIn = loginListResult.success && 
+                      !loginListResult.output.includes('No users signed in');
+                      
+    // Extract email if available
+    let email = 'Unknown';
+    if (isLoggedIn) {
+      const emailMatch = loginListResult.output.match(/User: ([^\s]+)/);
+      if (emailMatch) {
+        email = emailMatch[1];
+      }
+    }
+    
+    // Try a command that requires valid auth to verify token is still valid
+    const projectsResult = commandRunner.runCommand('firebase projects:list', {
+      stdio: 'pipe',
+      ignoreError: true
+    });
+    
+    // If projects:list succeeded, we're good to go
+    if (projectsResult.success) {
+      logger.success(`Firebase authenticated as: ${email}`);
+      return {
+        authenticated: true,
+        email
+      };
+    }
+    
+    // If we get here, the token might be expired - try to use a direct process spawn
+    logger.warn('Firebase token may be expired or invalid');
+    logger.info('Initiating Firebase reauthentication via direct process...');
+    
+    // This is the critical part - we need to stop the workflow and let the user complete auth
+    // Run firebase login directly and wait for completion
+    return new Promise((resolve, reject) => {
+      try {
+        const proc = spawn('firebase', ['login', '--reauth'], {
+          stdio: 'inherit',
+          shell: true
+        });
+        
+        proc.on('exit', (code) => {
+          if (code === 0) {
+            logger.success('Firebase reauthentication successful');
+            
+            // Verify auth after reauth
+            const projectCheckResult = commandRunner.runCommand('firebase projects:list', {
+              stdio: 'pipe',
+              ignoreError: true
+            });
+            
+            if (projectCheckResult.success) {
+              // Get user email
+              const emailCheckResult = commandRunner.runCommand('firebase login:list', {
+                stdio: 'pipe',
+                ignoreError: true
+              });
+              
+              if (emailCheckResult.success) {
+                const output = emailCheckResult.output;
+                const emailMatch = output.match(/User: ([^\s]+)/);
+                const email = emailMatch ? emailMatch[1] : 'Unknown';
+                
+                resolve({
+                  authenticated: true,
+                  email
+                });
+              } else {
+                resolve({
+                  authenticated: true,
+                  email: 'Unknown'
+                });
+              }
+            } else {
+              // Even after reauth, projects:list failed
+              logger.error('Firebase reauthentication completed but still unable to access projects');
+              resolve({
+                authenticated: false,
+                error: 'Firebase authentication issue persists after reauthentication',
+                errorDetails: 'Please try running "firebase logout" followed by "firebase login" manually'
+              });
+            }
+          } else {
+            logger.error('Firebase reauthentication failed');
+            resolve({
+              authenticated: false,
+              error: 'Firebase token expired or invalid',
+              errorDetails: `Reauthentication failed with code ${code}`
+            });
+          }
+        });
+        
+        proc.on('error', (err) => {
+          logger.error(`Firebase reauthentication error: ${err.message}`);
+          resolve({
+            authenticated: false,
+            error: 'Firebase token expired or invalid',
+            errorDetails: err.message
+          });
+        });
+      } catch (error) {
+        logger.error(`Failed to spawn Firebase reauthentication process: ${error.message}`);
+        resolve({
+          authenticated: false,
+          error: 'Failed to initiate reauthentication',
+          errorDetails: error.message
+        });
+      }
+    });
+  } catch (error) {
+    logger.error(`Unexpected error checking Firebase authentication: ${error.message}`);
     return {
       authenticated: false,
-      error: 'Firebase CLI command failed',
-      errorDetails: result.error
+      error: 'Exception while checking Firebase authentication',
+      errorDetails: error.message
     };
   }
-
-  const output = result.output || '';
-  
-  // Check if any users are logged in
-  if (output.includes('No users signed in')) {
-    logger.error('No Firebase users signed in');
-    logger.info('To authenticate, run:');
-    logger.info('firebase login');
-    
-    return {
-      authenticated: false,
-      error: 'No Firebase users signed in'
-    };
-  }
-  
-  // If we get here, there should be a logged in user
-  // Extract email using regex
-  const emailMatch = output.match(/User: ([^\s]+)/);
-  const email = emailMatch ? emailMatch[1] : 'Unknown';
-  
-  logger.success(`Firebase authenticated as: ${email}`);
-  
-  return {
-    authenticated: true,
-    email
-  };
 }
 
 /**
@@ -389,7 +473,7 @@ export async function verifyAuth() {
   }
   
   // Then check authentication status
-  const authStatus = checkFirebaseAuth();
+  const authStatus = await checkFirebaseAuth();
   
   // Combine the results
   return {

@@ -43,6 +43,8 @@ import * as commandRunner from '../core/command-runner.js';
 import * as logger from '../core/logger.js';
 import * as config from '../core/config.js';
 import * as urlExtractor from './url-extractor.js';
+import * as path from 'path';
+import * as fs from 'fs';
 
 /* global process */
 
@@ -59,11 +61,14 @@ import * as urlExtractor from './url-extractor.js';
  * @param {boolean} [options.cleanBuild=true] - Whether to clean the build directory first
  * @param {string} [options.message] - Optional message for the deployment
  * @param {Object} [options.env={}] - Environment variables for the build
+ * @param {string} [options.tempDir=path.join(process.cwd(), 'temp')] - Temporary directory for deployment logs
  * @returns {Promise<Object>} Deployment result object containing:
  *   - success {boolean}: Whether the deployment was successful
  *   - channelId {string}: The channel ID that was deployed to
  *   - urls {string[]}: Array of preview URLs for the deployed site
+ *   - formattedUrls {Object}: Object containing formatted preview URLs
  *   - rawOutput {string}: Raw output from the Firebase deployment command
+ *   - logFile {string}: Path to the deployment log file
  *   - error {string}: Error message if the deployment failed
  * @description Creates a preview deployment on Firebase Hosting using the specified
  * channel ID. First builds the application, then deploys it to the specified
@@ -96,7 +101,8 @@ export async function deployToPreviewChannel(options) {
     buildDir = 'build',
     cleanBuild = true,
     message = '',
-    env = {}
+    env = {},
+    tempDir = path.join(process.cwd(), 'temp')
   } = options;
   
   // Validate inputs
@@ -106,6 +112,16 @@ export async function deployToPreviewChannel(options) {
       success: false,
       error: 'Missing required parameters (projectId, site, channelId)'
     };
+  }
+  
+  // Ensure temp directory exists
+  try {
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+      logger.debug(`Created temp directory: ${tempDir}`);
+    }
+  } catch (error) {
+    logger.warn(`Error creating temp directory: ${error.message}`);
   }
   
   logger.info(`Deploying to Firebase preview channel: ${channelId}`);
@@ -152,47 +168,144 @@ export async function deployToPreviewChannel(options) {
   // Deploy to Firebase
   logger.info('Deploying to Firebase...');
   
-  // Use a simpler command format without problematic parameters, similar to legacy deploy-test.js
-  const deployCommand = `firebase hosting:channel:deploy ${channelId} --project=${projectId}`;
+  // Format the channel ID for Firebase CLI (clean up any potentially invalid characters)
+  const cleanChannelId = channelId.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
   
-  const deployResult = await commandRunner.runCommandAsync(deployCommand);
+  // Use a platform-independent command format with proper escaping
+  const isWindows = process.platform === 'win32';
+  
+  // File to save the deployment log
+  const deployLogFile = path.join(tempDir, 'firebase-deploy.log');
+  
+  // Create the command - don't use --json flag to get human-readable output with URLs
+  const deployCommand = `firebase hosting:channel:deploy ${cleanChannelId} --project=${projectId}`;
+  
+  logger.info(`Running command: ${deployCommand}`);
+  
+  // Increase timeout for Windows environments which might be slower
+  const timeout = isWindows ? 300000 : 180000; // 5 minutes on Windows, 3 minutes elsewhere
+  
+  // Run the command and capture output
+  const deployResult = await commandRunner.runCommandAsync(deployCommand, {
+    ignoreError: true, // Handle errors ourselves for better error messages
+    timeout,
+    captureOutput: true, // Make sure output is captured
+    shell: true // Use shell on all platforms for better compatibility
+  });
+  
+  // Save the full output to a log file for reliable URL extraction later
+  try {
+    fs.writeFileSync(deployLogFile, deployResult.output || '');
+    logger.debug(`Saved deployment log to ${deployLogFile}`);
+  } catch (error) {
+    logger.warn(`Failed to save deployment log: ${error.message}`);
+  }
   
   if (!deployResult.success) {
     logger.error('Firebase deployment failed');
+    
+    // Provide more specific error information and recovery steps
+    if (deployResult.stderr?.includes('not authorized')) {
+      logger.error('Authorization error: You are not authorized to deploy to this Firebase project');
+      logger.info('Please verify:');
+      logger.info('1. You are logged in with the correct account (firebase login)');
+      logger.info('2. Your account has permission to deploy to this project');
+      logger.info('3. The project ID is correct');
+    } else if (deployResult.stderr?.includes('not found')) {
+      logger.error(`Project or site not found: ${projectId}`);
+      logger.info('Please verify the project exists and is correctly specified');
+    } else if (deployResult.stderr?.includes('ETIMEDOUT') || deployResult.stderr?.includes('ECONNREFUSED')) {
+      logger.error('Network error: Unable to connect to Firebase servers');
+      logger.info('Please check your internet connection and try again');
+    } else {
+      logger.error(`Deployment error: ${deployResult.stderr || deployResult.error || 'Unknown error'}`);
+    }
+    
     return {
       success: false,
       error: 'Firebase deployment failed',
-      deployOutput: deployResult.output
+      deployOutput: deployResult.output,
+      deployError: deployResult.stderr,
+      logFile: deployLogFile
     };
   }
   
   // Extract preview URLs from the output using the urlExtractor module
+  logger.info('Extracting preview URLs from deployment output...');
+  
   const extractResult = urlExtractor.extractHostingUrls({
     deploymentOutput: deployResult.output,
     verbose: true
   });
+  
+  // Save URLs to a dedicated file for reliable access
+  const previewUrlFile = path.join(tempDir, 'preview-urls.json');
+  
+  // Format extracted URLs by site if we can identify them
+  const formattedUrls = {};
+  if (extractResult.success && extractResult.urls.length > 0) {
+    // Try to identify admin and hours URLs based on URL parts
+    for (const url of extractResult.urls) {
+      if (url.includes('admin')) {
+        formattedUrls.admin = url;
+      } else if (url.includes('hours')) {
+        formattedUrls.hours = url;
+      } else if (!formattedUrls.admin) {
+        // Default assignment if we can't identify the purpose
+        formattedUrls.admin = url;
+      } else if (!formattedUrls.hours) {
+        formattedUrls.hours = url;
+      }
+    }
+    
+    // Save all URLs, even if we couldn't categorize them
+    if (Object.keys(formattedUrls).length === 0) {
+      formattedUrls.urls = extractResult.urls;
+    }
+    
+    // Save formatted URLs
+    try {
+      fs.writeFileSync(previewUrlFile, JSON.stringify(formattedUrls, null, 2));
+      logger.debug(`Saved preview URLs to ${previewUrlFile}`);
+    } catch (error) {
+      logger.warn(`Failed to save preview URLs: ${error.message}`);
+    }
+  }
   
   if (!extractResult.success || extractResult.urls.length === 0) {
     logger.warn('Deployment succeeded but no preview URLs found in output');
     return {
       success: true,
       urls: [],
-      rawOutput: deployResult.output
+      rawOutput: deployResult.output,
+      logFile: deployLogFile
     };
   }
   
   // Log the URLs
   logger.success('Preview deployment successful!');
   logger.info('Preview URLs:');
+  if (formattedUrls.admin) {
+    logger.info(`- ADMIN: ${formattedUrls.admin}`);
+  }
+  if (formattedUrls.hours) {
+    logger.info(`- HOURS: ${formattedUrls.hours}`);
+  }
   for (const url of extractResult.urls) {
-    logger.info(`- ${url}`);
+    if (!formattedUrls.admin || url !== formattedUrls.admin) {
+      if (!formattedUrls.hours || url !== formattedUrls.hours) {
+        logger.info(`- ${url}`);
+      }
+    }
   }
   
   return {
     success: true,
     channelId,
     urls: extractResult.urls,
-    rawOutput: deployResult.output
+    formattedUrls,
+    rawOutput: deployResult.output,
+    logFile: deployLogFile
   };
 }
 

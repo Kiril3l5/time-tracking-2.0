@@ -124,18 +124,66 @@ export function extractHostingUrls(options) {
   
   try {
     // Extract all hosting URLs (both web.app and firebaseapp.com)
+    // Original regex patterns
     const webAppUrlRegex = /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.web\.app/g;
     const firebaseUrlRegex = /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.firebaseapp\.com/g;
     
-    const webAppUrls = [...new Set(deploymentOutput.match(webAppUrlRegex) || [])];
-    const firebaseUrls = [...new Set(deploymentOutput.match(firebaseUrlRegex) || [])];
+    // Enhanced patterns to handle more URL formats, including site URLs without channels
+    const enhancedWebAppUrlRegex = /https:\/\/([a-zA-Z0-9][a-zA-Z0-9-]*(?:--[a-zA-Z0-9][a-zA-Z0-9-]*)?)\.web\.app/g;
+    const enhancedFirebaseUrlRegex = /https:\/\/([a-zA-Z0-9][a-zA-Z0-9-]*(?:--[a-zA-Z0-9][a-zA-Z0-9-]*)?)\.firebaseapp\.com/g;
+    
+    // NEW: Pattern for Firebase CLI v13.34.0 format with dash prefix
+    const firebaseCLIv13UrlRegex = /(?:^|\s)-\s+(https:\/\/[^\s]+\.web\.app)/gm;
+    
+    // Also check for the Channel URL format in the output
+    const channelUrlRegex = /Channel URL \([^)]+\): (https:\/\/[^\s]+)/g;
+    
+    // Extract URLs using all patterns
+    const webAppUrls = [...new Set(deploymentOutput.match(enhancedWebAppUrlRegex) || [])];
+    const firebaseUrls = [...new Set(deploymentOutput.match(enhancedFirebaseUrlRegex) || [])];
+    
+    // NEW: Extract URLs using the v13.34.0 format
+    let firebaseCLIv13Urls = [];
+    let match;
+    const firebaseOutput = deploymentOutput.split('\n');
+    
+    // Manually extract URLs from the CLI v13 format with dashes
+    for (const line of firebaseOutput) {
+      if (line.trim().startsWith('-') && line.includes('https://') && line.includes('.web.app')) {
+        const urlMatch = line.trim().match(/^-\s+(https:\/\/[^\s]+)/);
+        if (urlMatch && urlMatch[1]) {
+          firebaseCLIv13Urls.push(urlMatch[1]);
+        }
+      }
+    }
+    
+    // Also check for channel URLs directly mentioned
+    let channelUrls = [];
+    const channelMatches = [...deploymentOutput.matchAll(channelUrlRegex)];
+    if (channelMatches.length > 0) {
+      channelUrls = channelMatches.map(match => match[1]);
+    }
     
     // Combine and deduplicate URLs
-    const allUrls = [...new Set([...webAppUrls, ...firebaseUrls])];
+    const allUrls = [...new Set([...webAppUrls, ...firebaseUrls, ...channelUrls, ...firebaseCLIv13Urls])];
+    
+    if (verbose) {
+      logger.debug(`URL Extraction Results:`);
+      logger.debug(`- Found ${webAppUrls.length} web.app URLs`);
+      logger.debug(`- Found ${firebaseUrls.length} firebaseapp.com URLs`);
+      logger.debug(`- Found ${channelUrls.length} channel URLs`);
+      logger.debug(`- Found ${firebaseCLIv13Urls.length} Firebase CLI v13 format URLs`);
+      logger.debug(`- Total unique URLs: ${allUrls.length}`);
+    }
     
     if (allUrls.length === 0) {
       if (verbose) {
         logger.warn('No Firebase hosting URLs found in deployment output');
+        
+        // Log the first 500 characters of output to help with debugging
+        if (deploymentOutput.length > 0) {
+          logger.debug(`First 500 chars of output: ${deploymentOutput.substring(0, 500)}...`);
+        }
       }
       
       const error = new DeploymentError(

@@ -67,6 +67,15 @@ import { parseArgs } from 'node:util';
 import { setTimeout } from 'node:timers/promises';
 import path from 'path';
 import fs from 'node:fs';
+import { fileURLToPath } from 'url';
+
+// Initialize directory paths
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = path.resolve(__dirname, '..');
+
+// Define the auth token file path
+const AUTH_TOKEN_FILE = path.join(rootDir, '.auth-tokens.json');
 
 // Import core modules
 import * as logger from './core/logger.js';
@@ -112,7 +121,7 @@ import * as testDepsFixer from './test-types/test-deps-fixer.js';
 import * as queryTypesFixer from './typescript/query-types-fixer.js';
 
 // Import the report collector
-import { collectAndGenerateReport, cleanupTempDirectory, getHtmlReportPath, getReportPath, createJsonReport } from './reports/report-collector.js';
+import { collectAndGenerateReport, cleanupTempDirectory, getHtmlReportPath, getReportPath, createJsonReport, extractPreviewUrls } from './reports/report-collector.js';
 
 /* global process, console */
 
@@ -515,14 +524,12 @@ export default async function main(args) {
 
     // Enhanced report collection with explicit paths
     const reportResult = await collectAndGenerateReport({
-      bundlePath: getReportPath('bundle'),
-      docQualityPath: getReportPath('docQuality'),
-      deadCodePath: getReportPath('deadCode'),
-      vulnerabilityPath: getReportPath('vulnerability'),
-      performancePath: getReportPath('performance'),
-      cleanupReports: !args['keep-individual-reports'],
+      reportPath: args.output || 'preview-dashboard.html',
       title: `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`,
-      outputPath: args.output || 'preview-dashboard.html'
+      // Get preview URLs from JSON file or logs
+      previewUrls: extractPreviewUrls(),
+      // Don't cleanup reports unless specified
+      cleanupIndividualReports: !args['keep-individual-reports']
     });
     
     if (reportResult) {
@@ -556,132 +563,92 @@ Preview dashboard is available at preview-dashboard.html
 }
 
 /**
- * Verify authentication and prerequisites
- * @returns {Promise<boolean>} - Whether authentication checks passed
+ * Verifies Firebase and Git authentication
+ * 
+ * @async
+ * @function verifyAuthentication
+ * @returns {Promise<boolean>} True if authentication is successful, false otherwise
  */
 async function verifyAuthentication() {
   // Instead of: await metrics.startStage('authentication');
   logger.startStep('Verifying authentication');
   
   try {
-    // Check for authentication using the auth manager
+    // Check when the last successful authentication was performed
+    const authTokens = _getAuthTokens();
+    const currentTime = new Date().getTime();
+    
+    // Verify authentication - reauthentication is now handled in checkFirebaseAuth itself
     const authResult = await authManager.verifyAllAuth();
     
-    if (!authResult.services.firebase.authenticated) {
-      logger.info('Firebase authentication failed. Attempting to reauthenticate...');
+    if (!authResult.success) {
+      logger.error('Authentication verification failed');
       
-      // Maximum number of retries for Firebase commands
-      const MAX_RETRIES = 3;
-      let retryCount = 0;
-      let success = false;
-      
-      while (!success && retryCount < MAX_RETRIES) {
-        try {
-          // Run Firebase reauthentication command with a timeout
-          retryCount++;
-          const reAuthResult = await commandRunner.runCommandAsync('firebase login --reauth', {
-            timeout: 60000, // 60 second timeout
-            shell: true
-          });
-          
-          if (reAuthResult.success) {
-            logger.success('Firebase reauthentication successful');
-            // Verify again after reauthentication
-            const retryResult = await firebaseAuth.verifyAuth();
-            
-            if (retryResult.authenticated) {
-              logger.success(`Authentication verified after retry ${retryCount}`);
-              progressTracker.completeStep(true, 'Firebase authentication successful');
-              return authResult.services.gitAuth.configured && retryResult.authenticated;
-            } else {
-              logger.error(`Firebase authentication still failed after retry ${retryCount}`);
-              // If this was the last retry, handle failure
-              if (retryCount >= MAX_RETRIES) {
-                progressTracker.completeStep(false, 'Firebase authentication failed even after multiple reauthentication attempts');
-                return false;
-              }
-              // Otherwise, retry again
-              logger.info(`Retrying authentication... (Attempt ${retryCount + 1}/${MAX_RETRIES})`);
-            }
-          } else {
-            logger.error(`Firebase reauthentication failed (Attempt ${retryCount}/${MAX_RETRIES})`);
-            
-            // If this was the last retry, handle failure and provide more detailed guidance
-            if (retryCount >= MAX_RETRIES) {
-              logger.error('Maximum retries exceeded. Please try these steps:');
-              logger.info('1. Run "firebase logout" manually');
-              logger.info('2. Run "firebase login" to authenticate with a new session');
-              logger.info('3. Verify you have proper permissions to the Firebase project');
-              logger.info('4. Try running the preview deployment again');
-              progressTracker.completeStep(false, 'Firebase reauthentication failed after multiple attempts');
-              return false;
-            }
-            
-            // Otherwise, retry again after a short delay
-            logger.info(`Waiting for 2 seconds before retrying... (Attempt ${retryCount + 1}/${MAX_RETRIES})`);
-            await setTimeout(2000); // 2 second delay before retry
-          }
-        } catch (error) {
-          logger.error(`Error during Firebase reauthentication (Attempt ${retryCount}/${MAX_RETRIES}): ${error.message}`);
-          
-          // Check for specific error conditions and provide targeted recovery suggestions
-          if (error.message.includes('ENOENT')) {
-            logger.error('Firebase CLI not found. Please install the Firebase CLI:');
-            logger.info('pnpm add -g firebase-tools');
-            progressTracker.completeStep(false, 'Firebase CLI not found');
-            return false;
-          }
-          
-          if (error.message.includes('ETIMEDOUT') || error.message.includes('ECONNREFUSED')) {
-            logger.error('Network error during authentication. Please check your internet connection.');
-            
-            // If this was the last retry, handle failure
-            if (retryCount >= MAX_RETRIES) {
-              progressTracker.completeStep(false, 'Firebase authentication failed due to network issues');
-              return false;
-            }
-            
-            // Otherwise, retry again after a longer delay for network issues
-            logger.info(`Waiting for 5 seconds before retrying... (Attempt ${retryCount + 1}/${MAX_RETRIES})`);
-            await setTimeout(5000); // 5 second delay for network issues
-          } else {
-            // For other errors, if we've reached the max retries, give up
-            if (retryCount >= MAX_RETRIES) {
-              logger.error('Maximum retries exceeded.');
-              progressTracker.completeStep(false, 'Error during Firebase reauthentication');
-              return false;
-            }
-            
-            // Otherwise, retry after a standard delay
-            logger.info(`Retrying authentication... (Attempt ${retryCount + 1}/${MAX_RETRIES})`);
-            await setTimeout(2000);
-          }
-        }
+      if (!authResult.services.firebase.authenticated) {
+        logger.error('Firebase authentication failed');
+        logger.info('Please run: firebase login');
       }
       
-      // If we reach here, all retries have failed
-      progressTracker.completeStep(false, 'Firebase authentication failed after multiple attempts');
+      if (!authResult.services.gitAuth.authenticated) {
+        logger.error('Git authentication failed');
+        logger.info('Please configure Git user name and email:');
+        logger.info('git config --global user.name "Your Name"');
+        logger.info('git config --global user.email "your.email@example.com"');
+      }
+      
+      progressTracker.completeStep(false, 'Authentication verification failed');
       return false;
     }
     
-    // Check if Git authentication passed
-    if (!authResult.services.gitAuth.configured) {
-      logger.error('Git configuration check failed');
-      logger.info('Please configure your Git user name and email:');
-      logger.info('git config --global user.name "Your Name"');
-      logger.info('git config --global user.email "your.email@example.com"');
-      progressTracker.completeStep(false, 'Git configuration check failed');
-      return false;
-    }
+    // Update the last authentication time after successful verification
+    _saveAuthTokens({
+      ...authTokens,
+      lastAuthenticated: currentTime
+    });
     
-    // All authentication checks passed
+    logger.success(`Firebase authenticated as: ${authResult.services.firebase.email || 'Unknown'}`);
+    logger.success(`Git user: ${authResult.services.gitAuth.name} <${authResult.services.gitAuth.email}>`);
     progressTracker.completeStep(true, 'Authentication verified');
     return true;
   } catch (error) {
-    // Don't collect metrics, just throw the error to stop workflow
-    handleError(error);
-  } finally {
-    // Instead of: await metrics.endStage('authentication');
+    logger.error(`Error during authentication verification: ${error.message}`);
+    progressTracker.completeStep(false, 'Error during authentication verification');
+    return false;
+  }
+}
+
+/**
+ * Get stored authentication tokens
+ * 
+ * @function _getAuthTokens
+ * @returns {Object|null} Authentication tokens or null if not found
+ * @private
+ */
+function _getAuthTokens() {
+  try {
+    if (fs.existsSync(AUTH_TOKEN_FILE)) {
+      const data = fs.readFileSync(AUTH_TOKEN_FILE, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    logger.debug(`Failed to read auth tokens: ${error.message}`);
+  }
+  return null;
+}
+
+/**
+ * Save authentication tokens
+ * 
+ * @function _saveAuthTokens
+ * @param {Object} tokens - Authentication tokens to save
+ * @private
+ */
+function _saveAuthTokens(tokens) {
+  try {
+    fs.writeFileSync(AUTH_TOKEN_FILE, JSON.stringify(tokens, null, 2), 'utf8');
+    logger.debug('Saved auth tokens');
+  } catch (error) {
+    logger.debug(`Failed to save auth tokens: ${error.message}`);
   }
 }
 
@@ -1210,6 +1177,126 @@ function generateChannelId() {
 }
 
 /**
+ * Extract preview URLs from deployment output
+ * 
+ * @param {string} output - Deployment output
+ * @returns {Object|null} - Object with admin and hours URLs or null
+ */
+function extractPreviewUrlsFromOutput(output) {
+  if (!output) return null;
+  
+  const urls = {};
+  let allUrls = [];
+  
+  // Try multiple patterns to extract URLs
+  const urlPatterns = [
+    // Firebase CLI v13.34.0 format with dash prefix
+    {
+      pattern: /(?:^|\s)-\s+(https:\/\/[^\s]+\.web\.app)/gm,
+      matchGroup: 1
+    },
+    // Look for labeled URLs in our custom format
+    {
+      pattern: /ADMIN:?\s+(https:\/\/[^\s,]+)/i,
+      matchGroup: 1,
+      target: 'admin'
+    },
+    {
+      pattern: /HOURS:?\s+(https:\/\/[^\s,]+)/i,
+      matchGroup: 1,
+      target: 'hours'
+    },
+    // Firebase CLI v9+ hosting URL format
+    {
+      pattern: /(?:Channel URL|Hosting URL|Live URL|Preview URL)(?:\s*\([^)]*\))?:\s+(https:\/\/[^\s]+)/gi,
+      matchGroup: 1
+    },
+    // Standard Firebase hosting URL patterns
+    {
+      pattern: /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.web\.app/g,
+      matchGroup: 0
+    },
+    {
+      pattern: /https:\/\/[a-zA-Z0-9][a-zA-Z0-9-]*--[a-zA-Z0-9][a-zA-Z0-9-]*\.firebaseapp\.com/g,
+      matchGroup: 0
+    }
+  ];
+  
+  // Extract URLs using all patterns
+  for (const { pattern, matchGroup, target } of urlPatterns) {
+    let match;
+    while ((match = pattern.exec(output)) !== null) {
+      const url = match[matchGroup].trim();
+      
+      if (target) {
+        // Direct assignment for patterns with specific targets
+        urls[target] = url;
+      } else {
+        // Add to general list for categorization later
+        allUrls.push(url);
+      }
+    }
+  }
+  
+  // If we have collected general URLs, categorize them
+  if (allUrls.length > 0) {
+    for (const url of allUrls) {
+      if (url.includes('admin') && !urls.admin) {
+        urls.admin = url;
+      } else if (url.includes('hours') && !urls.hours) {
+        urls.hours = url;
+      } else if (!urls.admin) {
+        urls.admin = url;
+      } else if (!urls.hours) {
+        urls.hours = url;
+      }
+    }
+  }
+  
+  // If we have any URLs that weren't categorized, store them as generic URLs
+  if (allUrls.length > 0 && !urls.admin && !urls.hours) {
+    urls.urls = allUrls;
+  }
+  
+  return Object.keys(urls).length > 0 ? urls : null;
+}
+
+/**
+ * Save preview URLs to file
+ * @param {Object} urls - URLs to save
+ * @returns {boolean} - Whether save was successful
+ */
+function savePreviewUrls(urls) {
+  if (!urls || Object.keys(urls).length === 0) {
+    return false;
+  }
+
+  try {
+    const tempDir = path.join(process.cwd(), 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const filePath = path.join(tempDir, 'preview-urls.json');
+    fs.writeFileSync(filePath, JSON.stringify(urls, null, 2));
+    logger.success(`Preview URLs saved to ${filePath}`);
+    
+    // Also log them clearly for immediate visibility
+    logger.info('Preview URLs:');
+    if (urls.admin) logger.info(`- ADMIN: ${urls.admin}`);
+    if (urls.hours) logger.info(`- HOURS: ${urls.hours}`);
+    if (urls.urls) {
+      urls.urls.forEach(url => logger.info(`- ${url}`));
+    }
+    
+    return true;
+  } catch (error) {
+    logger.error(`Failed to save preview URLs: ${error.message}`);
+    return false;
+  }
+}
+
+/**
  * Deploy to Firebase preview channel
  * @param {Object} args - Command line arguments
  * @returns {Promise<boolean>} - Whether the deployment succeeded
@@ -1219,6 +1306,14 @@ async function deployPreview(args) {
   logger.startStep('Deploying preview');
   
   try {
+    // Verify Firebase authentication first
+    const authResult = await verifyAuthentication();
+    if (!authResult) {
+      logger.error('Authentication failed. Cannot proceed with deployment.');
+      progressTracker.completeStep(false, 'Deployment aborted due to authentication failure');
+      return false;
+    }
+    
     // Generate channel ID
     const channelId = generateChannelId();
     
@@ -1260,42 +1355,16 @@ async function deployPreview(args) {
     if (deployResult.success) {
       logger.success(`Deployment successful!`);
       
-      // Log preview URLs
-      if (deployResult.urls && deployResult.urls.length > 0) {
-        logger.info(`Preview URLs:`);
+      // Extract and process the preview URLs
+      const urls = extractPreviewUrlsFromOutput(deployResult.rawOutput || deployResult.output);
+      
+      if (urls && Object.keys(urls).length > 0) {
+        logger.success('Successfully extracted preview URLs:');
+        if (urls.admin) logger.info(`ADMIN: ${urls.admin}`);
+        if (urls.hours) logger.info(`HOURS: ${urls.hours}`);
         
-        // Format URLs using urlExtractor
-        const formattedResult = urlExtractor.formatUrls({
-          urls: deployResult.urls,
-          format: 'plain'
-        });
-        
-        // Log the formatted URLs string instead of the entire result object
-        logger.info(formattedResult.formatted);
-        
-        // Add GitHub PR comment if applicable
-        let prNumber;
-        if (gitAuth && typeof gitAuth.getPullRequestNumber === 'function') {
-          try {
-            prNumber = gitAuth.getPullRequestNumber();
-          } catch (error) {
-            logger.warn(`Failed to get PR number: ${error.message}`);
-          }
-        }
-        
-        if (prNumber) {
-          logger.info(`Adding deployment comment to PR #${prNumber}`);
-          
-          // Create PR comment content using urlExtractor
-          const commentContent = urlExtractor.formatPRComment({
-            urls: deployResult.urls,
-            channelId,
-            environmentName: 'preview'
-          });
-          
-          // Assuming gitAuth module has a function for adding PR comments
-          gitAuth.addPRComment(prNumber, commentContent);
-        }
+        // Save the URLs for use in the dashboard
+        savePreviewUrls(urls);
       } else {
         logger.warn('No preview URLs found in deployment output');
       }
@@ -1304,12 +1373,23 @@ async function deployPreview(args) {
       return true;
     } else {
       logger.error(`Deployment failed: ${deployResult.error}`);
+      if (deployResult.deployOutput) {
+        logger.debug('Deployment output:');
+        logger.debug(deployResult.deployOutput);
+      }
+      if (deployResult.deployError) {
+        logger.error('Deployment error details:');
+        logger.error(deployResult.deployError);
+      }
+      
       progressTracker.completeStep(false, 'Deployment failed');
       return false;
     }
   } catch (error) {
     // Don't collect metrics, just throw the error
     handleError(error);
+    progressTracker.completeStep(false, `Deployment failed with error: ${error.message}`);
+    return false;
   } finally {
     // Instead of: await metrics.endStage('deployment');
   }
@@ -1661,6 +1741,161 @@ async function runDependencyVerification(args) {
     logger.error('Dependency verification failed');
     logger.info('Run with --auto-install-deps to attempt automatic installation');
     return false;
+  }
+}
+
+/**
+ * Deploy the project to Firebase
+ * 
+ * @param {string} channel - The Firebase Hosting preview channel to deploy to
+ * @returns {Promise<Object>} Result object with deployment success and URLs
+ */
+export async function deployToFirebase(channel) {
+  const tempDir = path.join(process.cwd(), 'temp');
+  ensureDirExists(tempDir);
+
+  const logFilePath = path.join(tempDir, 'firebase-deploy.log');
+  
+  // Generate a unique channel name if one wasn't provided
+  const targetChannel = channel || `preview-${Date.now()}`;
+  
+  logger.info(`Deploying to Firebase preview channel: ${targetChannel}`);
+  
+  try {
+    // Use the Firebase Hosting preview feature to deploy to a temporary URL
+    const command = `firebase hosting:channel:deploy ${targetChannel} --json`;
+    
+    // Display the command being run
+    logger.info(`Running: ${command}`);
+    
+    // Run the command and capture output
+    const result = await commandRunner.runCommandAsync(command, {
+      stdio: 'pipe',
+      captureOutput: true
+    });
+    
+    // Save the output to a log file for debugging
+    fs.writeFileSync(logFilePath, result.output);
+    logger.info(`Deployment log saved to: ${logFilePath}`);
+    
+    // Extract preview URLs from the command output
+    const urls = extractPreviewUrlsFromOutput(result.output);
+    
+    if (!urls || (!urls.admin && !urls.hours)) {
+      logger.warn('No preview URLs were found in the deployment output.');
+      logger.debug('Checking for URLs in the deployment log file...');
+      
+      // Try to extract URLs from the saved log file as a backup method
+      if (fs.existsSync(logFilePath)) {
+        const logContent = fs.readFileSync(logFilePath, 'utf8');
+        const urlsFromLog = extractPreviewUrlsFromOutput(logContent);
+        
+        if (urlsFromLog && (urlsFromLog.admin || urlsFromLog.hours)) {
+          logger.info('Found preview URLs in the deployment log file.');
+          
+          // Save the URLs to a file for later reference
+          savePreviewUrls(urlsFromLog);
+          
+          return {
+            success: true,
+            urls: urlsFromLog
+          };
+        }
+      }
+      
+      // Check for URLs in other command logs
+      logger.debug('Searching for URLs in recent command logs...');
+      const recentLogs = commandRunner.getRecentCommandLogs();
+      
+      for (const log of recentLogs) {
+        const urlsFromLog = extractPreviewUrlsFromOutput(log.output);
+        
+        if (urlsFromLog && (urlsFromLog.admin || urlsFromLog.hours)) {
+          logger.info('Found preview URLs in command logs.');
+          
+          // Save the URLs to a file for later reference
+          savePreviewUrls(urlsFromLog);
+          
+          return {
+            success: true,
+            urls: urlsFromLog
+          };
+        }
+      }
+      
+      // Check for URLs in deployment logs
+      logger.debug('Searching for URLs in deployment logs...');
+      const deploymentLogs = commandRunner.findDeploymentLogs();
+      
+      for (const logFile of deploymentLogs) {
+        if (fs.existsSync(logFile)) {
+          const logContent = fs.readFileSync(logFile, 'utf8');
+          const urlsFromLog = extractPreviewUrlsFromOutput(logContent);
+          
+          if (urlsFromLog && (urlsFromLog.admin || urlsFromLog.hours)) {
+            logger.info(`Found preview URLs in deployment log: ${logFile}`);
+            
+            // Save the URLs to a file for later reference
+            savePreviewUrls(urlsFromLog);
+            
+            return {
+              success: true,
+              urls: urlsFromLog
+            };
+          }
+        }
+      }
+      
+      logger.error('Could not extract preview URLs from any logs. Deployment may have failed or URLs format changed.');
+      return {
+        success: false,
+        urls: null
+      };
+    }
+    
+    // Save the URLs to a file for later reference
+    savePreviewUrls(urls);
+    
+    return {
+      success: true,
+      urls
+    };
+  } catch (error) {
+    logger.error(`Error deploying to Firebase: ${error.message}`);
+    
+    // Check if we can extract URLs from the error output
+    if (error.stdout) {
+      const urls = extractPreviewUrlsFromOutput(error.stdout);
+      
+      if (urls && (urls.admin || urls.hours)) {
+        logger.info('Found preview URLs in the error output.');
+        
+        // Save the URLs to a file for later reference
+        savePreviewUrls(urls);
+        
+        return {
+          success: true,
+          urls
+        };
+      }
+    }
+    
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Ensures that a directory exists, creating it if necessary
+ * 
+ * @param {string} dirPath - The directory path to ensure exists
+ */
+function ensureDirExists(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+    logger.debug(`Created directory: ${dirPath}`);
   }
 }
 

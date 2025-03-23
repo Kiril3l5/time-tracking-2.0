@@ -245,7 +245,8 @@ export async function verifyAllAuth(options = {}) {
         logger.debug('Using CI Firebase token authentication');
         firebaseResult = await firebaseAuth.verifyTokenAuth(process.env.FIREBASE_TOKEN);
       } else {
-        firebaseResult = await firebaseAuth.verifyAuth();
+        // This is now an async function call that will handle the reauthentication process
+        firebaseResult = await firebaseAuth.checkFirebaseAuth();
       }
       
       result.services.firebase = firebaseResult;
