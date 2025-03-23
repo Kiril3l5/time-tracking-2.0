@@ -335,7 +335,7 @@ export default async function main(args) {
     if (!args['skip-module-syntax']) steps.push('Module syntax check');
     if (!args['skip-bundle-analysis']) steps.push('Bundle size analysis');
     if (!args['skip-dependency-scan']) steps.push('Dependency scanning');
-    if (!args['skip-dead-code']) steps.push('Dead code detection');
+    if (!args['skip-dead-code-detection']) steps.push('Dead code detection');
     if (!args['skip-doc-quality']) steps.push('Documentation quality');
     if (!args['skip-workflow-validation']) steps.push('Workflow validation');
     
@@ -1064,34 +1064,30 @@ async function buildApplication(args) {
     // Step 4: Validating build output
     progressTracker.startStep('Validating build output');
     
-    // Check if build directory exists
-    const buildDir = buildConfig.buildDir || 'build';
-    if (!fs.existsSync(buildDir)) {
-      logger.error(`Build directory '${buildDir}' does not exist after build!`);
+    // Since we build multiple packages (admin, hours, common), we should check their build folders
+    const buildValid = validateBuilds();
+    
+    if (!buildValid) {
       progressTracker.completeStep(false, 'Build validation failed');
       return false;
     }
     
-    // Check for key files to ensure build was successful
-    const keyFiles = ['index.html', 'static'];
-    const missingFiles = [];
+    // Log build size information (estimated total size)
+    let totalSize = 0;
+    let totalFiles = 0;
     
-    for (const file of keyFiles) {
-      const filePath = path.join(buildDir, file);
-      if (!fs.existsSync(filePath)) {
-        missingFiles.push(file);
+    // Check sizes in each package build dir
+    const packageDirs = ['packages/admin/dist', 'packages/hours/dist'];
+    for (const dir of packageDirs) {
+      if (fs.existsSync(dir)) {
+        const stats = buildManager.calculateBuildSize(dir);
+        totalSize += stats.totalSizeMB;
+        totalFiles += stats.fileCount;
+        logger.info(`${dir} size: ${stats.totalSizeMB.toFixed(2)} MB (${stats.fileCount} files)`);
       }
     }
     
-    if (missingFiles.length > 0) {
-      logger.error(`Build validation failed: Missing key files in build directory: ${missingFiles.join(', ')}`);
-      progressTracker.completeStep(false, 'Build validation failed');
-      return false;
-    }
-    
-    // Log build size
-    const buildStats = buildManager.calculateBuildSize(buildDir);
-    logger.info(`Build size: ${buildStats.totalSizeMB.toFixed(2)} MB (${buildStats.fileCount} files)`);
+    logger.info(`Total build size: ${totalSize.toFixed(2)} MB (${totalFiles} files)`);
     
     progressTracker.completeStep(true, 'Build validated successfully');
     
@@ -1112,6 +1108,66 @@ async function buildApplication(args) {
     
     return false;
   }
+}
+
+/**
+ * Validate build outputs for all packages
+ * @returns {boolean} Whether all builds are valid
+ */
+function validateBuilds() {
+  logger.info('Validating builds for all packages...');
+  
+  // Check admin package
+  const adminDist = 'packages/admin/dist';
+  if (!fs.existsSync(adminDist)) {
+    logger.error(`Admin build directory '${adminDist}' does not exist!`);
+    return false;
+  }
+  
+  // Check hours package
+  const hoursDist = 'packages/hours/dist';
+  if (!fs.existsSync(hoursDist)) {
+    logger.error(`Hours build directory '${hoursDist}' does not exist!`);
+    return false;
+  }
+  
+  // Check for key files in each package
+  const keyFiles = ['index.html', 'assets'];
+  let allValid = true;
+  
+  // Check admin package
+  const adminMissingFiles = [];
+  for (const file of keyFiles) {
+    const filePath = path.join(adminDist, file);
+    if (!fs.existsSync(filePath)) {
+      adminMissingFiles.push(file);
+    }
+  }
+  
+  if (adminMissingFiles.length > 0) {
+    logger.error(`Admin build validation failed: Missing key files: ${adminMissingFiles.join(', ')}`);
+    allValid = false;
+  } else {
+    logger.success('Admin build validated successfully');
+  }
+  
+  // Check hours package
+  const hoursMissingFiles = [];
+  for (const file of keyFiles) {
+    const filePath = path.join(hoursDist, file);
+    if (!fs.existsSync(filePath)) {
+      hoursMissingFiles.push(file);
+    }
+  }
+  
+  if (hoursMissingFiles.length > 0) {
+    logger.error(`Hours build validation failed: Missing key files: ${hoursMissingFiles.join(', ')}`);
+    allValid = false;
+  } else {
+    logger.success('Hours build validated successfully');
+  }
+  
+  return allValid;
 }
 
 /**
@@ -2126,3 +2182,4 @@ function stopProcessMonitoring() {
 
 // Run the main function with parsed arguments
 main(parseArguments());
+
