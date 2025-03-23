@@ -213,17 +213,17 @@ const COLORS = {
   bgWhite: '\x1b[47m'
 };
 
-// Icons for different message types
+// Icons for different message types - SIMPLIFIED
 const ICONS = {
-  info: '💡',
-  success: '✅',
-  warning: '⚠️',
-  error: '❌',
-  command: '🔄',
-  section: '📌',
-  link: '🔗',
-  time: '⏱️',
-  debug: '🔍'
+  info: '',
+  success: '[SUCCESS]',
+  warning: '[WARNING]',
+  error: '[ERROR]',
+  command: '$',
+  section: '',
+  link: '',
+  time: '',
+  debug: '[DEBUG]'
 };
 
 // Timestamp function
@@ -237,7 +237,7 @@ function getTimestamp() {
  * @param {string} message - The message to log
  */
 export function info(message) {
-  console.log(`${COLORS.cyan}${ICONS.info} ${message}${COLORS.reset}`);
+  console.log(`${COLORS.cyan}${message}${COLORS.reset}`);
 }
 
 /**
@@ -281,9 +281,8 @@ export function debug(message) {
 export function sectionHeader(title) {
   const timestamp = getTimestamp();
   console.log('\n');
-  console.log(`${COLORS.bright}${COLORS.magenta}${'━'.repeat(50)}${COLORS.reset}`);
-  console.log(`${COLORS.bright}${COLORS.magenta}${ICONS.section} ${title.toUpperCase()} ${COLORS.dim}[${timestamp}]${COLORS.reset}`);
-  console.log(`${COLORS.bright}${COLORS.magenta}${'━'.repeat(50)}${COLORS.reset}`);
+  console.log(`${COLORS.bright}${COLORS.magenta}STEP: ${title} [${timestamp}]${COLORS.reset}`);
+  console.log(`${COLORS.bright}${COLORS.magenta}${'='.repeat(40)}${COLORS.reset}`);
 }
 
 /**
@@ -291,7 +290,7 @@ export function sectionHeader(title) {
  * @param {string} command - The command being executed
  */
 export function command(command) {
-  console.log(`${COLORS.bright}${COLORS.cyan}${ICONS.command} Running: ${COLORS.reset}${COLORS.bright}${command}${COLORS.reset}`);
+  console.log(`${COLORS.bright}${COLORS.cyan}${ICONS.command} ${command}${COLORS.reset}`);
 }
 
 /**
@@ -300,7 +299,7 @@ export function command(command) {
  * @param {string} url - The URL
  */
 export function link(label, url) {
-  console.log(`${COLORS.cyan}${ICONS.link} ${label}: ${COLORS.bright}${COLORS.underscore}${url}${COLORS.reset}`);
+  console.log(`${COLORS.cyan}${label}: ${url}${COLORS.reset}`);
 }
 
 /**
@@ -308,7 +307,7 @@ export function link(label, url) {
  * @param {string} operation - The operation being timed
  */
 export function timeStart(operation) {
-  console.log(`${COLORS.cyan}${ICONS.time} Started: ${operation}${COLORS.reset}`);
+  console.log(`${COLORS.cyan}Starting: ${operation}${COLORS.reset}`);
   return Date.now();
 }
 
@@ -319,7 +318,7 @@ export function timeStart(operation) {
  */
 export function timeEnd(operation, startTime) {
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-  console.log(`${COLORS.cyan}${ICONS.time} Completed: ${operation} (${duration}s)${COLORS.reset}`);
+  console.log(`${COLORS.cyan}Completed: ${operation} (${duration}s)${COLORS.reset}`);
 }
 
 /**
@@ -340,22 +339,11 @@ export function progressBar(percent, width = 30) {
  * 
  * @function section
  * @param {string} title - The section title
- * @description Creates a visually distinct section header in the logs, with the
- * provided title in uppercase and surrounded by separator lines. Useful for
- * dividing the workflow output into logical sections.
- * @example
- * logger.section('Initializing Deployment');
- * // Outputs a header like:
- * // ==========================================================
- * // INITIALIZING DEPLOYMENT
- * // ==========================================================
  */
 export function section(title) {
   console.log('\n');
-  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(80)}${colors.colors.reset}`);
-  console.log(`${colors.colors.cyan}${colors.colors.bold}${title.toUpperCase()}${colors.colors.reset}`);
-  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(80)}${colors.colors.reset}`);
-  console.log('');
+  console.log(`${colors.colors.cyan}${colors.colors.bold}${title}${colors.colors.reset}`);
+  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(40)}${colors.colors.reset}`);
 }
 
 /**
@@ -381,24 +369,14 @@ export function setSteps(steps) {
  * 
  * @function startStep
  * @param {string} title - The step title
- * @description Marks the beginning of a new step in the workflow. Increments the
- * current step counter, displays a header with step number, title, and starts
- * timing for this step. Should be paired with endStep().
- * @example
- * // Start the "Authentication" step (assuming setSteps was called earlier)
- * logger.startStep('Authentication');
- * // Outputs a header like:
- * // STEP 1/5: AUTHENTICATION
- * // ============================================================
  */
 export function startStep(title) {
   currentStep++;
   stepStartTime = Date.now();
   
   console.log('\n');
-  console.log(`${colors.colors.cyan}${colors.colors.bold}STEP ${currentStep}/${totalSteps}: ${title.toUpperCase()}${colors.colors.reset}`);
-  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(60)}${colors.colors.reset}`);
-  console.log('');
+  console.log(`${colors.colors.cyan}${colors.colors.bold}STEP ${currentStep}/${totalSteps}: ${title}${colors.colors.reset}`);
+  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(40)}${colors.colors.reset}`);
 }
 
 /**
@@ -407,32 +385,16 @@ export function startStep(title) {
  * @function endStep
  * @param {string} status - The status ('success', 'warning', or 'error')
  * @param {string} message - An optional message
- * @description Marks the end of a workflow step. Displays the time taken to complete
- * the step and a status message with appropriate color coding (green for success,
- * yellow for warning, red for error). Should be called after startStep().
- * @example
- * // End a step successfully
- * logger.endStep('success', 'All checks passed');
- * 
- * // End a step with a warning
- * logger.endStep('warning', 'Minor issues detected, continuing anyway');
- * 
- * // End a step with an error
- * logger.endStep('error', 'Critical failure in deployment');
  */
 export function endStep(status = 'success', message = '') {
   const elapsed = ((Date.now() - stepStartTime) / 1000).toFixed(1);
   const statusColor = status === 'success' ? colors.colors.green : 
                      status === 'warning' ? colors.colors.yellow : colors.colors.red;
   
-  console.log('\n');
-  console.log(`${statusColor}${colors.colors.bold}Step completed in ${elapsed}s${colors.colors.reset}`);
+  const statusText = status === 'success' ? 'SUCCESS' : 
+                    status === 'warning' ? 'WARNING' : 'ERROR';
   
-  if (message) {
-    console.log(`${statusColor}${message}${colors.colors.reset}`);
-  }
-  
-  console.log(`${colors.colors.cyan}${colors.colors.bold}${'='.repeat(60)}${colors.colors.reset}`);
+  console.log(`${statusColor}${colors.colors.bold}[${statusText}] ${message} (${elapsed}s)${colors.colors.reset}`);
 }
 
 /**

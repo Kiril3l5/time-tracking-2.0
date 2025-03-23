@@ -187,19 +187,13 @@ function showWorkflowProgress(stepId) {
   
   const totalSteps = WORKFLOW_STEPS.length;
   
-  // Create a more visual progress indicator
-  const progressBar = Array(totalSteps).fill('○').map((char, i) => i+1 === stepId ? '●' : char).join(' ');
-  
-  // Calculate percentage complete for this step
-  const percentComplete = Math.round((stepId / totalSteps) * 100);
-  
   // Update terminal title with current step
-  updateTerminalTitle(`Time-Tracking Workflow [${stepId}/${totalSteps}] - ${step.name}`);
+  updateTerminalTitle(`Step ${stepId}/${totalSteps}: ${step.name}`);
   
-  logger.sectionHeader(`STEP ${stepId}/${totalSteps}: ${step.name}`);
-  logger.info(`${step.description}`);
-  logger.info(`Progress: ${progressBar} (${percentComplete}%)`);
-  logger.info('─'.repeat(50));
+  console.log('\n');
+  console.log(`STEP ${stepId}/${totalSteps}: ${step.name}`);
+  console.log('='.repeat(50));
+  console.log(`${step.description}`);
 }
 
 // Get the root directory
@@ -255,6 +249,11 @@ function executeCommand(command, options = {}) {
     }
   }
   
+  // Show command being executed unless suppressed
+  if (!options.silent) {
+    console.log(`\n> ${command}`);
+  }
+  
   try {
     // Handle timeout option separately
     const execOptions = { ...options };
@@ -290,7 +289,7 @@ function executeCommand(command, options = {}) {
         } catch (error) {
           // Special handling for timeout errors
           if (error.code === 'ETIMEDOUT') {
-            logger.warn(`Command timed out after ${timeout/1000} seconds: ${command}`);
+            console.log(`\n[WARNING] Command timed out after ${timeout/1000} seconds: ${command}`);
           }
           
           // For stdio: 'inherit', we might still want to extract URLs even if the command failed
@@ -305,6 +304,12 @@ function executeCommand(command, options = {}) {
     }
     
     const output = execSync(command, { encoding: 'utf8', ...execOptions });
+    
+    // Show success indicator (if not suppressed)
+    if (!options.silent && !options.suppressSuccess) {
+      console.log(`[SUCCESS] Command completed`);
+    }
+    
     const result = { 
       success: true, 
       output, 
@@ -322,8 +327,8 @@ function executeCommand(command, options = {}) {
     return result;
   } catch (error) {
     if (!options.suppressErrors) {
-      logger.error(`Command failed: ${command}`);
-      logger.error(error.message);
+      console.log(`\n[ERROR] Command failed: ${command}`);
+      console.log(error.message);
     }
     
     // Don't exit process on error unless explicitly requested
@@ -469,7 +474,7 @@ function suggestPRContent() {
  * Check for and fix .gitignore issues
  */
 async function fixGitignoreIssues() {
-  logger.info("Checking .gitignore configuration...");
+  console.log("Checking .gitignore configuration...");
   
   try {
     // Check if the fixer script exists
@@ -477,11 +482,11 @@ async function fixGitignoreIssues() {
       await import('./fix-gitignore.js');
       return true;
     } else {
-      logger.warn("Gitignore fixer script not found. Temp files may not be properly ignored.");
+      console.log("[WARNING] Gitignore fixer script not found. Temp files may not be properly ignored.");
       return false;
     }
   } catch (error) {
-    logger.warn("Could not run gitignore fixer:", error.message);
+    console.log(`[WARNING] Could not run gitignore fixer: ${error.message}`);
     return false;
   }
 }
@@ -590,8 +595,9 @@ async function commitGitignoreChanges() {
  * @returns {boolean} - Whether PR creation was successful
  */
 async function createPullRequest(title, description, workflowData) {
-  logger.sectionHeader('CREATING PULL REQUEST');
-  logger.info(`Creating PR with title: ${title}`);
+  console.log('\nCREATING PULL REQUEST');
+  console.log('='.repeat(30));
+  console.log(`Creating PR with title: ${title}`);
   
   try {
     const result = executeCommand(`pnpm run pr:create-with-title "${title}" "${description}"`, { 
@@ -614,20 +620,20 @@ async function createPullRequest(title, description, workflowData) {
     if (!result.success) {
       // PR creation failed, check for specific errors
       if (result.output?.includes("You have uncommitted changes")) {
-        logger.error("PR creation failed due to uncommitted changes.");
+        console.log("[ERROR] PR creation failed due to uncommitted changes.");
         
         // Offer to auto-commit
         const shouldAutoCommit = await prompt("Would you like to automatically commit these changes? (Y/n): ");
         
         if (shouldAutoCommit.toLowerCase() !== 'n') {
-          logger.info("Auto-committing changes...");
+          console.log("Auto-committing changes...");
           const autoCommitResult = executeCommand(`pnpm run pr:auto-commit "${title}" "${description}"`, { 
             stdio: 'inherit',
             suppressErrors: false
           });
           
           if (autoCommitResult.success) {
-            logger.success("PR created successfully with auto-commit!");
+            console.log("[SUCCESS] PR created successfully with auto-commit!");
             
             // Update workflow data for successful PR
             if (workflowData) {
@@ -642,20 +648,20 @@ async function createPullRequest(title, description, workflowData) {
             
             return true;
           } else {
-            logger.error("Auto-commit failed. Please commit your changes manually.");
+            console.log("[ERROR] Auto-commit failed. Please commit your changes manually.");
             return false;
           }
         } else {
-          logger.info("You can manually commit your changes and then create a PR.");
+          console.log("You can manually commit your changes and then create a PR.");
           return false;
         }
       } else if (result.output?.includes("a pull request for branch") && result.output?.includes("already exists")) {
         // PR already exists
         const prUrl = result.output.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
         
-        logger.warn("A pull request already exists for this branch.");
+        console.log("[WARNING] A pull request already exists for this branch.");
         if (prUrl) {
-          logger.info(`Existing PR: ${prUrl}`);
+          console.log(`Existing PR: ${prUrl}`);
           
           // Save the existing PR URL to workflow data
           if (workflowData) {
@@ -667,26 +673,26 @@ async function createPullRequest(title, description, workflowData) {
           const shouldUpdate = await prompt("Would you like to update the existing PR? (y/N): ");
           
           if (shouldUpdate.toLowerCase() === 'y') {
-            logger.info("Use the GitHub website to update the PR details.");
+            console.log("Use the GitHub website to update the PR details.");
             
             // Try to open the PR URL in browser
             try {
               const openCmd = process.platform === 'win32' ? 'start' : 
                 process.platform === 'darwin' ? 'open' : 'xdg-open';
               executeCommand(`${openCmd} ${prUrl}`);
-              logger.success("Opened PR in browser for editing.");
+              console.log("[SUCCESS] Opened PR in browser for editing.");
             } catch (error) {
-              logger.info(`Please visit ${prUrl} to update the PR.`);
+              console.log(`Please visit ${prUrl} to update the PR.`);
             }
           }
         }
         return true; // PR exists, so technically "success"
       } else {
-        logger.error("PR creation failed for an unknown reason.");
+        console.log("[ERROR] PR creation failed for an unknown reason.");
         return false;
       }
     } else {
-      logger.success("PR created successfully!");
+      console.log("[SUCCESS] PR created successfully!");
       
       // Update workflow data for successful PR
       if (workflowData) {
@@ -696,7 +702,7 @@ async function createPullRequest(title, description, workflowData) {
       return true;
     }
   } catch (error) {
-    logger.error("Failed to create PR:", error.message);
+    console.log(`[ERROR] Failed to create PR: ${error.message}`);
     return false;
   }
 }
@@ -810,15 +816,15 @@ function generateWorkflowSummary(workflowData) {
   } = workflowData;
   
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-  let summary = '\n📊 WORKFLOW SUMMARY\n';
-  summary += '═════════════════\n\n';
+  let summary = '\nWORKFLOW SUMMARY\n';
+  summary += '='.repeat(30) + '\n\n';
   
-  summary += `📌 Branch: ${branch}\n`;
-  summary += `⏱️ Duration: ${duration} seconds\n`;
+  summary += `Branch: ${branch}\n`;
+  summary += `Duration: ${duration} seconds\n`;
   
   // Add commit info if available
   if (commits && commits.length > 0) {
-    summary += `\n📝 Commits: ${commits.length}\n`;
+    summary += `\nCommits: ${commits.length}\n`;
     commits.forEach((commit, index) => {
       summary += `   ${index + 1}. ${commit}\n`;
     });
@@ -826,7 +832,7 @@ function generateWorkflowSummary(workflowData) {
   
   // Add preview URLs if available
   if (previewUrls) {
-    summary += '\n🌐 Preview URLs:\n';
+    summary += '\nPreview URLs:\n';
     if (previewUrls.admin) {
       summary += `   • Admin Dashboard: ${previewUrls.admin}\n`;
     }
@@ -842,7 +848,7 @@ function generateWorkflowSummary(workflowData) {
   
   // Add PR info if a PR was created
   if (prCreated) {
-    summary += '\n🔄 Pull Request:\n';
+    summary += '\nPull Request:\n';
     summary += `   • Title: ${prTitle}\n`;
     if (prUrl) {
       summary += `   • URL: ${prUrl}\n`;
@@ -850,11 +856,11 @@ function generateWorkflowSummary(workflowData) {
   }
   
   // Add status
-  summary += '\n🏁 Status: ';
+  summary += '\nStatus: ';
   if (workflowSuccess) {
-    summary += '✅ Complete';
+    summary += 'Complete';
   } else {
-    summary += '⚠️ Completed with warnings/errors';
+    summary += 'Completed with warnings/errors';
   }
   
   return summary;
@@ -868,7 +874,8 @@ function displayWorkflowSummary(workflowData) {
   const summary = generateWorkflowSummary(workflowData);
   
   console.log('\n');
-  logger.sectionHeader('WORKFLOW COMPLETED');
+  console.log('WORKFLOW COMPLETED');
+  console.log('='.repeat(30));
   console.log(summary);
   console.log('\n');
 }
@@ -896,17 +903,18 @@ async function runWorkflow() {
   };
   
   try {
-    logger.sectionHeader('AUTOMATED DEVELOPMENT WORKFLOW');
-    logger.info('This workflow will guide you through the complete development process');
-    logger.info('─'.repeat(50));
+    console.log('\nAUTOMATED DEVELOPMENT WORKFLOW\n');
+    console.log('='.repeat(50));
     
     // Clean up temporary resources before starting
+    console.log("Cleaning up temporary resources...");
     await cleanupTemporaryResources();
     
     // Prefetch git info for faster operations throughout the workflow
+    console.log("Prefetching repository information...");
     const gitInfo = await prefetchGitInfo();
     if (gitInfo.fetchTime) {
-      logger.info(`Repository info prefetched in ${gitInfo.fetchTime}ms`);
+      console.log(`Repository info prefetched in ${gitInfo.fetchTime}ms`);
     }
     
     // Step 1: Branch Management
@@ -917,7 +925,7 @@ async function runWorkflow() {
       ? gitInfo.branches.find(b => b.startsWith('*'))?.substring(2) || getCurrentBranch() 
       : getCurrentBranch();
     
-    logger.info(`Current branch: ${currentBranch}`);
+    console.log(`Current branch: ${currentBranch}`);
     workflowData.branch = currentBranch;
     
     let branchName = currentBranch;
@@ -1137,7 +1145,7 @@ async function runWorkflow() {
     // Step 4: Preview Deployment
     showWorkflowProgress(4);
     
-    logger.info("Starting preview deployment. This may take a few minutes...");
+    console.log("Starting preview deployment. This may take a few minutes...");
     
     // Run the preview workflow with better error handling
     const previewCommand = 'pnpm run preview';
@@ -1372,10 +1380,10 @@ async function runWorkflow() {
     
     // Final status message
     if (workflowSuccess) {
-      logger.success("\nWorkflow completed successfully! 🎉");
+      console.log("\n[SUCCESS] Workflow completed successfully!");
       workflowData.workflowSuccess = true;
     } else {
-      logger.warn("\nWorkflow completed with warnings! Please review the log messages above.");
+      console.log("\n[WARNING] Workflow completed with warnings! Please review the log messages above.");
       workflowData.workflowSuccess = false;
     }
     
@@ -1383,19 +1391,20 @@ async function runWorkflow() {
     displayWorkflowSummary(workflowData);
     
     // Provide next steps
-    logger.sectionHeader('NEXT STEPS');
-    logger.info(`You are on branch: ${branchName}`);
-    logger.info("What would you like to do next?");
-    logger.info("1. Continue working on this branch");
-    logger.info("2. Run preview deployment again: pnpm run preview");
-    logger.info("3. Create/update PR: pnpm run pr:create");
-    logger.info("4. Switch to main branch: git checkout main");
-    logger.info("5. Sync main with remote: pnpm run sync-main");
+    console.log('\nNEXT STEPS');
+    console.log('='.repeat(30));
+    console.log(`You are on branch: ${branchName}`);
+    console.log("What would you like to do next?");
+    console.log("1. Continue working on this branch");
+    console.log("2. Run preview deployment again: pnpm run preview");
+    console.log("3. Create/update PR: pnpm run pr:create");
+    console.log("4. Switch to main branch: git checkout main");
+    console.log("5. Sync main with remote: pnpm run sync-main");
     
     // Final prompt - this is just for UX completion, no action needed
     await prompt("Press Enter to exit...");
   } catch (error) {
-    logger.error(`Workflow error: ${error.message}`);
+    console.log(`\n[ERROR] Workflow error: ${error.message}`);
     workflowData.workflowSuccess = false;
     // Still show summary even if there was an error
     displayWorkflowSummary(workflowData);
