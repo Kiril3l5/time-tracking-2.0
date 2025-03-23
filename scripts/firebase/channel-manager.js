@@ -28,6 +28,7 @@ import * as logger from '../core/logger.js';
  * @param {string} [options.format='json'] - Output format ('json', 'text', or 'dashboard')
  * @param {boolean} [options.displayUrls=true] - Whether to include URLs in the output
  * @param {boolean} [options.verbose=false] - Whether to log verbose output
+ * @param {boolean} [options.quiet=false] - Whether to suppress detailed channel output
  * @returns {Promise<Object>} - Result of the operation
  */
 export async function listChannels(options) {
@@ -36,7 +37,8 @@ export async function listChannels(options) {
     site, 
     format = 'json', 
     displayUrls = true,
-    verbose = false 
+    verbose = false,
+    quiet = false
   } = options;
 
   if (!projectId || !site) {
@@ -52,13 +54,19 @@ export async function listChannels(options) {
     
     const command = `firebase hosting:channel:list --project=${projectId} --site=${site} ${formatParam}`;
     
+    // Only show command in verbose mode
     if (verbose) {
       logger.debug(`Running command: ${command}`);
     }
 
-    const result = await commandRunner.runCommandAsync(command, {
-      ignoreError: true
-    });
+    // Configure command execution options
+    const runOptions = {
+      ignoreError: true,
+      captureOutput: true, // Always capture output so we can parse it
+      silent: quiet       // Don't output to console when in quiet mode
+    };
+
+    const result = await commandRunner.runCommandAsync(command, runOptions);
     
     if (!result.success) {
       return { 
@@ -70,22 +78,49 @@ export async function listChannels(options) {
     // Parse the result based on the format
     if (format === 'json' || format === 'dashboard') {
       try {
+        // Skip detailed logging if in quiet mode
+        if (!quiet && verbose) {
+          logger.debug(`Received channel data from Firebase`);
+        }
+        
         const parsed = JSON.parse(result.output || '{}');
         const channels = [];
         
         // Process each channel
-        for (const [channelId, info] of Object.entries(parsed.result)) {
-          channels.push({
-            id: channelId,
-            ...info,
-            urls: info.url ? [info.url] : []
-          });
+        if (parsed.result && parsed.result.channels) {
+          for (const channel of parsed.result.channels) {
+            const nameMatch = channel.name.match(/\/channels\/([^/]+)$/);
+            const channelId = nameMatch ? nameMatch[1] : channel.name;
+            
+            channels.push({
+              id: channelId,
+              url: channel.url || null,
+              createTime: channel.createTime || null,
+              expireTime: channel.expireTime || null,
+              ttl: channel.ttl || null
+            });
+          }
+        } else if (parsed.result) {
+          // Handle the format where result is an object with channel IDs as keys
+          for (const [channelId, info] of Object.entries(parsed.result)) {
+            channels.push({
+              id: channelId,
+              ...info,
+              urls: info.url ? [info.url] : []
+            });
+          }
         }
         
         // Sort channels by create time, newest first
         channels.sort((a, b) => {
+          if (!a.createTime) return 1;
+          if (!b.createTime) return -1;
           return new Date(b.createTime) - new Date(a.createTime);
         });
+        
+        if (!quiet) {
+          logger.info(`Found ${channels.length} channels for site ${site}`);
+        }
         
         // Generate dashboard output if requested
         if (format === 'dashboard') {
@@ -104,11 +139,11 @@ export async function listChannels(options) {
           error: `Failed to parse JSON output: ${error.message}`
         };
       }
-    } else {
-      // Text format parsing
-      const channels = parseTextFormatChannels(result.output);
-      return { success: true, channels };
     }
+    
+    // Text format parsing
+    const channels = parseTextFormatChannels(result.output);
+    return { success: true, channels };
   } catch (error) {
     return { 
       success: false, 
@@ -235,57 +270,88 @@ function calculateChannelAge(createTime) {
 
 /**
  * Get a specific channel by ID
- * 
  * @param {Object} options - Options
- * @param {string} options.channelId - Channel ID to get
  * @param {string} options.projectId - Firebase project ID
- * @param {string} options.site - Firebase hosting site name
- * @returns {Promise<Object>} - Channel details
+ * @param {string} options.site - Firebase hosting site
+ * @param {string} options.channelId - Channel ID to get
+ * @param {boolean} [options.quiet=false] - Whether to suppress detailed channel output
+ * @returns {Promise<Object>} - Result of the operation
  */
 export async function getChannel(options) {
-  const { channelId, projectId, site } = options;
+  const { projectId, site, channelId, quiet = false } = options;
   
-  logger.info(`Getting details for channel: ${channelId}`);
+  if (!projectId || !site || !channelId) {
+    return { success: false, error: 'Project ID, site, and channel ID are required' };
+  }
   
-  const result = await commandRunner.runCommandAsync(
-    `firebase hosting:channel:get ${channelId} --project=${projectId} --site=${site} --json`,
-    { ignoreError: true }
-  );
+  // Use the list command and filter for this specific channel
+  const listResult = await listChannels({
+    projectId,
+    site,
+    format: 'json',
+    quiet
+  });
   
-  if (!result.success) {
-    logger.error(`Failed to get channel: ${channelId}`);
-    return {
-      success: false,
-      error: result.error || 'Command failed'
+  if (!listResult.success) {
+    return { 
+      success: false, 
+      error: listResult.error || 'Failed to list channels'
     };
   }
   
-  try {
-    const data = JSON.parse(result.output || '{}');
-    const channel = data?.result;
-    
-    if (!channel) {
-      throw new Error('No channel data in response');
-    }
-    
-    const nameParts = channel.name.split('/');
-    const parsedChannelId = nameParts[nameParts.length - 1];
-    
-    return {
-      success: true,
-      channel: {
-        id: parsedChannelId,
-        name: channel.name,
-        url: channel.url || null,
-        createTime: channel.createTime || null,
-        expireTime: channel.expireTime || null
-      }
-    };
-  } catch (error) {
-    logger.warn(`Failed to parse channel JSON: ${error.message}`);
+  const channel = listResult.channels.find(ch => ch.id === channelId);
+  
+  if (!channel) {
     return {
       success: false,
-      error: `Failed to parse channel data: ${error.message}`
+      error: `Channel ${channelId} not found`
+    };
+  }
+  
+  return {
+    success: true,
+    channel
+  };
+}
+
+/**
+ * Delete a channel
+ * @param {Object} options - Options
+ * @param {string} options.projectId - Firebase project ID
+ * @param {string} options.site - Firebase hosting site
+ * @param {string} options.channelId - Channel ID to delete
+ * @param {boolean} [options.quiet=false] - Whether to suppress detailed output
+ * @returns {Promise<Object>} - Result of the operation
+ */
+export async function deleteChannel(options) {
+  const { projectId, site, channelId, quiet = false } = options;
+  
+  if (!projectId || !site || !channelId) {
+    return { success: false, error: 'Project ID, site, and channel ID are required' };
+  }
+  
+  if (!quiet) {
+    logger.info(`Deleting channel: ${channelId}`);
+  }
+  
+  // Build the delete command
+  const command = `firebase hosting:channel:delete ${channelId} --project=${projectId} --site=${site} --force`;
+  
+  const result = await commandRunner.runCommandAsync(command, {
+    ignoreError: true,
+    silent: quiet
+  });
+  
+  if (result.success) {
+    if (!quiet) {
+      logger.success(`Successfully deleted channel: ${channelId}`);
+    }
+    return { success: true };
+  } else {
+    logger.error(`Failed to delete channel: ${channelId}`);
+    return { 
+      success: false, 
+      error: result.error || 'Delete command failed'
     };
   }
 }
@@ -353,5 +419,6 @@ export default {
   getChannel,
   filterChannelsByPrefix,
   sortChannelsByCreationTime,
-  countChannels
+  countChannels,
+  deleteChannel
 }; 

@@ -28,6 +28,7 @@
  *   --bundle-baseline     Path to a specific bundle size baseline file
  *   --save-logs         Save console output to log file
  *   --verbose           Enable verbose logging
+ *   --quiet             Suppress detailed channel output in logs
  *   --help              Show help information
  * 
  * Examples:
@@ -167,6 +168,7 @@ function parseArguments() {
     'keep-individual-reports': { type: 'boolean', default: false },
     'save-logs': { type: 'boolean', default: false },
     'verbose': { type: 'boolean', default: false },
+    'quiet': { type: 'boolean', default: false },
     'help': { type: 'boolean', default: false },
     'aggressive-cleanup': { type: 'boolean', default: false }
   };
@@ -248,6 +250,7 @@ ${styled.bold('Options:')}
   ${styled.green('Logging Options:')}
   --save-logs           Save console output to log file
   --verbose             Enable verbose logging
+  --quiet               Suppress detailed channel output in logs
   
   ${styled.green('Other Options:')}
   --help                Show this help message
@@ -261,6 +264,9 @@ ${styled.bold('Examples:')}
 
   ${styled.blue('# Skip tests but run other checks')}
   node scripts/preview.js --skip-tests
+  
+  ${styled.blue('# Run with quiet output (less verbose)')}
+  node scripts/preview.js --quiet
   
   ${styled.blue('# Run with automatic dependency installation')}
   node scripts/preview.js --auto-install-deps
@@ -2098,7 +2104,15 @@ async function cleanupChannels(args) {
   const firebaseConfig = config.getFirebaseConfig();
   const previewConfig = config.getPreviewConfig();
   const { projectId } = firebaseConfig;
-  const { prefix, channelKeepCount = 5, channelThreshold = 8 } = previewConfig;
+  
+  // Override the prefix to null to clean up ALL channels regardless of prefix
+  // This ensures we don't miss any channels due to naming patterns
+  const prefix = null;
+  
+  // Always use aggressive cleanup settings by default
+  // Keep only 5 most recent channels regardless of prefix
+  const keepCount = 5;
+  const threshold = 5;
   
   // Get both target sites from .firebaserc
   const sitesToCleanup = [];
@@ -2111,30 +2125,22 @@ async function cleanupChannels(args) {
   const hoursSite = 'hours-autonomyhero-2024';
   sitesToCleanup.push(hoursSite);
   
-  // Use more aggressive cleanup settings if requested
-  const isAggressive = args['aggressive-cleanup'] === true;
-  const keepCount = isAggressive ? 3 : channelKeepCount;
-  const threshold = isAggressive ? 3 : channelThreshold;
-  
-  if (isAggressive) {
-    logger.warn('Running in aggressive cleanup mode - will keep only 3 most recent channels');
-  }
-  
   logger.info(`Found ${sitesToCleanup.length} sites to clean up: ${sitesToCleanup.join(', ')}`);
   logger.info(`Checking for old preview channels to clean up...`);
-  logger.info(`Will keep the ${keepCount} most recent channels with prefix '${prefix}' for each site`);
+  logger.info(`Will keep only the ${keepCount} most recent channels across all prefixes for each site`);
   
   for (const site of sitesToCleanup) {
     logger.info(`Cleaning up site: ${site}`);
     
-    // Check and clean up if needed
+    // Check and clean up ALL channels, keeping only the most recent ones
     const cleanupResult = await channelCleanup.checkAndCleanupIfNeeded({
       projectId,
       site,
       threshold: threshold,
       keepCount: keepCount,
-      prefix,
-      autoCleanup: true
+      prefix: null, // No prefix filter = clean up ALL channels
+      autoCleanup: true,
+      quiet: args.quiet
     });
     
     if (cleanupResult.needsCleanup) {
@@ -2150,6 +2156,7 @@ async function cleanupChannels(args) {
         }
       }
     } else {
+      logger.info(`Site ${site} has ${cleanupResult.sites[site]?.channelCount || 0} channels, below threshold (${threshold})`);
       logger.info(`No channel cleanup needed for site ${site}`);
     }
   }
