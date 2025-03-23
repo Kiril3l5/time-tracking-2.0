@@ -517,7 +517,7 @@ export default async function main(args) {
     const reportResult = await collectAndGenerateReport({
       reportPath: args.output || 'preview-dashboard.html',
       title: `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`,
-      // Get preview URLs
+      // Get preview URLs from JSON file or logs
       previewUrls: extractPreviewUrls(),
       // Don't cleanup reports unless specified
       cleanupIndividualReports: !args['keep-individual-reports']

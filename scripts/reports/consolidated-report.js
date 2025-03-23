@@ -99,21 +99,23 @@ function generateHtml(data) {
       --color-secondary-light: #e6fff0;
       --color-warning: #cc3300;
       --color-warning-light: #fff0e6;
-      --color-border: #ddd;
+      --color-border: #dddddd;
       --color-text: #333;
-      --color-text-light: #666;
+      --color-text-light: #777777;
       --color-background: #f9f9f9;
+      --color-bg-light: #f8f8f8;
+      --color-bg-dark: #f0f0f0;
       --border-radius: 8px;
       --shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
       line-height: 1.6;
       color: var(--color-text);
       max-width: 1200px;
-      margin: 0 auto;
+      margin: 0;
       padding: 20px;
-      background-color: var(--color-background);
+      background-color: #fff;
     }
     h1 {
       border-bottom: 2px solid #eee;
@@ -208,29 +210,31 @@ function generateHtml(data) {
       color: var(--color-warning);
     }
     .preview-urls-panel {
-      margin: 20px 0;
-      padding: 20px;
+      border: 2px solid var(--color-primary);
+      border-radius: 8px;
+      padding: 15px 20px;
+      margin: 0 0 25px 0;
       background-color: var(--color-primary-light);
-      border-radius: var(--border-radius);
-      border: 1px solid var(--color-primary);
-      box-shadow: var(--shadow);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     }
     .preview-urls-panel h2 {
-      margin-top: 0;
       color: var(--color-primary);
-      border-left: none;
-      padding-left: 0;
+      margin-top: 0;
+      border-bottom: 1px solid var(--color-primary);
+      padding-bottom: 8px;
     }
     .preview-url-item {
-      margin: 15px 0;
+      display: flex;
+      align-items: center;
+      margin: 10px 0;
       padding: 10px;
       background-color: white;
-      border-radius: 4px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      border-radius: 6px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
     }
     .preview-url-label {
       font-weight: bold;
-      margin-bottom: 5px;
+      min-width: 120px;
       color: var(--color-primary);
     }
     .preview-url-value {
@@ -239,9 +243,16 @@ function generateHtml(data) {
     .preview-url-value a {
       color: var(--color-primary);
       text-decoration: none;
+      word-break: break-all;
+      padding: 5px 10px;
+      border: 1px solid var(--color-primary);
+      border-radius: 4px;
+      display: inline-block;
+      transition: all 0.2s ease;
     }
     .preview-url-value a:hover {
-      text-decoration: underline;
+      background-color: var(--color-primary);
+      color: white;
     }
     table {
       width: 100%;
@@ -300,6 +311,26 @@ function generateHtml(data) {
         grid-template-columns: 1fr;
       }
     }
+
+    /* Missing URLs Panel */
+    .missing-urls {
+      border-color: var(--color-warning);
+      background-color: var(--color-warning-light);
+    }
+
+    .missing-urls h2 {
+      color: var(--color-warning);
+      border-bottom-color: var(--color-warning);
+    }
+
+    .missing-urls ul {
+      margin-left: 20px;
+      padding-left: 10px;
+    }
+
+    .missing-urls li {
+      margin-bottom: 5px;
+    }
   </style>
 </head>
 <body>
@@ -331,7 +362,18 @@ function generateHtml(data) {
     
     <p style="margin-top: 15px;"><small>Note: These preview URLs will remain accessible until the preview environment is deleted or expires.</small></p>
   </div>
-  ` : ''}
+  ` : `
+  <div class="preview-urls-panel missing-urls">
+    <h2>⚠️ Preview URLs Not Available</h2>
+    <p>No preview URLs were found for this deployment. This might happen if:</p>
+    <ul>
+      <li>The deployment is still in progress</li>
+      <li>The deployment encountered issues</li>
+      <li>URL extraction failed</li>
+    </ul>
+    <p>Check the deployment logs for more information.</p>
+  </div>
+  `}
   
   <div class="status-panel">
     <h2>Workflow Summary</h2>
