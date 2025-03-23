@@ -320,34 +320,43 @@ async function performGitOperations(args) {
       
       // Create a version tag based on package.json version
       try {
-        const packageJsonContent = await import('../package.json', { assert: { type: 'json' } });
-        const version = packageJsonContent.default.version;
+        // Use fs instead of dynamic import to read package.json
+        const fs = await import('fs');
+        const path = await import('path');
+        const packageJsonPath = path.resolve(process.cwd(), 'package.json');
         
-        if (version) {
-          const tagName = `v${version}`;
-          logger.info(`Creating Git tag: ${tagName}`);
+        if (fs.existsSync(packageJsonPath)) {
+          const packageJsonContent = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+          const version = packageJsonContent.version;
           
-          // Check if tag already exists
-          const tagExists = await commandRunner.runCommand(`git tag -l "${tagName}"`, { 
-            captureOutput: true 
-          });
-          
-          if (tagExists.output.trim() === tagName) {
-            logger.warn(`Tag ${tagName} already exists - skipping tag creation`);
-          } else {
-            // Create and push tag
-            await commandRunner.runCommand(`git tag -a "${tagName}" -m "Version ${version}"`, { 
-              captureOutput: false, 
-              logOutput: args.verbose 
+          if (version) {
+            const tagName = `v${version}`;
+            logger.info(`Creating Git tag: ${tagName}`);
+            
+            // Check if tag already exists
+            const tagExists = await commandRunner.runCommand(`git tag -l "${tagName}"`, { 
+              captureOutput: true 
             });
             
-            await commandRunner.runCommand(`git push origin "${tagName}"`, { 
-              captureOutput: false, 
-              logOutput: args.verbose 
-            });
-            
-            logger.success(`Created and pushed tag: ${tagName}`);
+            if (tagExists.output.trim() === tagName) {
+              logger.warn(`Tag ${tagName} already exists - skipping tag creation`);
+            } else {
+              // Create and push tag
+              await commandRunner.runCommand(`git tag -a "${tagName}" -m "Version ${version}"`, { 
+                captureOutput: false, 
+                logOutput: args.verbose 
+              });
+              
+              await commandRunner.runCommand(`git push origin "${tagName}"`, { 
+                captureOutput: false, 
+                logOutput: args.verbose 
+              });
+              
+              logger.success(`Created and pushed tag: ${tagName}`);
+            }
           }
+        } else {
+          logger.warn(`Could not find package.json at ${packageJsonPath}`);
         }
       } catch (error) {
         logger.warn(`Could not create version tag: ${error.message}`);
@@ -392,7 +401,7 @@ async function deployProduction(args) {
     site,
     buildDir,
     message,
-    skipBuild: !args['skip-build'],
+    skipBuild: true,  // Always skip build in the deployment function since we already built
   });
   
   if (deployResult.success) {
