@@ -87,10 +87,21 @@ export async function checkFirebaseAuth() {
     // Extract email if available
     let email = 'Unknown';
     if (isLoggedIn) {
-      const emailMatch = loginListResult.output.match(/User: ([^\s]+)/);
-      if (emailMatch) {
+      // Improved email regex pattern to better capture email address
+      const emailMatch = loginListResult.output.match(/User: ([^\s\n]+)/);
+      if (emailMatch && emailMatch[1]) {
         email = emailMatch[1];
+      } else {
+        // Try an alternative pattern that might be in different Firebase CLI versions
+        const altEmailMatch = loginListResult.output.match(/Email: ([^\s\n]+)/);
+        if (altEmailMatch && altEmailMatch[1]) {
+          email = altEmailMatch[1];
+        }
       }
+      
+      // Add debugging to help diagnose the issue
+      logger.debug(`Firebase auth output: ${loginListResult.output.substring(0, 200)}...`);
+      logger.debug(`Extracted email: ${email}`);
     }
     
     // Try a command that requires valid auth to verify token is still valid

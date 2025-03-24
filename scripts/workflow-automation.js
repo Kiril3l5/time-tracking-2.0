@@ -798,6 +798,57 @@ async function syncMainBranch() {
 }
 
 /**
+ * Check if the main branch is already synced with remote
+ * @returns {Promise<boolean>} - Whether the branch is already synced
+ */
+async function isMainBranchSynced() {
+  logger.info("Checking if main branch is already in sync with remote...");
+  
+  try {
+    // First, fetch the latest refs without merging
+    const fetchResult = executeCommand('git fetch origin main', { 
+      silent: true,
+      ignoreError: true
+    });
+    
+    if (!fetchResult.success) {
+      logger.warn("Unable to fetch latest refs. Assuming main branch needs sync.");
+      return false;
+    }
+    
+    // Now compare local main with origin/main
+    const diffResult = executeCommand('git rev-list --count main..origin/main', {
+      silent: true,
+      ignoreError: true
+    });
+    
+    if (!diffResult.success) {
+      logger.warn("Unable to compare with remote. Assuming main branch needs sync.");
+      return false;
+    }
+    
+    // Convert the output to a number
+    const commitsBehind = parseInt(diffResult.output.trim(), 10);
+    
+    if (isNaN(commitsBehind)) {
+      logger.warn("Unable to determine commit difference. Assuming main branch needs sync.");
+      return false;
+    }
+    
+    if (commitsBehind === 0) {
+      logger.success("Main branch is already in sync with remote.");
+      return true;
+    } else {
+      logger.info(`Main branch is ${commitsBehind} commit(s) behind the remote.`);
+      return false;
+    }
+  } catch (error) {
+    logger.warn(`Error checking main branch sync: ${error.message}`);
+    return false;
+  }
+}
+
+/**
  * Generates a workflow summary to show at the end
  * @param {Object} workflowData - Collected data during workflow execution
  * @returns {string} - Formatted summary
@@ -879,6 +930,15 @@ function displayWorkflowSummary(workflowData) {
   logger.info('\n');
 }
 
+// Function to check if a branch is a feature branch
+function isFeatureBranch(branchName) {
+  // Common feature branch prefixes
+  const featurePrefixes = ['feature/', 'feat/', 'user/', 'story/', 'bugfix/', 'fix/', 'improvement/'];
+  
+  // Check if branch name starts with any of the feature prefixes
+  return featurePrefixes.some(prefix => branchName.startsWith(prefix));
+}
+
 /**
  * Main workflow function
  */
@@ -956,13 +1016,20 @@ async function runWorkflow() {
     
     // Check if they want to sync main first
     if (currentBranch !== 'main' && currentBranch !== 'master') {
-      const shouldSyncMain = await prompt("Would you like to sync your local main branch with remote first? (y/N): ");
-      if (shouldSyncMain.toLowerCase() === 'y') {
-        await syncMainBranch();
+      // Check if main is already synced before asking
+      const isSynced = await isMainBranchSynced();
+      
+      if (!isSynced) {
+        const shouldSyncMain = await prompt("Your local main branch is not in sync with remote. Would you like to sync it now? (Y/n): ");
+        if (shouldSyncMain.toLowerCase() !== 'n') {
+          await syncMainBranch();
+        }
+      } else {
+        logger.info("Your local main branch is already in sync with remote.");
       }
     }
     
-    // If on main, create a new feature branch
+    // If on main, create a new feature branch, otherwise offer workflow options
     if (currentBranch === 'main' || currentBranch === 'master') {
       logger.info("You're on the main branch. Let's create a feature branch.");
       
@@ -994,7 +1061,80 @@ async function runWorkflow() {
         return;
       }
     } else {
-      logger.info(`Continuing work on existing branch: ${branchName}`);
+      // Check if we're already on a feature branch
+      if (isFeatureBranch(currentBranch)) {
+        logger.success(`Already on feature branch: ${currentBranch}`);
+        logger.info("What would you like to do with your current branch?");
+        logger.info("1. Continue working on this branch");
+        logger.info("2. Create a preview deployment");
+        logger.info("3. Switch to a different branch");
+        logger.info("4. Create a pull request");
+        
+        const action = await prompt("Choose an option (1-4): ");
+        
+        if (action === "2") {
+          // Skip to preview deployment step
+          logger.info("Skipping to preview deployment...");
+          // Set necessary data for the preview step
+          workflowData.branch = currentBranch;
+          
+          // Jump directly to preview deployment step
+          showWorkflowProgress(4); // Preview deployment step ID
+          logger.info("Running preview deployment...");
+          
+          try {
+            // Execute preview deployment command
+            const previewCommand = 'pnpm run preview';
+            logger.info(`Running preview deployment: ${previewCommand}`);
+            
+            // Execute the preview script directly
+            const previewResult = executeCommand(previewCommand, { stdio: 'inherit' });
+            
+            if (previewResult.success) {
+              logger.success("Preview deployment completed successfully!");
+              // URLs will be shown by the preview script itself
+            } else {
+              logger.error("Preview deployment failed. Check the output for details.");
+              workflowData.workflowSuccess = false;
+            }
+          } catch (error) {
+            logger.error(`Error during preview deployment: ${error.message}`);
+            workflowData.workflowSuccess = false;
+          }
+          
+          // Show workflow summary and exit
+          displayWorkflowSummary(workflowData);
+          rl.close();
+          return;
+        } else if (action === "3") {
+          // Handled by existing branch switching code below
+        } else if (action === "4") {
+          // Skip to PR creation step
+          logger.info("Skipping to pull request creation...");
+          
+          // Get PR content
+          const prContent = await suggestPRContent();
+          const prTitle = await prompt(`Enter PR title [${prContent.title}]: `);
+          const prDescription = await prompt("Enter PR description (optional, press Enter to use generated): ");
+          
+          // Create PR
+          const prResult = await createPullRequest(
+            prTitle || prContent.title,
+            prDescription || prContent.body,
+            workflowData
+          );
+          
+          // Show workflow summary and exit
+          displayWorkflowSummary(workflowData);
+          rl.close();
+          return;
+        } else {
+          // Continue with current branch (option 1 or invalid input)
+          logger.info(`Continuing work on branch: ${currentBranch}`);
+        }
+      } else {
+        logger.info(`Continuing work on existing branch: ${currentBranch}`);
+      }
       
       // Option to switch to a different branch
       const switchBranch = await prompt("Would you like to switch to a different branch? (y/N): ");

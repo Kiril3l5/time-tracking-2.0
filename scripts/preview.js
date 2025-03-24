@@ -470,8 +470,15 @@ async function verifyAuthentication() {
       lastAuthenticated: currentTime
     });
     
-    logger.success(`Firebase authenticated as: ${authResult.services.firebase.email || 'Unknown'}`);
-    logger.success(`Git user: ${authResult.services.gitAuth.name} <${authResult.services.gitAuth.email}>`);
+    // Properly access git user information
+    const gitUserName = authResult.services.gitAuth.userName || authResult.services.gitAuth.name || 'Unknown';
+    const gitUserEmail = authResult.services.gitAuth.userEmail || authResult.services.gitAuth.email || 'Unknown';
+    
+    // Properly access firebase information
+    const firebaseEmail = authResult.services.firebase.email || 'Unknown';
+    
+    logger.success(`Firebase authenticated as: ${firebaseEmail}`);
+    logger.success(`Git user: ${gitUserName} <${gitUserEmail}>`);
     progressTracker.completeStep(true, 'Authentication verified');
     return true;
   } catch (error) {
@@ -1959,67 +1966,100 @@ async function cleanupChannels(args, forceQuiet = false) {
   let totalDeleted = 0;
   let totalSites = 0;
   let siteResults = {};
+  let errorOccurred = false;
   
-  // Create an array of promises to check all sites in parallel
-  const siteCheckPromises = sitesToCleanup.map(async (site) => {
-    // First check if cleanup is needed (without doing cleanup yet)
-    const checkResult = await channelCleanup.isCleanupNeeded({
-      projectId,
-      site,
-      threshold,
-      quiet: true // Always quiet for the check
+  try {
+    // Create an array of promises to check all sites in parallel
+    const siteCheckPromises = sitesToCleanup.map(async (site) => {
+      try {
+        // First check if cleanup is needed (without doing cleanup yet)
+        const checkResult = await channelCleanup.isCleanupNeeded({
+          projectId,
+          site,
+          threshold,
+          quiet: true // Always quiet for the check
+        });
+        
+        return { site, checkResult };
+      } catch (err) {
+        logger.error(`Error checking if cleanup needed for site ${site}: ${err.message}`);
+        return { site, checkResult: { needed: false, error: err.message } };
+      }
     });
     
-    return { site, checkResult };
-  });
-  
-  // Wait for all site checks to complete
-  const siteChecks = await Promise.all(siteCheckPromises);
-  
-  // Only clean up sites that need it
-  const sitesNeedingCleanup = siteChecks.filter(({ checkResult }) => checkResult.needed);
-  
-  if (sitesNeedingCleanup.length === 0) {
-    if (!quiet) logger.info('No sites need channel cleanup');
-    return { success: true, cleaned: 0 };
-  }
-  
-  // Create an array of promises to clean up all sites in parallel
-  const cleanupPromises = sitesNeedingCleanup.map(async ({ site }) => {
-    totalSites++;
+    // Wait for all site checks to complete
+    const siteChecks = await Promise.all(siteCheckPromises);
     
-    // Clean up ALL channels, keeping only the most recent ones
-    const cleanupResult = await channelCleanup.cleanupChannels({
-      projectId,
-      site,
-      prefix,  // No prefix filter = clean up ALL channels
-      keepCount,
-      quiet: true // Always use quiet mode for consistent output
-    });
+    // Only clean up sites that need it
+    const sitesNeedingCleanup = siteChecks.filter(({ checkResult }) => checkResult.needed);
     
-    siteResults[site] = cleanupResult;
-    
-    if (cleanupResult.deleted && cleanupResult.deleted.length > 0) {
-      totalDeleted += cleanupResult.deleted.length;
+    if (sitesNeedingCleanup.length === 0) {
+      if (!quiet) logger.info('No sites need channel cleanup');
+      return { success: true, cleaned: 0 };
     }
     
-    return { site, result: cleanupResult };
-  });
-  
-  // Wait for all cleanups to complete
-  await Promise.all(cleanupPromises);
-  
-  if (totalDeleted > 0) {
-    logger.success(`Cleaned up ${totalDeleted} old channels across ${totalSites} sites`);
-  } else if (!quiet) {
-    logger.info('No channels needed cleanup');
+    // Create an array of promises to clean up all sites in parallel
+    const cleanupPromises = sitesNeedingCleanup.map(async ({ site }) => {
+      totalSites++;
+      
+      try {
+        // Clean up ALL channels, keeping only the most recent ones
+        const cleanupResult = await channelCleanup.cleanupChannels({
+          projectId,
+          site,
+          prefix,  // No prefix filter = clean up ALL channels
+          keepCount,
+          quiet: true // Always use quiet mode for consistent output
+        });
+        
+        siteResults[site] = cleanupResult;
+        
+        if (cleanupResult.success && cleanupResult.deleted && cleanupResult.deleted.length > 0) {
+          totalDeleted += cleanupResult.deleted.length;
+        }
+        
+        return { site, result: cleanupResult };
+      } catch (err) {
+        errorOccurred = true;
+        logger.error(`Error cleaning up channels for site ${site}: ${err.message}`);
+        return { 
+          site, 
+          result: { success: false, error: err.message, deleted: [] } 
+        };
+      }
+    });
+    
+    // Wait for all cleanups to complete
+    const results = await Promise.all(cleanupPromises);
+    
+    // Check if any cleanup failed
+    const anyFailed = results.some(({ result }) => !result.success);
+    
+    if (anyFailed) {
+      logger.warn('Some channel cleanup operations failed');
+    }
+    
+    if (totalDeleted > 0) {
+      logger.success(`Cleaned up ${totalDeleted} old channels across ${totalSites} sites`);
+    } else if (!quiet) {
+      logger.info('No channels needed cleanup');
+    }
+    
+    // Add error info to return value if there were issues
+    return { 
+      success: !anyFailed, 
+      cleaned: totalDeleted,
+      sites: siteResults,
+      hasErrors: anyFailed
+    };
+  } catch (error) {
+    logger.error(`Failed to clean up channels: ${error.message}`);
+    return {
+      success: false,
+      error: error.message,
+      cleaned: totalDeleted
+    };
   }
-  
-  return { 
-    success: true, 
-    cleaned: totalDeleted,
-    sites: siteResults
-  };
 }
 
 /**

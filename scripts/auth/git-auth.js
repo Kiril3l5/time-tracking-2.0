@@ -309,7 +309,10 @@ export function checkGitConfig() {
   
   return {
     configured: isConfigured,
-    ...checks
+    userEmail: checks.userEmail,
+    userName: checks.userName,
+    remoteOrigin: checks.remoteOrigin,
+    hasUncommittedChanges: checks.hasUncommittedChanges
   };
 }
 

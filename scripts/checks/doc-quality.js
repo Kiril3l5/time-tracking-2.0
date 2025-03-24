@@ -575,34 +575,64 @@ export function checkDocQuality(options) {
   
   const minCoverage = options.minCoverage || DEFAULT_MIN_COVERAGE;
   
-  // Convert the options to the format expected by analyzeDocumentation
-  const analysisOptions = {
-    rootDir: _docsDir,
-    includePatterns: _DEFAULT_INCLUDE_PATTERNS,
-    excludePatterns: _DEFAULT_EXCLUDE_PATTERNS,
-    minCoverage,
-    skipFunctionDocs: false,
-    skipComponentDocs: false,
-    skipTsDoc: false,
-    skipJsDoc: false
-  };
-  
-  // Run the analysis
-  const results = analyzeDocumentation(analysisOptions);
-  
-  // Generate the HTML report if an output file is specified
-  if (outputFile) {
-    generateHtmlReport(results, outputFile);
+  try {
+    // Convert the options to the format expected by analyzeDocumentation
+    const analysisOptions = {
+      rootDir: _docsDir,
+      includePatterns: _DEFAULT_INCLUDE_PATTERNS,
+      excludePatterns: _DEFAULT_EXCLUDE_PATTERNS,
+      minCoverage,
+      skipFunctionDocs: false,
+      skipComponentDocs: false,
+      skipTsDoc: false,
+      skipJsDoc: false
+    };
+    
+    // Run the analysis
+    const results = analyzeDocumentation(analysisOptions);
+    
+    // Check if results has the expected structure
+    if (!results || typeof results !== 'object') {
+      throw new Error('Documentation analysis returned invalid results');
+    }
+    
+    // Generate the HTML report if an output file is specified
+    if (outputFile) {
+      try {
+        generateHtmlReport(results, outputFile);
+        logger.info(`Generating HTML report at: ${outputFile}`);
+      } catch (reportError) {
+        logger.error(`Error generating HTML report: ${reportError.message}`);
+      }
+    }
+    
+    // Print a summary (only if results have expected properties)
+    if (results.stats) {
+      printSummary(results, minCoverage);
+    }
+    
+    // Add fallback for missing properties
+    const coverage = results.coverage || { overall: 0 };
+    const overallCoverage = typeof coverage === 'object' ? (coverage.overall || 0) : (typeof coverage === 'number' ? coverage : 0);
+    
+    return {
+      success: overallCoverage >= minCoverage,
+      coverage: overallCoverage,
+      issues: results.issues || [],
+      duplicates: results.duplicates || [], 
+      missingDocs: results.missingDocs || []
+    };
+  } catch (error) {
+    logger.error(`Error in documentation quality check: ${error.message}`);
+    
+    // Return a valid structure even when errors occur
+    return {
+      success: false,
+      coverage: 0,
+      error: error.message,
+      issues: [],
+      duplicates: [],
+      missingDocs: []
+    };
   }
-  
-  // Print a summary
-  printSummary(results, minCoverage);
-  
-  return {
-    success: results.coverage.overall >= minCoverage,
-    coverage: results.coverage.overall,
-    issues: results.issues,
-    duplicates: [], // Mock data - no duplicates in this implementation
-    missingDocs: [] // Mock data - no missing docs in this implementation
-  };
 } 
