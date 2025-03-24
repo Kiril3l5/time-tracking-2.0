@@ -157,7 +157,7 @@ const WORKFLOW_STEPS = [
 ];
 
 // Track current step
-let currentStep = 0;
+let _currentStep = 0;
 
 /**
  * Updates the terminal window title
@@ -181,18 +181,18 @@ function resetTerminalTitle() {
  * @param {number} stepId - The step ID to display
  */
 function showWorkflowProgress(stepId) {
-  currentStep = stepId;
+  _currentStep = stepId;
   const step = WORKFLOW_STEPS.find(s => s.id === stepId);
   if (!step) return;
   
   // Update terminal title with current step
   updateTerminalTitle(`${step.name}`);
   
-  console.log('\n');
+  logger.info('\n');
   // Display the step without numbering, just the name and description
-  console.log(`${step.name}`);
-  console.log('='.repeat(50));
-  console.log(`${step.description}`);
+  logger.info(`${step.name}`);
+  logger.info('='.repeat(50));
+  logger.info(`${step.description}`);
 }
 
 // Get the root directory
@@ -250,7 +250,7 @@ function executeCommand(command, options = {}) {
   
   // Show command being executed unless suppressed
   if (!options.silent) {
-    console.log(`\n> ${command}`);
+    logger.info(`\n> ${command}`);
   }
   
   try {
@@ -288,7 +288,7 @@ function executeCommand(command, options = {}) {
         } catch (error) {
           // Special handling for timeout errors
           if (error.code === 'ETIMEDOUT') {
-            console.log(`\n[WARNING] Command timed out after ${timeout/1000} seconds: ${command}`);
+            logger.warn(`\nCommand timed out after ${timeout/1000} seconds: ${command}`);
           }
           
           // For stdio: 'inherit', we might still want to extract URLs even if the command failed
@@ -306,7 +306,7 @@ function executeCommand(command, options = {}) {
     
     // Show success indicator (if not suppressed)
     if (!options.silent && !options.suppressSuccess) {
-      console.log(`[SUCCESS] Command completed`);
+      logger.success(`Command completed`);
     }
     
     const result = { 
@@ -326,8 +326,8 @@ function executeCommand(command, options = {}) {
     return result;
   } catch (error) {
     if (!options.suppressErrors) {
-      console.log(`\n[ERROR] Command failed: ${command}`);
-      console.log(error.message);
+      logger.error(`\nCommand failed: ${command}`);
+      logger.error(error.message);
     }
     
     // Don't exit process on error unless explicitly requested
@@ -473,7 +473,7 @@ function suggestPRContent() {
  * Check for and fix .gitignore issues
  */
 async function fixGitignoreIssues() {
-  console.log("Checking .gitignore configuration...");
+  logger.info("Checking .gitignore configuration...");
   
   try {
     // Check if the fixer script exists
@@ -481,11 +481,11 @@ async function fixGitignoreIssues() {
       await import('./fix-gitignore.js');
       return true;
     } else {
-      console.log("[WARNING] Gitignore fixer script not found. Temp files may not be properly ignored.");
+      logger.warn("Gitignore fixer script not found. Temp files may not be properly ignored.");
       return false;
     }
   } catch (error) {
-    console.log(`[WARNING] Could not run gitignore fixer: ${error.message}`);
+    logger.warn(`Could not run gitignore fixer: ${error.message}`);
     return false;
   }
 }
@@ -594,9 +594,9 @@ async function commitGitignoreChanges() {
  * @returns {boolean} - Whether PR creation was successful
  */
 async function createPullRequest(title, description, workflowData) {
-  console.log('\nCREATING PULL REQUEST');
-  console.log('='.repeat(30));
-  console.log(`Creating PR with title: ${title}`);
+  logger.info('\nCREATING PULL REQUEST');
+  logger.info('='.repeat(30));
+  logger.info(`Creating PR with title: ${title}`);
   
   try {
     const result = executeCommand(`pnpm run pr:create-with-title "${title}" "${description}"`, { 
@@ -619,20 +619,20 @@ async function createPullRequest(title, description, workflowData) {
     if (!result.success) {
       // PR creation failed, check for specific errors
       if (result.output?.includes("You have uncommitted changes")) {
-        console.log("[ERROR] PR creation failed due to uncommitted changes.");
+        logger.error("PR creation failed due to uncommitted changes.");
         
         // Offer to auto-commit
         const shouldAutoCommit = await prompt("Would you like to automatically commit these changes? (Y/n): ");
         
         if (shouldAutoCommit.toLowerCase() !== 'n') {
-          console.log("Auto-committing changes...");
+          logger.info("Auto-committing changes...");
           const autoCommitResult = executeCommand(`pnpm run pr:auto-commit "${title}" "${description}"`, { 
             stdio: 'inherit',
             suppressErrors: false
           });
           
           if (autoCommitResult.success) {
-            console.log("[SUCCESS] PR created successfully with auto-commit!");
+            logger.success("PR created successfully with auto-commit!");
             
             // Update workflow data for successful PR
             if (workflowData) {
@@ -647,20 +647,20 @@ async function createPullRequest(title, description, workflowData) {
             
             return true;
           } else {
-            console.log("[ERROR] Auto-commit failed. Please commit your changes manually.");
+            logger.error("Auto-commit failed. Please commit your changes manually.");
             return false;
           }
         } else {
-          console.log("You can manually commit your changes and then create a PR.");
+          logger.info("You can manually commit your changes and then create a PR.");
           return false;
         }
       } else if (result.output?.includes("a pull request for branch") && result.output?.includes("already exists")) {
         // PR already exists
         const prUrl = result.output.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
         
-        console.log("[WARNING] A pull request already exists for this branch.");
+        logger.warn("A pull request already exists for this branch.");
         if (prUrl) {
-          console.log(`Existing PR: ${prUrl}`);
+          logger.info(`Existing PR: ${prUrl}`);
           
           // Save the existing PR URL to workflow data
           if (workflowData) {
@@ -672,26 +672,26 @@ async function createPullRequest(title, description, workflowData) {
           const shouldUpdate = await prompt("Would you like to update the existing PR? (y/N): ");
           
           if (shouldUpdate.toLowerCase() === 'y') {
-            console.log("Use the GitHub website to update the PR details.");
+            logger.info("Use the GitHub website to update the PR details.");
             
             // Try to open the PR URL in browser
             try {
               const openCmd = process.platform === 'win32' ? 'start' : 
                 process.platform === 'darwin' ? 'open' : 'xdg-open';
               executeCommand(`${openCmd} ${prUrl}`);
-              console.log("[SUCCESS] Opened PR in browser for editing.");
+              logger.success("Opened PR in browser for editing.");
             } catch (error) {
-              console.log(`Please visit ${prUrl} to update the PR.`);
+              logger.info(`Please visit ${prUrl} to update the PR.`);
             }
           }
         }
         return true; // PR exists, so technically "success"
       } else {
-        console.log("[ERROR] PR creation failed for an unknown reason.");
+        logger.error("PR creation failed for an unknown reason.");
         return false;
       }
     } else {
-      console.log("[SUCCESS] PR created successfully!");
+      logger.success("PR created successfully!");
       
       // Update workflow data for successful PR
       if (workflowData) {
@@ -701,7 +701,7 @@ async function createPullRequest(title, description, workflowData) {
       return true;
     }
   } catch (error) {
-    console.log(`[ERROR] Failed to create PR: ${error.message}`);
+    logger.error(`Failed to create PR: ${error.message}`);
     return false;
   }
 }
@@ -872,11 +872,11 @@ function generateWorkflowSummary(workflowData) {
 function displayWorkflowSummary(workflowData) {
   const summary = generateWorkflowSummary(workflowData);
   
-  console.log('\n');
-  console.log('WORKFLOW COMPLETED');
-  console.log('='.repeat(30));
-  console.log(summary);
-  console.log('\n');
+  logger.info('\n');
+  logger.info('WORKFLOW COMPLETED');
+  logger.info('='.repeat(30));
+  logger.info(summary);
+  logger.info('\n');
 }
 
 /**
@@ -902,18 +902,18 @@ async function runWorkflow() {
   };
   
   try {
-    console.log('\nAUTOMATED DEVELOPMENT WORKFLOW\n');
-    console.log('='.repeat(50));
+    logger.info('\nAUTOMATED DEVELOPMENT WORKFLOW\n');
+    logger.info('='.repeat(50));
     
     // Clean up temporary resources before starting
-    console.log("Cleaning up temporary resources...");
+    logger.info("Cleaning up temporary resources...");
     await cleanupTemporaryResources();
     
     // Prefetch git info for faster operations throughout the workflow
-    console.log("Prefetching repository information...");
+    logger.info("Prefetching repository information...");
     const gitInfo = await prefetchGitInfo();
     if (gitInfo.fetchTime) {
-      console.log(`Repository info prefetched in ${gitInfo.fetchTime}ms`);
+      logger.info(`Repository info prefetched in ${gitInfo.fetchTime}ms`);
     }
     
     // Step 1: Branch Management
@@ -924,7 +924,7 @@ async function runWorkflow() {
       ? gitInfo.branches.find(b => b.startsWith('*'))?.substring(2) || getCurrentBranch() 
       : getCurrentBranch();
     
-    console.log(`Current branch: ${currentBranch}`);
+    logger.info(`Current branch: ${currentBranch}`);
     workflowData.branch = currentBranch;
     
     let branchName = currentBranch;
@@ -1001,7 +1001,7 @@ async function runWorkflow() {
       if (switchBranch.toLowerCase() === 'y') {
         // List available branches
         logger.info("\nAvailable branches:");
-        console.log(executeCommand('git branch'));
+        logger.info(executeCommand('git branch').output);
         
         const newBranch = await prompt("Enter branch name to switch to (or press enter to stay on current branch): ");
         if (newBranch && newBranch !== currentBranch) {
@@ -1009,7 +1009,7 @@ async function runWorkflow() {
           if (hasUncommittedChanges()) {
             logger.warn("You have uncommitted changes that would be lost when switching branches.");
             logger.info("Modified files:");
-            console.log(executeCommand('git status --short'));
+            logger.info(executeCommand('git status --short').output);
             
             logger.info("\nOptions:");
             logger.info("1. Commit changes before switching");
@@ -1098,7 +1098,7 @@ async function runWorkflow() {
     if (hasChanges) {
       logger.info("You have uncommitted changes.");
       logger.info("Modified files:");
-      console.log(executeCommand('git status --short'));
+      logger.info(executeCommand('git status --short').output);
       
       const shouldCommit = await prompt("Would you like to commit these changes? (Y/n): ");
       if (shouldCommit.toLowerCase() !== 'n') {
@@ -1134,7 +1134,7 @@ async function runWorkflow() {
     const gitignoreStartTime = logger.timeStart("Checking and fixing gitignore configuration");
     
     // Run these operations in parallel
-    const [gitignoreFixed, gitignoreChangesCommitted] = await Promise.all([
+    const [_gitignoreFixed, _gitignoreChangesCommitted] = await Promise.all([
       fixGitignoreIssues(),
       commitGitignoreChanges()
     ]);
@@ -1144,15 +1144,7 @@ async function runWorkflow() {
     // Step 4: Preview Deployment
     showWorkflowProgress(4);
     
-    console.log("Starting preview deployment. This may take a few minutes...");
-    
-    // Run the preview workflow with better error handling
-    const previewCommand = 'pnpm run preview';
-    logger.command(previewCommand); // Use the command logger for better visibility
-    
-    // Track overall workflow success
-    let workflowSuccess = true;
-    let previewUrls = null;
+    logger.info("Starting preview deployment. This may take a few minutes...");
     
     // Run the preview workflow with better error handling
     const previewCommand = 'pnpm run preview';
@@ -1286,7 +1278,7 @@ async function runWorkflow() {
       if (hasUncommittedChanges()) {
         logger.info("Uncommitted changes detected that should be committed before creating PR.");
         logger.info("Modified files:");
-        console.log(executeCommand('git status --short'));
+        logger.info(executeCommand('git status --short').output);
         
         // Offer to auto-commit all remaining changes
         const shouldAutoCommit = await prompt("Would you like to automatically commit these changes before creating PR? (Y/n): ");
@@ -1350,9 +1342,9 @@ async function runWorkflow() {
       
       // Show suggested description
       logger.info("Suggested PR description:");
-      console.log("------------------------");
-      console.log(suggestion.description);
-      console.log("------------------------");
+      logger.info("------------------------");
+      logger.info(suggestion.description);
+      logger.info("------------------------");
       
       // Ask if user wants to use suggestion or provide custom
       const useDefault = await prompt("Use this description? (Y/n): ");
@@ -1377,8 +1369,12 @@ async function runWorkflow() {
         logger.info("After your PR is merged on GitHub, follow these steps:");
         logger.info("1. Switch to main branch: git checkout main");
         logger.info("2. Pull latest changes: git pull origin main");
-        logger.info("3. Start a new feature with: pnpm run workflow:new");
+        logger.info("3. Deploy to production: node scripts/deploy.js \"Deploy merged PR changes\"");
+        logger.info("4. Start a new feature with: pnpm run workflow:new");
         logger.info("\nYou can run 'pnpm run sync-main' at any time to update your local main branch.");
+        
+        // Add a clearer deployment call-to-action
+        logger.warning("\nIMPORTANT: After your PR is merged to main, remember to deploy to production!");
       }
     }
     
@@ -1387,10 +1383,10 @@ async function runWorkflow() {
     
     // Final status message
     if (workflowSuccess) {
-      console.log("\n[SUCCESS] Workflow completed successfully!");
+      logger.success("\nWorkflow completed successfully!");
       workflowData.workflowSuccess = true;
     } else {
-      console.log("\n[WARNING] Workflow completed with warnings! Please review the log messages above.");
+      logger.warn("\nWorkflow completed with warnings! Please review the log messages above.");
       workflowData.workflowSuccess = false;
     }
     
@@ -1398,20 +1394,21 @@ async function runWorkflow() {
     displayWorkflowSummary(workflowData);
     
     // Provide next steps
-    console.log('\nNEXT STEPS');
-    console.log('='.repeat(30));
-    console.log(`You are on branch: ${branchName}`);
-    console.log("What would you like to do next?");
-    console.log("1. Continue working on this branch");
-    console.log("2. Run preview deployment again: pnpm run preview");
-    console.log("3. Create/update PR: pnpm run pr:create");
-    console.log("4. Switch to main branch: git checkout main");
-    console.log("5. Sync main with remote: pnpm run sync-main");
+    logger.info('\nNEXT STEPS');
+    logger.info('='.repeat(30));
+    logger.info(`You are on branch: ${branchName}`);
+    logger.info("What would you like to do next?");
+    logger.info("1. Continue working on this branch");
+    logger.info("2. Run preview deployment again: pnpm run preview");
+    logger.info("3. Create/update PR: pnpm run pr:create");
+    logger.info("4. Switch to main branch: git checkout main");
+    logger.info("5. Sync main with remote: pnpm run sync-main");
+    logger.info("6. Deploy to production (from main): node scripts/deploy.js \"Your message\"");
     
     // Final prompt - this is just for UX completion, no action needed
     await prompt("Press Enter to exit...");
   } catch (error) {
-    console.log(`\n[ERROR] Workflow error: ${error.message}`);
+    logger.error(`\nWorkflow error: ${error.message}`);
     workflowData.workflowSuccess = false;
     // Still show summary even if there was an error
     displayWorkflowSummary(workflowData);

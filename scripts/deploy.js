@@ -42,18 +42,18 @@ import * as logger from './core/logger.js';
 import * as commandRunner from './core/command-runner.js';
 import * as config from './core/config.js';
 import * as environment from './core/environment.js';
-import * as progressTracker from './core/progress-tracker.js';
+import * as _progressTracker from './core/progress-tracker.js';
 
 // Import authentication modules
-import * as firebaseAuth from './auth/firebase-auth.js';
-import * as github from './auth/git-auth.js';
+import * as _firebaseAuth from './auth/firebase-auth.js';
+import * as _github from './auth/git-auth.js';
 import * as authManager from './auth/auth-manager.js';
 
 // Import test and check modules
 import * as testRunner from './checks/test-runner.js';
-import * as lintCheck from './checks/lint-check.js';
-import * as typescriptCheck from './checks/typescript-check.js';
-import * as typeValidator from './typescript/type-validator.js';
+import * as _lintCheck from './checks/lint-check.js';
+import * as _typescriptCheck from './checks/typescript-check.js';
+import * as _typeValidator from './typescript/type-validator.js';
 
 // Import Firebase modules
 import * as deployment from './firebase/deployment.js';
@@ -102,7 +102,7 @@ function parseArguments() {
 function showHelp() {
   const colors = logger.getColors();
   
-  console.log(`
+  logger.info(`
 ${colors.cyan.bold}Firebase Production Deployment Workflow${colors.reset}
 
 This script orchestrates the entire workflow for production deployments.
@@ -455,8 +455,8 @@ async function main() {
     // Load configuration
     logger.info('Loading configuration...');
     const firebaseConfig = config.getFirebaseConfig();
-    const buildConfig = config.getBuildConfig();
-    const previewConfig = config.getPreviewConfig();
+    const _buildConfig = config.getBuildConfig();
+    const _previewConfig = config.getPreviewConfig();
     
     logger.info(`Loaded configuration for project: ${firebaseConfig.projectId}`);
     
@@ -485,7 +485,7 @@ async function main() {
         if (!gitPassed && !args['skip-git']) {
           logger.warn('Git operations failed, but continuing with deployment');
           // Ask the user if they want to continue
-          console.log('Do you want to continue with deployment despite Git errors? (y/n)');
+          logger.info('Do you want to continue with deployment despite Git errors? (y/n)');
           const response = await new Promise(resolve => {
             process.stdin.once('data', data => {
               resolve(data.toString().trim().toLowerCase());

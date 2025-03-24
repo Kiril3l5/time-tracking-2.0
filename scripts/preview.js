@@ -1691,7 +1691,8 @@ async function deployPreview(args) {
         site,
         channelId,
         buildDir,
-        message
+        message,
+        skipBuild: true  // Skip the build in deployment.js since we already built the app
       });
       
       // Enhanced result analysis for deprecation warnings
