@@ -60,7 +60,7 @@ The preview script will:
 - **Check documentation quality** - Identifies duplicate content and validates key documentation
 - **Verify module syntax consistency** - Ensures consistent ES Module usage
 - **Validate GitHub workflow files** - Checks workflow configurations against package.json scripts
-- **Deploy to a new unique preview channel** with your git branch name
+- **Deploy to a new unique preview channel** with your git branch name (without rebuilding thanks to skipBuild optimization)
 - **Show you the working preview URLs**
 
 Example output:
@@ -96,6 +96,25 @@ Deploying to channel: preview-feature-login-20240510123456
 Preview URLs:
 ADMIN: https://admin-autonomyhero-2024--preview-feature-login-20240510123456.web.app
 HOURS: https://hours-autonomyhero-2024--preview-feature-login-20240510123456.web.app
+```
+
+#### Post-PR Workflow
+
+After your PR is created, reviewed, and merged to the main branch:
+
+1. The workflow provides clear guidance on next steps:
+   - Switch to the main branch with `git checkout main`
+   - Pull the latest changes with `git pull origin main`
+   - Deploy to production with `node scripts/deploy.js "Your deployment message"`
+   
+2. This ensures your changes are properly deployed to production after merging, maintaining a consistent workflow from development to production deployment.
+
+Example workflow sequence:
+```bash
+# After your PR is merged on GitHub
+git checkout main
+git pull origin main
+node scripts/deploy.js "Deploy feature XYZ"
 ```
 
 #### Enhanced Error Handling
@@ -423,7 +442,7 @@ scripts/
 │   ├── report-collector.js    # Collects and processes individual reports
 │   └── consolidated-report.js # Generates the consolidated HTML dashboard
 │
-├── preview/                   # Legacy preview system (being migrated)
+├── preview/                   # Legacy preview system 
 │   ├── preview.js             # Legacy preview implementation
 │   ├── firebase-deploy.js     # Legacy Firebase deployment
 │   ├── firebase-auth.js       # Legacy authentication
@@ -905,6 +924,10 @@ The bundle size analysis may not detect all code splitting chunks correctly, whi
 ### 4. Report Dashboard Generation
 
 Occasionally, the consolidated report dashboard might not include all reports if individual checks fail. We've implemented a fallback mechanism that creates a minimal test report to ensure the dashboard is always generated, but some sections may show placeholder data instead of actual results.
+
+### 5. Double Build Issue (Fixed)
+
+Previously, the preview deployment would build the application twice - once during the build step and again during deployment. We've fixed this issue by adding a `skipBuild` parameter to the `deployToPreviewChannel` function, which prevents the second build when the application has already been built.
 
 ### Workarounds
 

@@ -1,8 +1,119 @@
 # Documentation Organization Guide
 
-## Overview
+This guide outlines the documentation organization strategy and maintenance procedures for the Time Tracking 2.0 project.
 
-This guide establishes standards for organizing documentation within the Time Tracking System project. Following these guidelines will help maintain a clean, consistent, and easily navigable documentation structure.
+## Documentation Organization Principles
+
+1. **Central Index**: The `docs/documentation-index.md` file serves as the master index for all documentation
+2. **Category-Based Organization**: Documentation files are organized in topic-based folders
+3. **README Integration**: The main README.md links to the most important documentation
+4. **Consistent Structure**: Each document follows a consistent structure with headers and sections
+
+## Folder Structure
+
+Documentation is organized in the following folder structure:
+
+```
+docs/
+├── documentation-index.md            # Master index of all documentation
+├── architecture/                     # System architecture documentation
+├── deployment/                       # Deployment-related documentation
+├── development/                      # Development standards and guidelines
+├── env/                              # Environment setup documentation
+├── main_readme/                      # Core system documentation
+├── network/                          # Network-related documentation
+├── patterns/                         # Design patterns documentation
+├── security/                         # Security-related documentation
+├── setup/                            # Project setup documentation
+├── structure/                        # Project structure documentation
+├── testing/                          # Testing strategy documentation
+└── workflow/                         # Development workflow documentation
+```
+
+## Documentation Maintenance Process
+
+### When Working on Code
+
+1. **Identify Affected Documentation**:
+   - Before making code changes, identify which documentation files might need updates
+   - If no relevant documentation exists, consider creating new documentation
+
+2. **Update Documentation in Parallel**:
+   - Make documentation changes alongside code changes
+   - Ensure documentation reflects the current state of the code
+
+3. **Update Documentation Index**:
+   - If adding or removing documentation files, update the `documentation-index.md` file
+   - Generate a new timestamp in the index file
+
+4. **Include in PR**:
+   - Include documentation updates in the same PR as code changes
+   - Mention documentation changes in the PR description
+
+### Creating New Documentation
+
+When creating new documentation:
+
+1. **Choose the Right Location**:
+   - Place the file in the appropriate category folder
+   - If no appropriate folder exists, consult the team before creating a new category
+
+2. **Use the Standard Format**:
+   - Start with a clear title and description
+   - Use proper Markdown formatting
+   - Include examples where applicable
+   - Add a "Last Updated" date
+
+3. **Update the Index**:
+   - Add the new file to `documentation-index.md`
+   - Include file size, line count, and a brief summary
+
+4. **Link from Related Documents**:
+   - Add links to the new document from related documentation
+   - Consider updating the README.md if it's a critical document
+
+### Periodic Maintenance
+
+Quarterly documentation review:
+
+1. **Review All Documentation**:
+   - Check each document for accuracy and relevance
+   - Mark outdated sections for revision
+   - Remove obsolete documentation
+
+2. **Update Summaries**:
+   - Fill in missing summaries in the index
+   - Ensure summaries accurately reflect content
+
+3. **Check Cross-Links**:
+   - Ensure links between documents are working
+   - Add links between related documents
+
+4. **Update Dates**:
+   - Update the "Last Modified" dates for reviewed documents
+
+## Document Structure Guidelines
+
+Each document should follow this structure:
+
+1. **Title**: Clear and descriptive title
+2. **Summary**: Brief overview of the document's purpose
+3. **Table of Contents**: For longer documents
+4. **Main Content**: Organized with clear headers and subheaders
+5. **Examples**: Code examples where applicable
+6. **Related Documents**: Links to related documentation
+7. **Last Updated**: Date of last significant update
+
+## Documentation Standards
+
+1. **Clarity**: Write for clarity and comprehension
+2. **Conciseness**: Be concise but complete
+3. **Examples**: Include practical examples
+4. **Formatting**: Use consistent Markdown formatting
+5. **Updates**: Keep documentation current with code changes
+6. **Cross-References**: Link to related documentation
+
+By following these guidelines, we ensure that our documentation remains organized, current, and useful for all team members.
 
 ## Documentation Structure
 
@@ -54,22 +165,6 @@ Each documentation file should follow this structure:
   ```
 - Keep code examples concise and focused
 - Add comments to complex code examples
-
-## Documentation Maintenance
-
-### Periodic Review Process
-
-1. **Quarterly Review**: All documentation should be reviewed quarterly
-2. **Update Check**: Verify technical accuracy and update outdated information
-3. **Consolidation**: Identify and merge redundant documentation
-4. **Cleanup**: Run the cleanup script (`scripts/cleanup.sh`) to maintain cleanliness
-
-### Before Adding New Documentation
-
-1. Check if the topic is already covered in existing documentation
-2. Determine the appropriate directory for the new content
-3. Follow the established naming and structure conventions
-4. Update the main README.md if the document should be linked there
 
 ## Documentation Types
 

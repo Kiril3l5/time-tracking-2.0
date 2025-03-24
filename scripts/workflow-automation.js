@@ -16,7 +16,7 @@
  *   # pnpm run workflow
  */
 
-/* global console, process, global, clearInterval, setInterval */
+/* global process, global, clearInterval, setInterval */
 
 import { execSync } from 'child_process';
 import readline from 'readline';

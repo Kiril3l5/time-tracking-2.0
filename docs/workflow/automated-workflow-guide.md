@@ -10,7 +10,7 @@ The automated workflow tool combines several steps into a single interactive pro
 2. **Change Management**: Helps you commit changes with meaningful messages
 3. **Preview Deployment**: Runs the preview deployment to test your changes
 4. **PR Creation**: Suggests PR title and description based on your changes
-5. **Post-PR Guidance**: Explains how to keep your local repo in sync after PRs are merged
+5. **Post-PR Guidance**: Explains how to keep your local repo in sync after PRs are merged and deploy to production
 
 This automation helps enforce the "1 Branch, 1 PR" workflow best practice while making it more user-friendly.
 
@@ -134,9 +134,19 @@ If you choose to create a PR:
 After your PR is created and merged on GitHub:
 
 - The tool provides clear guidance on next steps:
-  - How to update your local main branch with the merged changes
+  - How to update your local main branch with the merged changes:
+    ```bash
+    git checkout main
+    git pull origin main
+    ```
+  - How to deploy to production after merging:
+    ```bash
+    node scripts/deploy.js "Your deployment message"
+    ```
   - How to start working on a new feature
   - How to keep your repository in sync
+
+Following this guidance ensures a smooth transition from development to production and helps maintain a consistent workflow across the team.
 
 ## Syncing Your Main Branch
 
@@ -152,6 +162,18 @@ This command:
 3. Switches to main branch
 4. Pulls latest changes from remote
 5. Offers to switch back to your original branch
+
+## Recent Improvements
+
+The automated workflow has recently received several enhancements:
+
+1. **Optimized Build Process**: The preview deployment now avoids rebuilding the application during deployment if it was already built, significantly reducing deployment time.
+
+2. **Enhanced Post-PR Guidance**: Clear instructions for deploying to production after a PR is merged, ensuring changes reach production quickly and consistently.
+
+3. **Improved Logging**: Standardized logger usage for better readability and error reporting.
+
+4. **Fixed Linter Issues**: Removed unused variables and console statements, improving code quality.
 
 ## Example Workflow
 
@@ -251,7 +273,7 @@ Press Enter to exit...
 3. **Use descriptive feature names**: This helps generate better branch names and commit messages
 4. **Commit logically**: Make smaller, focused commits with clear messages
 5. **Review suggestions**: The tool makes intelligent suggestions, but review them before accepting
-6. **After PR merges**: Use the guidance to keep your local repository in sync with the remote
+6. **After PR merges**: Follow the deployment guidance to ensure changes are properly deployed to production
 
 ## Troubleshooting
 

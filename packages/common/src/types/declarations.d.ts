@@ -17,7 +17,7 @@ declare module '*.jpg' {
 }
 
 declare module '*.json' {
-  const content: any;
+  const content: Record<string, unknown>;
   export default content;
 }
 

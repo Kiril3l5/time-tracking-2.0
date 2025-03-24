@@ -6,7 +6,7 @@
 
 **Purpose:** To document the complete deployment workflow from development to production
 **Audience:** Developers and DevOps personnel
-**Last Updated:** 2025-03-17
+**Last Updated:** 2024-05-22
 **Maintainer:** Project Team
 
 ---
@@ -44,41 +44,41 @@ If any of these steps fail, fix the issues before proceeding.
 Before pushing to GitHub, you can test your changes locally using our preview script:
 
 ```bash
-# Run the preview script with skipping deployment
+# Run the preview script (includes linting, type checking, building, and deploying)
+pnpm run preview
+
+# To run a quicker preview (skipping certain checks)
+pnpm run preview --skip-lint --skip-tests
+
+# To run without deploying (just build and check)
 pnpm run preview:clean
-
-# To run quality checks and build
-pnpm run preview:quick
 ```
 
-Or you can deploy directly to a Firebase preview channel to verify the changes:
-
-```bash
-# Deploy to a personal development preview channel
-firebase hosting:channel:deploy dev-<your-name>-<feature-name> --expires 1d
-```
-
-This creates temporary preview URLs for both the admin and hours portals:
-- `https://admin-autonomyhero-2024--dev-<n>-<feature>.web.app`
-- `https://hours-autonomyhero-2024--dev-<n>-<feature>.web.app`
+The preview script creates temporary preview URLs for both the admin and hours portals:
+- `https://admin-autonomyhero-2024--preview-<branch-name>-<timestamp>.web.app`
+- `https://hours-autonomyhero-2024--preview-<branch-name>-<timestamp>.web.app`
 
 ### 3. Push Changes & Create Pull Request
 
-Once local testing is successful, push your changes to GitHub:
+Once local testing is successful, you can either:
 
-```bash
-# Create a feature branch
-git checkout -b feature/<feature-name>
+1. **Manually push and create a PR:**
+   ```bash
+   # Add and commit your changes
+   git add .
+   git commit -m "Description of changes"
+   
+   # Push to GitHub
+   git push origin feature/<feature-name>
+   
+   # Then create a PR on GitHub
+   ```
 
-# Add and commit your changes
-git add .
-git commit -m "Description of changes"
-
-# Push to GitHub
-git push origin feature/<feature-name>
-```
-
-Create a pull request on GitHub from your feature branch to the main branch.
+2. **Use the automated workflow:**
+   ```bash
+   # Run the automated workflow which handles PR creation
+   pnpm run workflow
+   ```
 
 ### 4. Automated CI/CD Testing
 
@@ -87,7 +87,7 @@ The GitHub Actions workflow automatically runs when a pull request is created:
 1. **Linting**: Checks code style and quality
 2. **Testing**: Runs all tests to verify functionality
 3. **Building**: Builds all packages to verify the build process
-4. **Preview Deployment**: Creates a PR-specific preview deployment
+4. **Preview Deployment**: Creates a PR-specific preview deployment (using the optimized build process that avoids rebuilding)
 
 The workflow generates a comment on the PR with links to the preview URLs.
 
@@ -104,11 +104,25 @@ Team members review the pull request:
 
 After the PR is approved and merged to main:
 
-1. The GitHub Actions production workflow triggers automatically
-2. The workflow builds and deploys to production
-3. The production sites are updated:
-   - Admin: `admin.autonomyheroes.com`
-   - Hours: `hours.autonomyheroes.com`
+1. The automated workflow provides guidance for the next steps:
+   ```bash
+   # Switch to main branch
+   git checkout main
+   
+   # Pull latest changes
+   git pull origin main
+   
+   # Deploy to production with a descriptive message
+   node scripts/deploy.js "Deploy feature XYZ"
+   ```
+
+2. The production deployment script:
+   - Runs tests and quality checks
+   - Builds the application
+   - Deploys to production Firebase hosting
+   - Updates the production sites:
+     - Admin: `admin.autonomyheroes.com`
+     - Hours: `hours.autonomyheroes.com`
 
 ## Workflow Diagram
 
@@ -127,6 +141,18 @@ After the PR is approved and merged to main:
 │                 │     │                   │     │                 │
 └─────────────────┘     └───────────────────┘     └─────────────────┘
 ```
+
+## Recent Improvements
+
+The deployment workflow has received several optimizations:
+
+1. **Eliminated Double Build**: The preview deployment now avoids rebuilding the application during the deployment stage if it was already built in the previous step. This is implemented via the `skipBuild` parameter in `deployToPreviewChannel`.
+
+2. **Enhanced Post-PR Guidance**: After a PR is merged, the workflow now provides clear guidance for deploying to production.
+
+3. **Standardized Logger Usage**: Replaced direct console statements with a consistent logger API for better error reporting and output formatting.
+
+4. **Fixed Linter Issues**: Removed unused variables and improved code quality throughout the deployment scripts.
 
 ## Testing and Authentication Architecture
 
@@ -150,11 +176,17 @@ Preview channels are temporary Firebase Hosting instances that allow testing wit
 To list and manage active preview channels:
 
 ```bash
-# List all preview channels
-firebase hosting:channel:list
+# List all preview channels (with visual dashboard)
+pnpm run channels
 
-# Delete a specific preview channel
-firebase hosting:channel:delete <channel-name>
+# List all preview channels (JSON format)
+pnpm run channels:list
+
+# Clean up old preview channels (interactive)
+pnpm run channels:cleanup
+
+# Automatically clean up old channels
+pnpm run channels:cleanup:auto
 ```
 
 ## Troubleshooting
@@ -170,10 +202,20 @@ If you encounter issues with the deployment workflow:
    ```
 
 2. **Build Failures**:
-   - Check for TypeScript errors
+   - Check for TypeScript errors with `pnpm run typecheck`
    - Verify all dependencies are installed with `pnpm install`
    - Check for environment variables
-   - Try running the build recovery script: `pnpm run fix:build`
+   - Try running the preview with specific options to isolate the issue:
+     ```bash
+     # Skip linting
+     pnpm run preview --skip-lint
+     
+     # Skip tests
+     pnpm run preview --skip-tests
+     
+     # Skip bundle analysis
+     pnpm run preview --skip-bundle-analysis
+     ```
 
 ### CI/CD Issues
 
@@ -193,4 +235,5 @@ If you encounter issues with the deployment workflow:
 2. **Use unique branch names** to prevent preview channel conflicts
 3. **Clean up old preview channels** when no longer needed
 4. **Set expiration dates** for preview channels
-5. **Include meaningful commit messages** for easier CI/CD debugging 
+5. **Include meaningful commit messages** for easier CI/CD debugging
+6. **Follow the post-PR workflow** to ensure changes reach production properly 

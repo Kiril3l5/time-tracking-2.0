@@ -44,7 +44,7 @@ export function createPerformanceTrace(traceName: string) {
 /**
  * Measure the performance of a function
  */
-export function measurePerformance<T extends (...args: any[]) => any>(
+export function measurePerformance<T extends (...args: unknown[]) => unknown>(
   functionName: string,
   fn: T
 ): (...args: Parameters<T>) => ReturnType<T> {

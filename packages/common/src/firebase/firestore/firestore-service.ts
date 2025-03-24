@@ -34,32 +34,30 @@ function createCollection<T extends DocumentData>(
   return collection(db, collectionName).withConverter(converter);
 }
 
-// Define interface for objects that can contain Date fields
-interface DateFields {
-  [key: string]: any;
-}
-
 // Date converter to handle Firestore timestamps
 const dateConverter = {
-  toFirestore: <T extends DateFields>(data: T): DocumentData => {
+  toFirestore: <T>(data: T): DocumentData => {
     // Create a copy to avoid direct modification
-    const result: Record<string, any> = { ...data };
+    const result = { ...data } as Record<string, unknown>;
     
-    Object.keys(data).forEach(key => {
-      const value = data[key];
-      if (value instanceof Date) {
-        result[key] = Timestamp.fromDate(value);
-      }
-    });
+    // Only process if data is an object
+    if (data && typeof data === 'object') {
+      Object.keys(data as object).forEach(key => {
+        const value = (data as Record<string, unknown>)[key];
+        if (value instanceof Date) {
+          result[key] = Timestamp.fromDate(value);
+        }
+      });
+    }
     
     return result;
   },
-  fromFirestore: <T extends DateFields>(
+  fromFirestore: <T>(
     snapshot: DocumentSnapshot<DocumentData>,
     options: SnapshotOptions
   ): T => {
     // Create a copy to avoid direct modification
-    const result: Record<string, any> = { ...snapshot.data(options) };
+    const result = { ...snapshot.data(options) } as Record<string, unknown>;
     
     Object.keys(result).forEach(key => {
       const value = result[key];

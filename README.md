@@ -1,4 +1,4 @@
-# Time Tracking System
+# Time Tracking System 2.0
 
 A modern, TypeScript-based time tracking application with two completely separate sites:
 - **/hours**: End-user facing application for time entry and tracking
@@ -30,47 +30,85 @@ Key technologies:
 - **Testing**: Vitest + React Testing Library
 - **Package Manager**: PNPM with workspaces
 
+## 🧠 Working with AI Tools
+
+When using AI tools like Claude to assist with this project, follow these best practices:
+
+### Effective AI Prompting
+
+1. **Provide Context**: Point the AI to relevant documentation files, especially:
+   - [Preview Deployment Guide](./docs/workflow/preview-deployment-guide.md)
+   - [Firebase Deployment Workflow](./docs/workflow/firebase-deployment-workflow.md)
+   - [Automated Workflow Guide](./docs/workflow/automated-workflow-guide.md)
+
+2. **Be Specific**: Request specific tasks rather than general improvements.
+   - Good: "Help me fix the TypeScript error in `packages/common/src/firebase/hooks/query-hooks.ts`"
+   - Avoid: "Fix all the errors in the project"
+
+3. **One Task at a Time**: Focus on completing one task before moving to the next.
+
+4. **Include Error Messages**: When troubleshooting, always include the complete error message.
+
+### What To Do
+
+- **Use the automated workflow**: Start development with `pnpm run workflow` or `pnpm run dev`
+- **Create preview deployments**: Use `pnpm run preview` to test changes
+- **Use the modular script system**: Leverage our enhanced tooling for faster development
+- **Follow the post-PR workflow**: After a PR is merged, deploy to production with `node scripts/deploy.js "Your message"`
+- **Use the logger** instead of direct console statements
+
+### What To Avoid
+
+- **Don't mix package managers**: Use pnpm exclusively for this project
+- **Don't skip the post-PR deployment step**: Always deploy to production after merging
+- **Don't ignore TypeScript errors**: Fix them with `pnpm run fix:typescript:enhanced`
+- **Don't use direct console.log statements**: Use the logger module instead
+- **Don't rebuild unnecessarily**: The skipBuild option is now available to prevent double builds
+
 ## Documentation
 
-Detailed documentation is available in the `/docs` directory:
+📚 **[DOCUMENTATION INDEX](./docs/documentation-index.md)** - Complete master index of all project documentation
 
-### Project Setup and Configuration
-- [**Project Setup**](./docs/project-setup.md) - Complete project setup guide with tools, configs, and workflows
-- [Environment Setup](./docs/env/setup.md) - Setting up environment variables
-- [Deployment Setup](./docs/deployment/setup.md) - GitHub Actions with Workload Identity Federation
+### Essential Documentation
 
-### Architecture and Design
-- [Architecture Overview](./docs/architecture/project-overview.md) - Complete architecture and patterns
-- [Project Structure](./docs/structure/modules.md) - Module organization and dependencies
-- [Project Architecture](./docs/main_readme/PROJECT-2.0.md) - Complete architecture overview
+The most important documents to familiarize yourself with are:
 
-### Development Workflows
-- [Development Workflow](./docs/workflow/development.md) - Development processes and standards
-- [Development Guide](./docs/main_readme/development-deployment-guide.md) - Development workflow and legacy deployment
-- [Documentation Guide](./docs/structure/documentation-guide.md) - Guidelines for maintaining documentation
-- [**Scripts Organization**](./docs/workflow/preview-deployment-guide.md#technical-architecture) - Guide to the modular script organization
+1. **[Project Setup](./docs/setup/project-setup.md)** - First steps for setting up the project
+2. **[Automated Workflow Guide](./docs/workflow/automated-workflow-guide.md)** - Day-to-day development workflow
+3. **[Preview Deployment Guide](./docs/workflow/preview-deployment-guide.md)** - How to create preview deployments
+4. **[TypeScript & Linting Guidelines](./docs/development/typescript-linting-guide.md)** - Coding standards
 
-### Technical Patterns
-- [Testing Strategy](./docs/testing/overview.md) - Testing approach and best practices
-- [State Management](./docs/patterns/state-management.md) - Zustand and React Query strategy
-- [Data Fetching](./docs/patterns/data-fetching.md) - Data fetching patterns and standards
-- [Responsive Design](./docs/patterns/responsive-design.md) - Mobile-first responsive approach
-- [Optimistic Updates](./docs/patterns/optimistic-updates.md) - Optimistic UI update patterns
-- [State Management Guide](./docs/main_readme/state-management-guide.md) - State management patterns
+### Documentation By Category
 
-### Firebase Integration
-- [Firebase Integration](./docs/main_readme/firebase-integration-guide.md) - Firebase configuration
-- [Firebase Data Access](./docs/main_readme/firebase-data-access-patterns.md) - Data access patterns
-- [Firestore Security](./docs/security/firestore-rules.md) - Security rules review and recommendations
-- [Security Implementation](./docs/main_readme/security-implementation-guide.md) - Security implementation details
-- [Preview Deployment Guide](./docs/workflow/preview-deployment-guide.md) - Complete guide for creating, managing, and using preview deployments for testing
+The documentation is organized by category in the `/docs` directory:
 
-### UI and Network
-- [UI Components](./docs/main_readme/ui-component-library.md) - UI component library documentation
-- [Network Connectivity](./docs/network/connectivity.md) - Network requirements and offline handling
+- **Setup & Configuration**: [Project Setup](./docs/setup/project-setup.md), [Environment Setup](./docs/env/setup.md)
+- **Development Guidelines**: [JavaScript Modules](./docs/development/javascript-module-guide.md), [TypeScript Standards](./docs/development/typescript-linting-guide.md)
+- **Workflows**: [Automated Workflow](./docs/workflow/automated-workflow-guide.md), [Preview Deployment](./docs/workflow/preview-deployment-guide.md)
+- **Deployment**: [Firebase Deployment Workflow](./docs/workflow/firebase-deployment-workflow.md), [Deployment Guide](./docs/deployment/deployment-guide.md)
+- **Architecture**: [Project Overview](./docs/architecture/project-overview.md), [Module Structure](./docs/structure/modules.md)
+- **Quality Assurance**: [Testing Strategy](./docs/testing/overview.md)
 
-### Maintenance
-- [Project Cleanup](./docs/project-cleanup-summary.md) - Project organization and maintenance
+### Documentation Maintenance
+
+All documentation follows a structured approach defined in our [Documentation Organization Guide](./docs/structure/documentation-guide.md):
+
+1. **For New Documentation**:
+   - Place files in the appropriate category folder in `/docs/`
+   - Use kebab-case naming: `example-guide.md`
+   - Add the file to the [documentation index](./docs/documentation-index.md)
+   - Link to it from related documentation
+
+2. **For Updating Documentation**:
+   - Make documentation changes alongside code changes
+   - Update the "Last Modified" date
+   - Update the documentation index if file size or summary changed
+   - Include documentation updates in the same PR as code changes
+
+3. **Documentation Organization**:
+   - The [documentation index](./docs/documentation-index.md) is the master reference
+   - Only documentation-index.md remains in the `/docs` root
+   - All other documentation is organized in category folders
 
 ## Project Maintenance
 
@@ -99,12 +137,17 @@ scripts/
 │   ├── typescript-config.js   # TypeScript configuration for tests
 │   └── test-deps-fixer.js     # Fix test dependencies and JSX runtime
 ├── firebase/      # Firebase deployment utilities
+│   ├── channel-manager.js     # List, sort, and manage preview channels
+│   ├── channel-cleanup.js     # Channel cleanup (interactive and automatic)
+│   ├── channel-cli.js         # Unified CLI for channel management operations
+│   ├── deployment.js          # Firebase deployment functionality
+│   └── url-extractor.js       # Extract preview URLs from deployment output
 ├── build/         # Build process utilities
 ├── utils.js       # Main export index
 └── preview.js     # Main orchestration script
 ```
 
-For a complete overview of the script organization, see [Scripts Reorganization Plan](./docs/scripts-reorganization-plan.md).
+For a complete overview of the script organization, see [Preview Deployment Guide: Technical Architecture](./docs/workflow/preview-deployment-guide.md#technical-architecture).
 
 ### Maintenance Guidelines
 
@@ -134,6 +177,8 @@ The project implements several key patterns for robust, maintainable code:
 
 ## Quick Start
 
+See the [Project Setup Guide](./docs/setup/project-setup.md) for complete setup instructions.
+
 ### Prerequisites
 
 - Node.js v18+
@@ -158,24 +203,41 @@ cd packages/hours
 pnpm dev
 ```
 
-### Preview Deployments
+### Development Workflow
 
-The project uses a modular script system for creating Firebase preview deployments:
+For the most streamlined development experience, use our automated workflow:
 
 ```bash
-# Ensure you're logged in to Firebase
-firebase login
+# Start the automated workflow
+pnpm run workflow
 
-# Create a preview deployment
-pnpm run preview
+# Or use the shorthand
+pnpm run dev
 ```
 
-The preview script (`scripts/preview.js`) performs the following steps:
-1. Verifies Firebase and Git authentication using the `auth` modules
-2. Runs quality checks (linting, type checking, tests) via the `checks` modules
-3. Builds all packages with the `build` utilities
-4. Deploys to Firebase preview channels using the `firebase` utilities
-5. Extracts and displays preview URLs for both admin and hours sites
+This will guide you through:
+1. Branch creation/selection
+2. Change management
+3. Preview deployment
+4. PR creation
+5. Post-PR guidance
+
+See [Automated Workflow Guide](./docs/workflow/automated-workflow-guide.md) for detailed instructions.
+
+### Preview Deployments
+
+Create Firebase preview deployments to test your changes:
+
+```bash
+# Create a preview deployment
+pnpm run preview
+
+# Create a preview and automatically create a PR
+pnpm run preview-and-pr
+
+# Quick preview with fewer checks
+pnpm run preview --skip-lint --skip-tests
+```
 
 **Available Options:**
 ```
@@ -201,18 +263,50 @@ Logging Options:
   --verbose             Enable verbose logging
 ```
 
-**Other Preview Commands:**
-- View all active previews: `pnpm run channels` or `pnpm run channels:dashboard`
-- List channels in JSON format: `pnpm run channels:list`
-- Clean up old previews: `pnpm run channels:cleanup`
-- Auto-clean old previews: `pnpm run channels:cleanup:auto`
-- View channel CLI help: `pnpm run channels:help`
-- Fix TypeScript issues: `pnpm run preview:fix-typescript`
-- Fix React Query types: `pnpm run preview:fix-query-types`
-- Fix test dependencies: `pnpm run preview:fix-test-deps`
-- Fix all issues: `pnpm run preview:fix-all`
+### Channel Management
 
-For detailed instructions, see [Preview Deployment Guide](./docs/workflow/preview-deployment-guide.md).
+Manage your Firebase preview channels with these commands:
+
+```bash
+# View all active previews in a dashboard
+pnpm run channels
+
+# List channels in JSON format
+pnpm run channels:list
+
+# Clean up old previews (interactive)
+pnpm run channels:cleanup
+
+# Auto-clean old previews
+pnpm run channels:cleanup:auto
+```
+
+### Production Deployment
+
+After your PR is merged to main:
+
+```bash
+# Switch to main branch
+git checkout main
+
+# Pull latest changes
+git pull origin main
+
+# Deploy to production
+node scripts/deploy.js "Your deployment message"
+```
+
+For detailed instructions, see [Firebase Deployment Workflow](./docs/workflow/firebase-deployment-workflow.md).
+
+## Recent Improvements
+
+1. **Eliminated Double Build**: Preview deployments now avoid rebuilding the application during deployment using the `skipBuild` parameter.
+
+2. **Enhanced Post-PR Guidance**: Clear instructions for deploying to production after a PR is merged.
+
+3. **Standardized Logger Usage**: Replaced direct console statements with a consistent logger API.
+
+4. **Fixed Linter Issues**: Removed unused variables and improved code quality throughout the codebase.
 
 ## License
 

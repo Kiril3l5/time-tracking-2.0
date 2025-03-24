@@ -1,8 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react';
 // Optional import for build environments without @storybook/test
-let userEvent = { click: async (_: any) => {} };
-let within = (_: any) => ({
-  getByRole: async (_name: string, _options: any) => document.createElement('button'),
+type ElementContainer = HTMLElement;
+
+let userEvent = { click: async (_: HTMLElement) => {} };
+let within = (_: ElementContainer) => ({
+  getByRole: async (_name: string, _options: Record<string, unknown>) => document.createElement('button'),
 });
 
 // Use a try-catch with dynamic import instead
@@ -13,7 +15,8 @@ let within = (_: any) => ({
     userEvent = storybookTest.userEvent;
     within = storybookTest.within;
   } catch (e) {
-    console.log('Storybook test module not available, using mock functions');
+    // Use a silent fail for storybook test availability
+    // This is only used in development/test environments
   }
 })();
 

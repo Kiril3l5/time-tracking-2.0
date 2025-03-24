@@ -61,7 +61,7 @@ import * as deployment from './firebase/deployment.js';
 // Import build modules
 import * as buildManager from './build/build-manager.js';
 
-/* global process, console */
+/* global process */
 
 // Parse command line arguments
 function parseArguments() {
