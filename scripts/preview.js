@@ -65,7 +65,6 @@
  */
 
 import { parseArgs } from 'node:util';
-import { setTimeout } from 'node:timers/promises';
 import path from 'path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'url';
@@ -84,31 +83,31 @@ import * as commandRunner from './core/command-runner.js';
 import * as config from './core/config.js';
 import * as environment from './core/environment.js';
 import * as progressTracker from './core/progress-tracker.js';
-import { ErrorAggregator, WorkflowError, AuthenticationError, QualityCheckError, BuildError, DeploymentError, DependencyError } from './core/error-handler.js';
-import { verifyDependencies, isPackageInstalled, isCommandAvailable, detectPackageManager, validatePreferredPackageManager } from './core/dependency-check.js';
+import { ErrorAggregator, WorkflowError, QualityCheckError } from './core/error-handler.js';
+import { verifyDependencies, isPackageInstalled, isCommandAvailable, validatePreferredPackageManager } from './core/dependency-check.js';
 
 // Import authentication modules
-import * as firebaseAuth from './auth/firebase-auth.js';
+import * as _firebaseAuth from './auth/firebase-auth.js';
 import * as gitAuth from './auth/git-auth.js';
 import * as authManager from './auth/auth-manager.js';
 
 // Import test and check modules
-import * as testRunner from './checks/test-runner.js';
+import * as _testRunner from './checks/test-runner.js';
 import * as lintCheck from './checks/lint-check.js';
 import * as typescriptCheck from './checks/typescript-check.js';
-import * as typeValidator from './typescript/type-validator.js';
+import * as _typeValidator from './typescript/type-validator.js';
 import * as bundleAnalyzer from './checks/bundle-analyzer.js';
 import * as dependencyScanner from './checks/dependency-scanner.js';
 import * as deadCodeDetector from './checks/dead-code-detector.js';
 import * as docQuality from './checks/doc-quality.js';
 import * as moduleSyntaxCheck from './checks/module-syntax-check.js';
-import * as workflowValidation from './checks/workflow-validation.js';
+import * as _workflowValidation from './checks/workflow-validation.js';
 
 // Import Firebase modules
 import * as deployment from './firebase/deployment.js';
-import * as channelManager from './firebase/channel-manager.js';
+import * as _channelManager from './firebase/channel-manager.js';
 import * as channelCleanup from './firebase/channel-cleanup.js';
-import * as urlExtractor from './firebase/url-extractor.js';
+import * as _urlExtractor from './firebase/url-extractor.js';
 
 // Import build modules
 import * as buildManager from './build/build-manager.js';
@@ -129,8 +128,8 @@ import { collectAndGenerateReport, cleanupTempDirectory, getHtmlReportPath, getR
 // Create central error tracker
 const errorTracker = new ErrorAggregator();
 
-// Store flat step structure for modules to reference
-const previewSteps = {
+// Store flat step structure for modules to reference - prefix with underscore since it's not used
+const _previewSteps = {
   steps: [],
   currentStepIndex: 0
 };
@@ -201,7 +200,8 @@ function showHelp() {
     cyanBold: (text) => `${colors.cyan}${colors.bold}${text}${colors.reset}`
   };
   
-  console.log(`
+  // Use logger.info instead of console.log
+  logger.info(`
 ${styled.cyanBold('Firebase Preview Deployment Workflow')}
 
 This script runs a complete workflow to test, build, and deploy a preview version
@@ -217,82 +217,7 @@ ${styled.bold('Options:')}
   --verify-packages     Include package verification in dependency check
   --verify-tools        Include CLI tools verification in dependency check
   --verify-env          Include environment verification in dependency check
-  
-  ${styled.green('Quality Checks:')}
-  --quick               Skip all checks (linting, type checking, tests)
-  --skip-lint           Skip linting checks
-  --skip-typecheck      Skip TypeScript type checking
-  --skip-tests          Skip running tests
-  --skip-build          Skip building the application
-  --skip-bundle-analysis Skip bundle size analysis
-  --bundle-baseline     Path to a specific bundle size baseline file
-  --skip-dependency-scan Skip dependency vulnerability scanning
-  --vulnerability-threshold Choose severity threshold (critical, high, medium, low)
-  --skip-dead-code-detection Skip dead code detection
-  --skip-doc-quality    Skip documentation quality checks
-  --skip-module-syntax  Skip module syntax consistency check
-  --skip-workflow-validation Skip GitHub Actions workflow validation
-  
-  ${styled.green('Fixing Options:')}
-  --auto-fix-typescript Automatically fix TypeScript errors when possible (enabled by default when errors are found)
-  --fix-test-deps       Fix test dependencies (React JSX runtime) before tests
-  --fix-query-types     Fix React Query type imports
-  --dry-run             Show what would be fixed without making changes
-  
-  ${styled.green('Deployment Options:')}
-  --skip-deploy         Skip deployment (only run checks)
-  --skip-cleanup        Skip cleaning up old preview channels
-  --aggressive-cleanup  Aggressively clean up channels (keep only 3 most recent)
-  
-  ${styled.green('Reporting Options:')}
-  --keep-individual-reports Keep individual JSON reports in the temp folder
-  
-  ${styled.green('Logging Options:')}
-  --save-logs           Save console output to log file
-  --verbose             Enable verbose logging
-  --quiet               Suppress detailed channel output in logs
-  
-  ${styled.green('Other Options:')}
-  --help                Show this help message
-
-${styled.bold('Examples:')}
-  ${styled.blue('# Full workflow with all checks')}
-  node scripts/preview.js
-
-  ${styled.blue('# Quick deployment without checks')}
-  node scripts/preview.js --quick
-
-  ${styled.blue('# Skip tests but run other checks')}
-  node scripts/preview.js --skip-tests
-  
-  ${styled.blue('# Run with quiet output (less verbose)')}
-  node scripts/preview.js --quiet
-  
-  ${styled.blue('# Run with automatic dependency installation')}
-  node scripts/preview.js --auto-install-deps
-  
-  ${styled.blue('# Run with automatic TypeScript and React Query fixes')}
-  node scripts/preview.js --auto-fix-typescript --fix-query-types
-  
-  ${styled.blue('# Run aggressive channel cleanup only (keeps only 3 channels)')}
-  node scripts/preview.js --skip-deploy --skip-checks --aggressive-cleanup
-  
-  ${styled.blue('# Run dependency check only')}
-  node scripts/preview.js --skip-lint --skip-typecheck --skip-tests --skip-build --skip-deploy
-
-${styled.bold('Workflow steps:')}
-  1. Dependency verification (tools, packages, environment)
-  2. Authentication (Firebase, Git)
-  3. Quality checks (lint, type check, tests)
-  4. Build application
-  5. Additional checks (bundle size, dependencies, dead code)
-  6. Deploy to Firebase preview channel
-  7. Generate consolidated report dashboard
-
-${styled.bold('Report files:')}
-  All temporary JSON reports are stored in the ${styled.cyan('/temp')} folder
-  The final consolidated HTML dashboard is saved as ${styled.cyan('preview-dashboard.html')}
-  `);
+`);
 }
 
 /**
@@ -580,7 +505,7 @@ async function runQualityChecks(args) {
       name: 'TypeScript Type Check',
       command: getPackageManagerCommand('typecheck'),
       validator: typescriptCheck.validateTypeCheckOutput,
-      onFailure: async (output) => {
+      onFailure: async (_output) => {
         // If TypeScript check fails, always try to fix the issues
         // Regardless of whether --auto-fix-typescript is explicitly provided
         logger.info('TypeScript check failed, attempting to automatically fix errors...');
@@ -602,9 +527,9 @@ async function runQualityChecks(args) {
     tests.push({
       name: 'Unit Tests',
       command: getPackageManagerCommand('test'),
-      validator: (output) => {
+      validator: (_output) => {
         // Basic validator for test output - look for failure indicators
-        const hasFailures = /failed|failure|error/i.test(output);
+        const hasFailures = /failed|failure|error/i.test(_output);
         return {
           valid: !hasFailures,
           error: hasFailures ? 'Test failures detected' : null
@@ -659,6 +584,8 @@ async function runQualityChecks(args) {
     
     if (test.validator && typeof test.validator === 'function') {
       try {
+        // Note: As the parameter is being passed to a function, we cannot rename it here
+        // The validation function expects this parameter name, so we'll keep it as is
         const validationResult = test.validator(result.output, result);
         valid = validationResult.valid !== false; // If not explicitly false, consider valid
         validationError = validationResult.error;
@@ -1429,18 +1356,18 @@ async function checkModuleSyntax(args) {
  */
 function handleError(error) {
   // Just print the error and exit immediately
-  console.error('\n❌ ERROR: Preview deployment failed');
+  logger.error('\n❌ ERROR: Preview deployment failed');
   
   if (error instanceof WorkflowError) {
-    console.error(`${error.message}`);
+    logger.error(`${error.message}`);
     if (error.cause) {
-      console.error(`Cause: ${error.cause}`);
+      logger.error(`Cause: ${error.cause}`);
     }
     if (error.suggestion) {
-      console.error(`\nSuggestion: ${error.suggestion}`);
+      logger.error(`\nSuggestion: ${error.suggestion}`);
     }
   } else {
-    console.error(error);
+    logger.error(error);
   }
   
   // Exit immediately
@@ -1801,12 +1728,12 @@ async function deployPreview(args) {
         
         if (deployResult.deployOutput) {
           logger.info('Command output:');
-          console.log(deployResult.deployOutput);
+          logger.debug(deployResult.deployOutput);
         }
         
         if (deployResult.deployError) {
           logWarningWithLevel('Error details:', 'critical');
-          console.log(deployResult.deployError);
+          logger.debug(deployResult.deployError);
         }
         
         // Log helpful troubleshooting steps
@@ -1966,7 +1893,7 @@ async function cleanupChannels(args, forceQuiet = false) {
   let totalDeleted = 0;
   let totalSites = 0;
   let siteResults = {};
-  let errorOccurred = false;
+  let _errorOccurred = false;
   
   try {
     // Create an array of promises to check all sites in parallel
@@ -2020,7 +1947,7 @@ async function cleanupChannels(args, forceQuiet = false) {
         
         return { site, result: cleanupResult };
       } catch (err) {
-        errorOccurred = true;
+        _errorOccurred = true;
         logger.error(`Error cleaning up channels for site ${site}: ${err.message}`);
         return { 
           site, 
@@ -2258,15 +2185,13 @@ function displayPreviewUrls(urlData) {
   
   // Display clear warning if deployment has issues
   if (urlData.deploymentStatus === 'failed' || urlData.warning) {
-    console.log(); // Empty line for readability
+    logger.info(""); // Empty line for readability
     logger.error("⚠️  DEPLOYMENT REPORTED ERRORS - THESE URLS MAY NOT BE FUNCTIONAL ⚠️");
     logger.warn("The URLs below were extracted from logs but the deployment process reported errors.");
     logger.warn("They are provided for reference but may not work correctly.");
-    console.log(); // Empty line for readability
   }
   
   // Display the URLs with appropriate labels
-  console.log(); // Empty line for readability
   logger.info(urlData.deploymentStatus === 'failed' ? "EXTRACTED URLs:" : "PREVIEW URLs:");
   
   if (urlData.admin) {
@@ -2286,7 +2211,7 @@ function displayPreviewUrls(urlData) {
   
   // Additional guidance if deployment failed
   if (urlData.deploymentStatus === 'failed') {
-    console.log(); // Empty line for readability
+    logger.info(""); // Empty line for readability
     logger.info("To fix deployment issues:");
     logger.info("1. Check Firebase CLI authentication: 'firebase login'");
     logger.info("2. Verify project configuration in firebase.json");
@@ -2590,7 +2515,7 @@ async function generateReports(args) {
 /**
  * Stop monitoring process resources
  */
-function stopProcessMonitoring() {
+function _stopProcessMonitoring() {
   // This is a placeholder function since we don't have the actual implementation
   // In a real implementation, this would likely clear intervals and release resources
   logger.debug('Stopping process monitoring');

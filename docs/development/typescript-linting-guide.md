@@ -151,7 +151,13 @@ ESLint is configured with the following rule sets:
 Key custom rules:
 - `react/react-in-jsx-scope`: Off (not needed with modern JSX transform)
 - `@typescript-eslint/no-explicit-any`: Warn (avoid `any` types where possible)
-- `@typescript-eslint/no-unused-vars`: Warn with pattern exclusions (prefixing with `_`)
+- `@typescript-eslint/no-unused-vars`: Warn with pattern exclusions (variables and parameters prefixed with `_` are allowed to be unused)
+  ```javascript
+  '@typescript-eslint/no-unused-vars': ['warn', { 
+    argsIgnorePattern: '^_',
+    varsIgnorePattern: '^_' 
+  }]
+  ```
 - `no-console`: Warn (only `console.warn` and `console.error` allowed)
 
 ## Strict TypeScript Rules for AI-Generated Code
@@ -417,6 +423,70 @@ Our GitHub Actions workflows now automatically:
 - **Type Declarations (*.d.ts)**: Excluded from linting as they often need to use `any`
 - **Generated Files**: Source maps and other generated files are excluded from linting
 
+## Unused Variables and Parameters
+
+Our ESLint configuration enforces a specific pattern for handling unused variables and parameters. The `@typescript-eslint/no-unused-vars` rule is configured to allow unused variables only if they are prefixed with an underscore (`_`).
+
+### Rules for Unused Variables
+
+1. **Always prefix unused variables with an underscore**:
+   ```typescript
+   // ❌ Bad - ESLint will warn about 'result' being defined but never used
+   function processData() {
+     const result = fetchData();
+     return true;
+   }
+   
+   // ✅ Good - Prefix with underscore to indicate intentionally unused
+   function processData() {
+     const _result = fetchData();
+     return true;
+   }
+   ```
+
+2. **Always prefix unused function parameters with an underscore**:
+   ```typescript
+   // ❌ Bad - ESLint will warn about 'data' being unused
+   function executeCallback(callback, data) {
+     callback();
+   }
+   
+   // ✅ Good - Prefix with underscore to indicate intentionally unused
+   function executeCallback(callback, _data) {
+     callback();
+   }
+   ```
+
+3. **This applies to destructured properties too**:
+   ```typescript
+   // ❌ Bad
+   const { id, name, role } = user;
+   console.log(`User ${id}: ${name}`); // 'role' is unused
+   
+   // ✅ Good
+   const { id, name, _role } = user; // Prefix unused property
+   console.log(`User ${id}: ${name}`);
+   ```
+
+4. **For class methods and callbacks**:
+   ```typescript
+   // ❌ Bad
+   class EventHandler {
+     handleEvent(event) {
+       this.processAction();
+     }
+   }
+   
+   // ✅ Good
+   class EventHandler {
+     handleEvent(_event) {
+       this.processAction();
+     }
+   }
+   ```
+
+This pattern makes it clear which variables are intentionally unused rather than accidentally unused. It also prevents ESLint warnings without having to disable the rule.
+
 ## Best Practices for New Code
 
 1. Start with proper interfaces/types before implementing functionality
@@ -425,5 +495,6 @@ Our GitHub Actions workflows now automatically:
 4. Use TypeScript's built-in utility types where appropriate
 5. Keep types close to their implementation
 6. Export types with their implementations when needed by other components
+7. Always prefix unused variables and parameters with an underscore (`_`)
 
 By following these guidelines, we ensure that AI-generated code maintains the highest quality standards and integrates seamlessly with our existing codebase. 

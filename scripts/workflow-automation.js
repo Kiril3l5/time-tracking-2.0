@@ -1417,7 +1417,7 @@ async function runWorkflow() {
           const prDescription = await prompt("Enter PR description (optional, press Enter to use generated): ");
           
           // Create PR
-          const prResult = await createPullRequest(
+          const _prResult = await createPullRequest(
             prTitle || prContent.title,
             prDescription || prContent.body,
             workflowData
