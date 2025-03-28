@@ -22,7 +22,7 @@ cd packages/hours
 pnpm dev
 ```
 
-The application will be available at http://localhost:5173
+The application will be available at <http://localhost:5173>
 
 #### Admin Portal
 
@@ -31,7 +31,7 @@ cd packages/admin
 pnpm dev
 ```
 
-The application will be available at http://localhost:5174
+The application will be available at <http://localhost:5174>
 
 ### Testing
 

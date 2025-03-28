@@ -57,6 +57,12 @@ export interface User {
   lastLoginAt?: Date | string;
   createdAt: Date | string;
   updatedAt: Date | string;
+  metadata?: {
+    registrationMethod: string;
+    registrationTime: string;
+    userAgent?: string;
+    [key: string]: any;
+  };
 }
 
 export interface Company {
@@ -110,6 +116,7 @@ export interface UserProfile {
     theme?: 'light' | 'dark' | 'system';
     emailNotifications?: boolean;
     pushNotifications?: boolean;
+    biometricEnabled?: boolean;
   };
   hireDate?: string;
   terminationDate?: string;

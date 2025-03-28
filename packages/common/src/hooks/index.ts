@@ -1,6 +1,6 @@
-// React Query hooks
+// Export core hooks
 export * from './useTimeEntries';
+export * from './useViewport';
 
 // Re-export React Query provider
 export { QueryProvider } from '../providers/QueryProvider';
-export { queryClient } from '../lib/react-query';

@@ -6,6 +6,20 @@ A modern, TypeScript-based time tracking application with two completely separat
 
 Both sites are hosted on Firebase and share a common Firebase database for time entries, approvals, and user management.
 
+## Mobile-First Implementation
+
+This project implements a mobile-first approach, prioritizing a great user experience on mobile devices while maintaining responsive design for desktop users. Key features include:
+
+- **Responsive UI Components**: Components adapt to different screen sizes
+- **Touch-Friendly Controls**: All interactive elements are optimized for touch
+- **Progressive Feature Rollout**: Feature flags for controlled deployment
+- **Offline Support**: Core functionality works without constant connectivity
+- **Optimized Performance**: Fast load times and minimal bundle size
+
+For complete details on the mobile implementation plan, see [Mobile-First Implementation Plan](./docs/workflow/mobile-first-implementation-plan.md).
+
+For mobile design guidelines, see [Mobile Design System](./docs/design/mobile-design-system.md).
+
 ## Architecture
 
 This project implements a monorepo structure with:
@@ -18,17 +32,166 @@ project-root/
 │   └── admin/      # Admin management site
 │
 └── functions/      # Firebase Cloud Functions
+
+### Common Package Structure
+
 ```
+packages/common/src/
+├── components/       # Shared UI components
+│   ├── layout/       # Layout components (containers, grids, navigation)
+│   ├── ui/           # UI elements (buttons, cards, badges)
+│   ├── forms/        # Form elements (inputs, selects, checkboxes)
+│   ├── data-display/ # Data presentation (tables, lists, cards)
+│   └── feedback/     # User feedback (alerts, toasts, loaders)
+├── hooks/            # Custom React hooks
+│   ├── ui/           # UI-related hooks (useViewport, useMediaQuery)
+│   ├── data/         # Data fetching hooks (useQuery, useMutation)
+│   ├── auth/         # Authentication hooks (useAuth, usePermissions)
+│   └── form/         # Form handling hooks (useDebounce, useForm)
+├── config/           # Configuration including feature flags
+├── utils/            # Utility functions and constants
+├── firebase/         # Firebase service integrations
+└── providers/        # React context providers
+```
+
+### Portal Structure
+
+Both the Hours and Admin portals follow a similar structure:
+
+```
+packages/[hours|admin]/src/
+├── assets/         # Static assets (images, icons)
+├── components/     # Portal-specific components (use sparingly)
+├── features/       # Feature-specific modules
+├── hooks/          # Portal-specific hooks
+├── layouts/        # Page layouts using common components
+├── pages/          # Page components
+├── App.tsx         # Main application component
+└── main.tsx        # Application entry point
+```
+
+## Setup Requirements
+
+### Path Aliases
+
+To make imports cleaner, each portal's `tsconfig.json` should include path aliases:
+
+```json
+{
+  "compilerOptions": {
+    "paths": {
+      "@common/*": ["../common/src/*"]
+    }
+  }
+}
+```
+
+### Features and Mobile-First Examples
+
+1. **Viewport Detection**: Use `useViewport` hook for responsive rendering
+   ```tsx
+   import { useViewport } from '@common/hooks/ui/useViewport';
+   
+   function MyComponent() {
+     const { isMobile, isTablet } = useViewport();
+     
+     return isMobile ? <MobileView /> : <DesktopView />;
+   }
+   ```
+
+2. **Mobile Containers**: Use `MobileContainer` as the base for mobile views
+   ```tsx
+   import { MobileContainer } from '@common/components/ui/containers/MobileContainer';
+   
+   function MobilePage() {
+     return (
+       <MobileContainer>
+         <h1>Page Content</h1>
+       </MobileContainer>
+     );
+   }
+   ```
+
+3. **Bottom Navigation**: Use `BottomNav` for mobile navigation
+   ```tsx
+   import { BottomNav } from '@common/components/navigation/BottomNav';
+   import { HomeIcon, ClockIcon } from '@common/components/ui/icons';
+   
+   // Usage in layout components
+   const navItems = [
+     { label: 'Home', path: '/', icon: <HomeIcon /> },
+     { label: 'Time', path: '/time', icon: <ClockIcon /> }
+   ];
+   
+   <BottomNav items={navItems} />
+   ```
+
+4. **Feature Flags**: Use for progressive feature rollout
+   ```tsx
+   import { useFeatureFlag } from '@common/hooks/features/useFeatureFlag';
+   
+   function Component() {
+     const isOfflineEnabled = useFeatureFlag('offline-mode');
+     
+     return (
+       <div>
+         {isOfflineEnabled && <OfflineIndicator />}
+       </div>
+     );
+   }
+   ```
+
+## Documentation
+
+For complete guidelines, see:
+
+- [Documentation Index](./docs/documentation-index.md)
+- [Project Structure Guidelines](./docs/workflow/project-structure-guidelines.md)
+- [Mobile-First Implementation Plan](./docs/workflow/mobile-first-implementation-plan.md)
+- [Mobile Design System Guidelines](./docs/design/mobile-design-system.md)
+
+## Example Pages
+
+Example mobile implementations can be found at:
+
+- Admin Portal: [packages/admin/src/pages/ApprovalsPage.tsx](./packages/admin/src/pages/ApprovalsPage.tsx)
+- Hours Portal: [packages/hours/src/pages/TimeEntryPage.tsx](./packages/hours/src/pages/TimeEntryPage.tsx)
+
+Both demonstrate the use of shared mobile components and responsive design patterns. 
 
 Key technologies:
 - **Language**: TypeScript (strict mode)
 - **Framework**: React 18
 - **Build Tool**: Vite
 - **State Management**: Zustand + React Query
-- **UI**: Tailwind CSS
+- **UI**: Tailwind CSS with custom design system
 - **Backend**: Firebase (Auth, Firestore, Functions)
 - **Testing**: Vitest + React Testing Library
 - **Package Manager**: PNPM with workspaces
+
+## Design System
+
+The project includes a comprehensive design system that ensures UI consistency across both the /hours and /admin portals. The design system documentation can be found in the `docs/design/` directory.
+
+To view the visual design system reference:
+
+```bash
+# Open the design system preview in your browser
+node scripts/preview-design-system.js
+# or
+npm run design
+# or
+pnpm run docs:design-system
+```
+
+The design system includes:
+- **Color Palette**: Primary Amber (#F59E0B) with secondary Cool Gray (#4B5563) and semantic status colors
+- Typography guidelines
+- Component examples and patterns
+- Spacing, borders, and shadow tokens
+- Responsive design patterns
+
+See the [Design System Documentation](./docs/design/design-system.md) for more information on color usage, component specifications, and design principles.
 
 ## 🧠 Working with AI Tools
 
@@ -143,8 +306,16 @@ scripts/
 │   ├── deployment.js          # Firebase deployment functionality
 │   └── url-extractor.js       # Extract preview URLs from deployment output
 ├── build/         # Build process utilities
-├── utils.js       # Main export index
-└── preview.js     # Main orchestration script
+├── preview/       # Preview-specific utilities and components
+├── reports/       # Report generation and analysis tools
+├── workflow/      # Workflow automation utilities
+├── utils.js       # Main export index 
+├── preview.js     # Main preview deployment orchestration script
+├── workflow-automation.js # Automated development workflow script
+├── deploy.js      # Production deployment script
+├── create-pr.js   # Pull request creation script
+├── sync-main.js   # Sync main branch with remote script
+└── fix-gitignore.js # Fix .gitignore configuration script
 ```
 
 For a complete overview of the script organization, see [Preview Deployment Guide: Technical Architecture](./docs/workflow/preview-deployment-guide.md#technical-architecture).
@@ -300,13 +471,25 @@ For detailed instructions, see [Firebase Deployment Workflow](./docs/workflow/fi
 
 ## Recent Improvements
 
-1. **Eliminated Double Build**: Preview deployments now avoid rebuilding the application during deployment using the `skipBuild` parameter.
+*Last updated: May 2024*
 
-2. **Enhanced Post-PR Guidance**: Clear instructions for deploying to production after a PR is merged.
+1. **Eliminated Double Build** (March 2024): Preview deployments now avoid rebuilding the application during deployment using the `skipBuild` parameter.
 
-3. **Standardized Logger Usage**: Replaced direct console statements with a consistent logger API.
+2. **Enhanced Post-PR Guidance** (March 2024): Clear instructions for deploying to production after a PR is merged.
 
-4. **Fixed Linter Issues**: Removed unused variables and improved code quality throughout the codebase.
+3. **Standardized Logger Usage** (April 2024): Replaced direct console statements with a consistent logger API.
+
+4. **Fixed Linter Issues** (May 2024): Removed unused variables and improved code quality throughout the codebase.
+
+5. **Improved Documentation Organization** (May 2024): Updated documentation structure with comprehensive summaries and better organization.
+
+6. **Enhanced TypeScript Linting** (May 2024): Added clearer guidelines for handling unused variables with underscore prefixes.
+
+7. **Optimized Markdown Linting** (May 2024): Updated VS Code settings to handle common Markdown linting issues.
+
+8. **Script Workflow Improvements** (May 2024): Enhanced workflow automation scripts with better error handling and user guidance.
+
+9. **Comprehensive Design System** (May 2024): Created a unified design system with visual reference, component examples, and documentation to ensure UI consistency across portals.
 
 ## License
 

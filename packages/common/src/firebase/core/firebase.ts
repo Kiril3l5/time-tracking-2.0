@@ -1,6 +1,6 @@
 // Create this file with this content
 import { initializeApp } from 'firebase/app';
-import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
+import { getFirestore, connectFirestoreEmulator, enableIndexedDbPersistence } from 'firebase/firestore';
 import { getAuth, connectAuthEmulator } from 'firebase/auth';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 
@@ -47,6 +47,21 @@ export const app = initializeApp(getFirebaseConfig());
 export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const functions = getFunctions(app);
+
+// Configure Firestore for offline persistence
+// This should be called as early as possible in your app
+enableIndexedDbPersistence(db).catch((err) => {
+  if (err.code === 'failed-precondition') {
+    // Multiple tabs open, persistence can only be enabled in one tab at a time
+    console.warn('Firestore persistence failed: Multiple tabs open');
+  } else if (err.code === 'unimplemented') {
+    // The current browser doesn't support offline persistence
+    console.warn('Firestore persistence not supported in this browser');
+  } else {
+    // Handle other errors
+    console.error('Firestore persistence error:', err);
+  }
+});
 
 // Connect to emulators if in development mode
 if (import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATOR === 'true') {

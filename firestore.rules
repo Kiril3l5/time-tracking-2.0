@@ -4,7 +4,7 @@ service cloud.firestore {
 // === EXISTING Helper Functions (Unchanged) ===
     function isAdmin() {
       let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-      return userData.role == 'super-admin';
+      return userData.role == 'superadmin';
     }
     
     function isManager() {
@@ -41,7 +41,8 @@ service cloud.firestore {
 
     // === NEW Helper Functions (Week Config) ===
     function isSuperAdmin() {
-      return request.auth.uid == 'galkin.kir' && isAdmin();
+      let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return userData.role == 'superadmin';
     }
 
     function isValidWeekConfig(config) {
@@ -84,7 +85,7 @@ service cloud.firestore {
         ) &&
         request.resource.data.keys().hasAll([
           'email', 'firstName', 'lastName', 'role',
-          'permissions', 'metadata'
+          'permissions', 'isActive', 'lastLoginAt', 'createdAt', 'updatedAt'
         ]);
       
       allow update: if 

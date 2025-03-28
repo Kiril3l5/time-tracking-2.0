@@ -101,7 +101,7 @@ export const useAuthStatus = () =>
 // Role-based selectors
 export const useIsAdmin = () => {
   const profile = useProfile();
-  return !!profile && (profile.role === 'admin' || profile.role === 'super-admin');
+  return !!profile && (profile.role === 'admin' || profile.role === 'superadmin');
 };
 
 export const useIsManager = () => {
@@ -111,7 +111,7 @@ export const useIsManager = () => {
 
 export const useIsWorker = () => {
   const profile = useProfile();
-  return !!profile && profile.role === 'worker';
+  return !!profile && profile.role === 'user';
 };
 
 // Action hooks

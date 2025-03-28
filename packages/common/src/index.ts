@@ -1,10 +1,6 @@
 // Export types if available
 export * from './types';
 
-// Export components
-export * from './components/ErrorBoundary';
-export * from './components/NetworkStatus';
-
 // Export utils
 export * from './utils/errorHandler';
 export * from './utils/permissions';
@@ -37,16 +33,24 @@ export * from './store';
 // Types
 export * from './types/firestore';
 
-// Component exports
-export { Button } from './components/Button';
-export type { ButtonProps } from './components/Button';
+// Mobile-optimized UI components
+export { default as Card } from './components/ui/Card';
+export { default as TextInput } from './components/forms/TextInput';
+
+// New Mobile Components
+export { default as OfflineIndicator } from './components/ui/OfflineIndicator';
+export { default as DatePickerMobile } from './components/forms/DatePickerMobile';
+export { default as TimeInputMobile } from './components/forms/TimeInputMobile';
+export { default as DropdownMobile } from './components/forms/DropdownMobile';
+
+// React Query Setup with Offline Support
+export * from './lib/react-query';
 
 // Hook exports
 export { useAuth } from './hooks/useAuth';
 export type { User } from './hooks/useAuth';
+export { useViewport } from './hooks/ui/useViewport';
+export { useFeatureFlag, useFeatureFlags } from './hooks/features/useFeatureFlag';
 
 // Utility exports
 export * from './utils/formatters';
-
-// Network status component
-export { NetworkStatus } from './components/NetworkStatus';

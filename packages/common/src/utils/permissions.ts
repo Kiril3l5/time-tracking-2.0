@@ -4,7 +4,7 @@ import { TimeEntry } from '../types/firestore';
 /**
  * Type for user roles in the system
  */
-export type UserRole = 'super-admin' | 'admin' | 'manager' | 'worker';
+export type UserRole = 'superadmin' | 'admin' | 'manager' | 'user';
 
 /**
  * Interface for user data with role information
@@ -43,7 +43,7 @@ export function isAdmin(user?: UserWithRole | null): boolean {
   }
   
   if (!user) return false;
-  return user.role === 'super-admin' || user.role === 'admin';
+  return user.role === 'superadmin' || user.role === 'admin';
 }
 
 /**
@@ -184,6 +184,6 @@ export function canDeleteTimeEntry(entry: TimeEntry, user: UserWithRole | null):
 export function canHardDeleteTimeEntry(user: UserWithRole | null): boolean {
   if (!user) return false;
 
-  // Only super-admin can hard delete
-  return user.role === 'super-admin';
+  // Only superadmin can hard delete
+  return user.role === 'superadmin';
 }
