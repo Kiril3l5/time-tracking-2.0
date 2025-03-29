@@ -16,6 +16,13 @@ import * as logger from './core/logger.js';
 import path from 'path';
 import fs from 'fs';
 
+// Import Firebase deployment utilities
+import * as deployment from './firebase/deployment.js';
+import * as channelCleanup from './firebase/channel-cleanup.js';
+
+// Import documentation quality checker
+import * as docQuality from './checks/doc-quality.js';
+
 // Simple state management
 const state = {
   currentBranch: null,
@@ -56,6 +63,9 @@ async function runWorkflow(options = {}) {
     if (state.previewUrls && !options.skipPR) {
       await handlePRCreation();
     }
+
+    // 6. Run quality checks
+    await runQualityChecks();
 
     logger.success('Workflow completed successfully!');
   } catch (error) {
@@ -191,20 +201,43 @@ async function handleChanges() {
  * Run preview deployment
  */
 async function runPreview() {
-  logger.info('Starting preview deployment...');
+  logger.sectionHeader('Deploying preview');
   
   try {
-    // Run preview script
-    execSync('node scripts/preview.js', { stdio: 'inherit' });
+    // Generate a unique channel ID
+    const channelId = deployment.generateChannelId({
+      prefix: 'feature',
+      timestamp: Date.now()
+    });
     
-    // Get preview URLs from the most recent preview
-    const previewUrls = await getPreviewUrls();
-    if (previewUrls) {
-      state.previewUrls = previewUrls;
-      logger.success('Preview deployment successful!');
+    // Deploy to preview channel
+    const deployResult = await deployment.deployToPreviewChannel({
+      projectId: 'autonomy-heroes',
+      site: ['admin-autonomyhero-2024', 'hours-autonomyhero-2024'],
+      channelId,
+      skipBuild: true // Skip build since we already built in the build step
+    });
+    
+    if (!deployResult.success) {
+      throw new Error(`Deployment failed: ${deployResult.error}`);
     }
+    
+    // Clean up old channels if needed
+    const cleanupResult = await channelCleanup.checkAndCleanupIfNeeded({
+      projectId: 'autonomy-heroes',
+      site: ['admin-autonomyhero-2024', 'hours-autonomyhero-2024'],
+      threshold: 5,
+      autoCleanup: true
+    });
+    
+    if (cleanupResult.needsCleanup) {
+      logger.info('Channel cleanup completed');
+    }
+    
+    return deployResult;
   } catch (error) {
-    throw new Error(`Preview deployment failed: ${error.message}`);
+    logger.error(`Preview deployment failed: ${error.message}`);
+    throw error;
   }
 }
 
@@ -238,6 +271,45 @@ async function handlePRCreation() {
     
     // Create PR by executing the script directly
     execSync(`node scripts/create-pr.js "${title}" "${description}"`, { stdio: 'inherit' });
+  }
+}
+
+/**
+ * Run quality checks
+ */
+async function runQualityChecks() {
+  logger.sectionHeader('Quality Checks');
+  
+  try {
+    // Run ESLint
+    logger.info('Running ESLint...');
+    execSync('pnpm run lint', { stdio: 'inherit' });
+    
+    // Run TypeScript checks
+    logger.info('Running TypeScript checks...');
+    execSync('pnpm run typecheck', { stdio: 'inherit' });
+    
+    // Run unit tests
+    logger.info('Running unit tests...');
+    execSync('pnpm run test', { stdio: 'inherit' });
+    
+    // Check documentation quality
+    logger.info('Checking documentation quality...');
+    const docResults = await docQuality.analyzeDocumentation({
+      docsDir: 'docs',
+      requiredDocs: ['setup', 'deployment', 'architecture', 'api', 'configuration'],
+      minCoverage: 80,
+      generateReport: true
+    });
+    
+    if (!docResults.success) {
+      logger.warn('Documentation quality check found issues:', docResults.issues);
+    }
+    
+    logger.success('All quality checks completed!');
+  } catch (error) {
+    logger.error(`Quality checks failed: ${error.message}`);
+    throw error;
   }
 }
 

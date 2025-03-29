@@ -658,65 +658,144 @@ function generatePerformanceContent(data) {
 }
 
 // Helper functions to render content based on available data
-function renderBundleRows(_data) {
-  // Placeholder - implement based on actual data structure
-  return '<tr><td colspan="3">Bundle data will be displayed here based on actual data structure.</td></tr>';
+function renderBundleRows(data) {
+  if (!data?.assets?.length) {
+    return '<tr><td colspan="3">No bundle data available</td></tr>';
+  }
+  
+  return data.assets
+    .sort((a, b) => b.size - a.size)
+    .map(asset => `
+      <tr>
+        <td>${asset.name}</td>
+        <td>${formatBytes(asset.size)}</td>
+        <td>${asset.isNew ? '<span class="badge warning">New</span>' : 
+             asset.sizeChange > 0 ? `<span class="badge error">+${formatBytes(asset.sizeChange)}</span>` :
+             asset.sizeChange < 0 ? `<span class="badge success">${formatBytes(asset.sizeChange)}</span>` :
+             '<span class="badge">No change</span>'
+            }</td>
+      </tr>
+    `).join('');
 }
 
-function renderDocIssueRows(_data) {
-  // Placeholder - implement based on actual data structure
-  return '<tr><td colspan="3">Documentation issues will be displayed here based on actual data structure.</td></tr>';
+function renderDocIssueRows(data) {
+  if (!data?.issues?.length) {
+    return '<tr><td colspan="3">No documentation issues found</td></tr>';
+  }
+  
+  return data.issues
+    .map(issue => `
+      <tr>
+        <td>${issue.file}</td>
+        <td>${issue.message}</td>
+        <td>
+          <span class="badge ${issue.severity === 'error' ? 'error' : 
+                               issue.severity === 'warning' ? 'warning' : 
+                               'success'}">${issue.severity}</span>
+        </td>
+      </tr>
+    `).join('');
 }
 
-function renderUnusedExportsRows(_data) {
-  // Placeholder - implement based on actual data structure
-  return '<tr><td colspan="3">Unused exports will be displayed here based on actual data structure.</td></tr>';
+function renderUnusedExportsRows(data) {
+  if (!data?.unusedExports?.length) {
+    return '<tr><td colspan="3">No unused exports found</td></tr>';
+  }
+  
+  return data.unusedExports
+    .map(exp => `
+      <tr>
+        <td>${exp.file}</td>
+        <td>${exp.name}</td>
+        <td>${exp.type}</td>
+      </tr>
+    `).join('');
 }
 
-function renderVulnerabilityRows(_data) {
-  // Placeholder - implement based on actual data structure
-  return '<tr><td colspan="4">Vulnerabilities will be displayed here based on actual data structure.</td></tr>';
+function renderVulnerabilityRows(data) {
+  if (!data?.vulnerabilities?.length) {
+    return '<tr><td colspan="4">No vulnerabilities found</td></tr>';
+  }
+  
+  return data.vulnerabilities
+    .sort((a, b) => {
+      const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+      return severityOrder[a.severity] - severityOrder[b.severity];
+    })
+    .map(vuln => `
+      <tr>
+        <td>${vuln.package}</td>
+        <td>${vuln.version}</td>
+        <td><span class="badge ${vuln.severity}">${vuln.severity}</span></td>
+        <td>${vuln.description}</td>
+      </tr>
+    `).join('');
 }
 
-function renderPerformanceRows(_data) {
-  // Placeholder - implement based on actual data structure
-  return '<tr><td colspan="3">Performance metrics will be displayed here based on actual data structure.</td></tr>';
+function renderPerformanceRows(data) {
+  if (!data?.steps?.length) {
+    return '<tr><td colspan="3">No performance data available</td></tr>';
+  }
+  
+  return data.steps
+    .map(step => `
+      <tr>
+        <td>${step.name}</td>
+        <td>${step.duration}</td>
+        <td>
+          <span class="badge ${step.status === 'success' ? 'success' : 
+                               step.status === 'warning' ? 'warning' : 
+                               'error'}">${step.status}</span>
+        </td>
+      </tr>
+    `).join('');
 }
 
 // Utility functions for data extraction
 function getBundleSize(data) {
-  // Placeholder - replace with actual implementation
-  return data?.totalSize || 0;
+  if (!data) return 0;
+  
+  // Sum up all asset sizes
+  let totalSize = 0;
+  if (data.assets) {
+    totalSize = data.assets.reduce((sum, asset) => sum + (asset.size || 0), 0);
+  }
+  return totalSize;
 }
 
 function getBundleIssueCount(data) {
-  // Placeholder - replace with actual implementation
-  return data?.issues?.length || 0;
+  if (!data) return 0;
+  return (data.warnings?.length || 0) + (data.errors?.length || 0);
 }
 
 function getDocCoverage(data) {
-  // Placeholder - replace with actual implementation
-  return data?.coverage || 0;
+  if (!data) return 0;
+  
+  const totalFiles = data.totalFiles || 0;
+  const documentedFiles = data.documentedFiles || 0;
+  
+  if (totalFiles === 0) return 0;
+  return Math.round((documentedFiles / totalFiles) * 100);
 }
 
 function getDocIssueCount(data) {
-  // Placeholder - replace with actual implementation
-  return data?.issues?.length || 0;
+  if (!data) return 0;
+  return data.issues?.length || 0;
 }
 
 function getUnusedExportCount(data) {
-  // Placeholder - replace with actual implementation
-  return data?.unusedExports?.length || 0;
+  if (!data) return 0;
+  return data.unusedExports?.length || 0;
 }
 
 function getUnusedDependencyCount(data) {
-  // Placeholder - replace with actual implementation
-  return data?.unusedDependencies?.length || 0;
+  if (!data) return 0;
+  return data.unusedDependencies?.length || 0;
 }
 
 function getVulnerabilityCount(data, severity) {
-  // Placeholder - replace with actual implementation
-  return data?.vulnerabilities?.filter(v => v.severity === severity)?.length || 0;
+  if (!data?.vulnerabilities) return 0;
+  return data.vulnerabilities.filter(v => v.severity === severity).length;
 }
 
 // Utility function to format byte sizes

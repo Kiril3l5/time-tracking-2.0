@@ -17,6 +17,7 @@ import * as logger from '../core/logger.js';
 import { generateConsolidatedReport } from './consolidated-report.js';
 import { parseArgs } from 'node:util';
 import { execSync } from 'child_process';
+import convertReports from './html-to-json.js';
 
 // Temp directory for report files
 const TEMP_DIR = path.join(process.cwd(), 'temp');
@@ -55,7 +56,7 @@ const REPORT_PATHS = {
 /**
  * Clean up old reports in the temp directory
  */
-export function cleanupTempDirectory() {
+function cleanupTempDirectory() {
   try {
     if (!fs.existsSync(TEMP_DIR)) {
       return;
@@ -81,7 +82,7 @@ export function cleanupTempDirectory() {
  * @param {Object} options - Options for URL extraction
  * @returns {Object|null} - Preview URLs object or null if not found
  */
-export function extractPreviewUrls(options = {}) {
+function extractPreviewUrls(options = {}) {
   const tempDir = options.tempDir || path.join(process.cwd(), 'temp');
   
   try {
@@ -246,137 +247,95 @@ export function extractPreviewUrls(options = {}) {
 }
 
 /**
+ * Load report data from a file
+ * @param {string} filePath - Path to the report file
+ * @returns {Object|null} - Report data or null if not found
+ */
+function loadReportData(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      logger.warn(`Report file not found: ${filePath}`);
+      return null;
+    }
+    
+    const content = fs.readFileSync(filePath, 'utf8');
+    const data = JSON.parse(content);
+    
+    // Validate data structure
+    if (!data || typeof data !== 'object') {
+      logger.warn(`Invalid report data in ${filePath}`);
+      return null;
+    }
+    
+    logger.debug(`Loaded report data from ${filePath}`);
+    return data;
+  } catch (error) {
+    logger.error(`Error loading report data from ${filePath}: ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * Collect report data from various modules and generate consolidated report
  * 
  * @param {Object} options - Options for report collection
- * @returns {Promise<boolean>} - Success or failure
+ * @returns {Promise<boolean>} - Whether the report was generated successfully
  */
 async function collectAndGenerateReport(options = {}) {
-  // Ensure temp directory exists
-  ensureTempDirExists();
-  
-  logger.info('Starting report collection process...');
-  
-  const {
-    reportPath = 'preview-dashboard.html',
-    outputPath = null,
-    title = `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`,
-    cleanupIndividualReports = false
-  } = options;
-  
-  // Load data from various reports
-  let bundleData = null;
-  let docQualityData = null;
-  let deadCodeData = null;
-  let vulnerabilityData = null;
-  let performanceData = null;
-  let previewUrls = null;  // Add preview URLs variable
-  
   try {
-    // Load bundle analysis report
-    if (fs.existsSync(REPORT_PATHS.BUNDLE)) {
-      logger.info(`Loading bundle analysis report from ${REPORT_PATHS.BUNDLE}`);
-      bundleData = JSON.parse(fs.readFileSync(REPORT_PATHS.BUNDLE, 'utf8'));
-    }
+    ensureTempDirExists();
     
-    // Load documentation quality report
-    if (fs.existsSync(REPORT_PATHS.DOC_QUALITY)) {
-      logger.info(`Loading documentation quality report from ${REPORT_PATHS.DOC_QUALITY}`);
-      docQualityData = JSON.parse(fs.readFileSync(REPORT_PATHS.DOC_QUALITY, 'utf8'));
-    }
+    // First convert HTML reports to JSON
+    logger.info('Converting HTML reports to JSON format...');
+    await convertReports();
     
-    // Load dead code detection report
-    if (fs.existsSync(REPORT_PATHS.DEAD_CODE)) {
-      logger.info(`Loading dead code detection report from ${REPORT_PATHS.DEAD_CODE}`);
-      deadCodeData = JSON.parse(fs.readFileSync(REPORT_PATHS.DEAD_CODE, 'utf8'));
-    }
+    // Load all report data
+    const bundleData = loadReportData(REPORT_PATHS.BUNDLE);
+    const docQualityData = loadReportData(REPORT_PATHS.DOC_QUALITY);
+    const deadCodeData = loadReportData(REPORT_PATHS.DEAD_CODE);
+    const vulnerabilityData = loadReportData(REPORT_PATHS.VULNERABILITY);
+    const performanceData = loadReportData(REPORT_PATHS.PERFORMANCE);
+    const previewUrls = loadReportData(REPORT_PATHS.PREVIEW_URLS);
     
-    // Load vulnerability scanning report
-    if (fs.existsSync(REPORT_PATHS.VULNERABILITY)) {
-      logger.info(`Loading vulnerability scanning report from ${REPORT_PATHS.VULNERABILITY}`);
-      vulnerabilityData = JSON.parse(fs.readFileSync(REPORT_PATHS.VULNERABILITY, 'utf8'));
-    }
-    
-    // Load performance metrics report
-    if (fs.existsSync(REPORT_PATHS.PERFORMANCE)) {
-      logger.info(`Loading performance metrics report from ${REPORT_PATHS.PERFORMANCE}`);
-      performanceData = JSON.parse(fs.readFileSync(REPORT_PATHS.PERFORMANCE, 'utf8'));
-    }
-    
-    // Extract preview URLs
-    previewUrls = extractPreviewUrls(options);
+    // Log what data we found
+    logger.info('Loading report data...');
+    if (bundleData) logger.info('✓ Bundle analysis data loaded');
+    if (docQualityData) logger.info('✓ Documentation quality data loaded');
+    if (deadCodeData) logger.info('✓ Dead code analysis data loaded');
+    if (vulnerabilityData) logger.info('✓ Vulnerability scan data loaded');
+    if (performanceData) logger.info('✓ Performance metrics loaded');
+    if (previewUrls) logger.info('✓ Preview URLs loaded');
     
     // Generate consolidated report
-    const consolidatedReportPath = outputPath || reportPath;
-    
     const success = await generateConsolidatedReport({
-      reportPath: consolidatedReportPath,
       bundleData,
       docQualityData,
       deadCodeData,
       vulnerabilityData,
       performanceData,
-      previewUrls,  // Pass preview URLs to consolidated report generator
-      title
+      previewUrls,
+      reportPath: options.reportPath || 'preview-dashboard.html'
     });
     
     if (success) {
-      logger.success(`Consolidated report generated at ${consolidatedReportPath}`);
+      logger.success('Preview dashboard generated successfully!');
       
-      // Cleanup individual reports if requested
-      if (cleanupIndividualReports) {
-        logger.info('Cleaning up individual reports...');
-        cleanupTempDirectory();
-      }
-      
-      // Open dashboard automatically
+      // Try to open the dashboard
       try {
         execSync('npx open-cli preview-dashboard.html', { stdio: 'pipe' });
-        logger.success('Dashboard opened automatically');
+        logger.success('Dashboard opened in your default browser');
       } catch (error) {
         logger.warn('Could not open dashboard automatically. Please open preview-dashboard.html in your browser.');
       }
       
       return true;
     } else {
-      logger.error('Failed to generate consolidated report');
+      logger.error('Failed to generate preview dashboard');
       return false;
     }
   } catch (error) {
-    logger.error(`Error in report collection process: ${error.message}`);
+    logger.error(`Error generating consolidated report: ${error.message}`);
     return false;
-  }
-}
-
-/**
- * Load report data from a file
- * 
- * @param {string} filePath - Path to report file
- * @returns {Object|null} - Report data or null if file doesn't exist
- */
-function loadReportData(filePath) {
-  try {
-    logger.debug(`Checking for report file: ${filePath}`);
-    
-    if (!fs.existsSync(filePath)) {
-      logger.debug(`Report file not found: ${filePath}`);
-      return null;
-    }
-    
-    const content = fs.readFileSync(filePath, 'utf8');
-    logger.debug(`Successfully loaded report from: ${filePath}`);
-    
-    try {
-      const data = JSON.parse(content);
-      logger.debug(`Successfully parsed JSON from: ${filePath}`);
-      return data;
-    } catch (parseError) {
-      logger.warn(`Error parsing JSON from ${filePath}: ${parseError.message}`);
-      return null;
-    }
-  } catch (error) {
-    logger.warn(`Error loading report data from ${filePath}: ${error.message}`);
-    return null;
   }
 }
 
@@ -405,7 +364,7 @@ function cleanupIndividualReports(filePaths) {
  * @param {string} filePath - Path to save the report
  * @returns {boolean} - Whether the operation was successful
  */
-export function createJsonReport(data, filePath) {
+function createJsonReport(data, filePath) {
   try {
     // Ensure directory exists if filePath includes subdirectories
     const dir = path.dirname(filePath);
@@ -429,7 +388,7 @@ export function createJsonReport(data, filePath) {
  * @param {string} reportType - Type of report ('bundle', 'docQuality', 'deadCode', 'vulnerability', 'performance')
  * @returns {string} - Path to the report file
  */
-export function getReportPath(reportType) {
+function getReportPath(reportType) {
   // Ensure temp directory exists
   ensureTempDirExists();
   
@@ -442,7 +401,7 @@ export function getReportPath(reportType) {
  * @param {string} reportType - Type of report ('bundle', 'docQuality', 'deadCode', 'vulnerability', 'performance')
  * @returns {string} - Path to the HTML report file
  */
-export function getHtmlReportPath(reportType) {
+function getHtmlReportPath(reportType) {
   // Ensure temp directory exists
   ensureTempDirExists();
   
@@ -452,7 +411,7 @@ export function getHtmlReportPath(reportType) {
 /**
  * Parse command-line arguments
  */
-export function parseArguments() {
+function parseArguments() {
   const options = {
     'keep-individual-reports': { type: 'boolean', default: false },
     'output': { type: 'string', default: 'preview-dashboard.html' },
@@ -487,12 +446,15 @@ if (process.argv[1] === import.meta.url) {
     });
 }
 
-// Export the functions
+// Export everything in a single statement
 export {
-  collectAndGenerateReport,
+  collectAndGenerateReport as default,
   REPORT_PATHS,
-  TEMP_DIR
-};
-
-// Export default function
-export default collectAndGenerateReport; 
+  TEMP_DIR,
+  cleanupTempDirectory,
+  extractPreviewUrls,
+  createJsonReport,
+  getReportPath,
+  getHtmlReportPath,
+  parseArguments
+}; 
