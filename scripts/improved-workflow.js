@@ -236,7 +236,59 @@ async function fixGitignore() {
  */
 async function runPreview() {
   logger.sectionHeader('Running Preview Deployment');
-  await previewWorkflow.main();
+  
+  // Build preview command with options
+  const previewArgs = [];
+  
+  // Skip checks if we've already done them
+  if (state.lastSuccessfulStep === 'quality') {
+    previewArgs.push('--skip-lint', '--skip-typecheck', '--skip-tests');
+  }
+  
+  // Skip build if we've already done it
+  if (state.lastSuccessfulStep === 'build') {
+    previewArgs.push('--skip-build');
+  }
+  
+  // Skip deployment if we've already done it
+  if (state.lastSuccessfulStep === 'deploy') {
+    previewArgs.push('--skip-deploy');
+  }
+  
+  // Skip cleanup if we've already done it
+  if (state.lastSuccessfulStep === 'cleanup') {
+    previewArgs.push('--skip-cleanup');
+  }
+  
+  // Add verbose logging for better debugging
+  previewArgs.push('--verbose');
+  
+  // Run preview.js with all options
+  const previewCmd = `node scripts/preview/preview.js ${previewArgs.join(' ')}`;
+  logger.info(`Running preview workflow: ${previewCmd}`);
+  
+  try {
+    execSync(previewCmd, { stdio: 'inherit' });
+    
+    // Update state based on successful steps
+    if (!previewArgs.includes('--skip-lint')) {
+      state.lastSuccessfulStep = 'quality';
+    }
+    if (!previewArgs.includes('--skip-build')) {
+      state.lastSuccessfulStep = 'build';
+    }
+    if (!previewArgs.includes('--skip-deploy')) {
+      state.lastSuccessfulStep = 'deploy';
+    }
+    if (!previewArgs.includes('--skip-cleanup')) {
+      state.lastSuccessfulStep = 'cleanup';
+    }
+    
+    saveState();
+  } catch (error) {
+    logger.error(`Preview deployment failed: ${error.message}`);
+    throw error;
+  }
 }
 
 /**

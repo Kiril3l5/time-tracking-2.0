@@ -2,6 +2,6 @@
   "currentBranch": "feature/further-refindment-of-workflow-",
   "hasChanges": false,
   "previewUrls": null,
-  "lastError": "docQuality.analyzeDocumentation is not a function",
+  "lastError": "previewWorkflow.main is not a function",
   "lastSuccessfulStep": "sync"
 }
