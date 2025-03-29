@@ -19,21 +19,34 @@ import fs from 'fs';
 // Import Firebase deployment utilities
 import * as deployment from './firebase/deployment.js';
 import * as channelCleanup from './firebase/channel-cleanup.js';
-import * as urlExtractor from './firebase/url-extractor.js';
 
 // Import documentation quality checker
 import * as docQuality from './checks/doc-quality.js';
 
-// Import command runner for executing shell commands
-import * as commandRunner from './core/command-runner.js';
+// Import configuration
+import { config } from './config.js';
 
-// Simple state management
+// Simple state management with persistence
 const state = {
   currentBranch: null,
   hasChanges: false,
   previewUrls: null,
-  lastError: null
+  lastError: null,
+  lastSuccessfulStep: null
 };
+
+// Load persisted state
+try {
+  const savedState = fs.readFileSync('.workflow-state.json', 'utf8');
+  Object.assign(state, JSON.parse(savedState));
+} catch (error) {
+  // No saved state, start fresh
+}
+
+// Save state after each step
+function saveState() {
+  fs.writeFileSync('.workflow-state.json', JSON.stringify(state, null, 2));
+}
 
 // Create readline interface
 const rl = readline.createInterface({
@@ -49,27 +62,65 @@ async function runWorkflow(options = {}) {
   try {
     logger.info('Starting development workflow...');
 
+    // Resume from last successful step if requested
+    if (options.resume && state.lastSuccessfulStep) {
+      logger.info(`Resuming from step: ${state.lastSuccessfulStep}`);
+      const steps = ['branch', 'sync', 'changes', 'build', 'quality', 'preview', 'pr'];
+      const startIndex = steps.indexOf(state.lastSuccessfulStep);
+      if (startIndex > 0) {
+        logger.info(`Skipping completed steps: ${steps.slice(0, startIndex).join(', ')}`);
+        options.skipCompleted = true;
+      }
+    }
+
     // 1. Branch setup
-    await ensureFeatureBranch();
+    if (!options.skipCompleted) {
+      await ensureFeatureBranch();
+      state.lastSuccessfulStep = 'branch';
+      saveState();
+    }
 
     // 2. Sync main if needed
-    await offerMainSync();
+    if (!options.skipCompleted) {
+      await offerMainSync();
+      state.lastSuccessfulStep = 'sync';
+      saveState();
+    }
 
     // 3. Handle changes
-    await handleChanges();
+    if (!options.skipCompleted) {
+      await handleChanges();
+      state.lastSuccessfulStep = 'changes';
+      saveState();
+    }
 
-    // 4. Run preview deployment
-    if (!options.skipPreview) {
+    // 4. Build
+    if (!options.skipCompleted) {
+      await runBuild();
+      state.lastSuccessfulStep = 'build';
+      saveState();
+    }
+
+    // 5. Run quality checks
+    if (!options.skipCompleted) {
+      await runQualityChecks();
+      state.lastSuccessfulStep = 'quality';
+      saveState();
+    }
+
+    // 6. Run preview deployment
+    if (!options.skipPreview && !options.skipCompleted) {
       await runPreview();
+      state.lastSuccessfulStep = 'preview';
+      saveState();
     }
 
-    // 5. Create PR if requested
-    if (state.previewUrls && !options.skipPR) {
+    // 7. Create PR if requested
+    if (state.previewUrls && !options.skipPR && !options.skipCompleted) {
       await handlePRCreation();
+      state.lastSuccessfulStep = 'pr';
+      saveState();
     }
-
-    // 6. Run quality checks
-    await runQualityChecks();
 
     logger.success('Workflow completed successfully!');
   } catch (error) {
@@ -77,6 +128,10 @@ async function runWorkflow(options = {}) {
     if (error.hint) {
       logger.info(`Hint: ${error.hint}`);
     }
+    // Save error state
+    state.lastError = error.message;
+    saveState();
+    throw error;
   } finally {
     rl.close();
   }
@@ -202,6 +257,56 @@ async function handleChanges() {
 }
 
 /**
+ * Run build step
+ */
+async function runBuild() {
+  logger.sectionHeader('Building');
+  
+  try {
+    logger.info('Building all packages...');
+    execSync('pnpm run build:all', { stdio: 'inherit' });
+    logger.success('Build completed successfully!');
+  } catch (error) {
+    logger.error(`Build failed: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * Run quality checks in parallel where possible
+ */
+async function runQualityChecks() {
+  logger.sectionHeader('Quality Checks');
+  
+  try {
+    // Run checks in parallel
+    const checks = [
+      // ESLint
+      execSync('pnpm run lint', { stdio: 'inherit' }),
+      // TypeScript checks
+      execSync('pnpm run typecheck', { stdio: 'inherit' }),
+      // Unit tests
+      execSync('pnpm run test', { stdio: 'inherit' }),
+      // Documentation quality
+      docQuality.analyzeDocumentation({
+        docsDir: config.docsDir,
+        requiredDocs: config.requiredDocs,
+        minCoverage: config.minCoverage,
+        generateReport: true
+      })
+    ];
+
+    // Wait for all checks to complete
+    await Promise.all(checks);
+    
+    logger.success('All quality checks completed!');
+  } catch (error) {
+    logger.error(`Quality checks failed: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
  * Run preview deployment
  */
 async function runPreview() {
@@ -216,10 +321,10 @@ async function runPreview() {
     
     // Deploy to preview channel
     const deployResult = await deployment.deployToPreviewChannel({
-      projectId: 'autonomy-heroes',
-      site: ['admin-autonomyhero-2024', 'hours-autonomyhero-2024'],
+      projectId: config.projectId,
+      site: config.sites,
       channelId,
-      skipBuild: true // Skip build since we already built in the build step
+      skipBuild: true // Skip build since we already built
     });
     
     if (!deployResult.success) {
@@ -228,9 +333,9 @@ async function runPreview() {
     
     // Clean up old channels if needed
     const cleanupResult = await channelCleanup.checkAndCleanupIfNeeded({
-      projectId: 'autonomy-heroes',
-      site: ['admin-autonomyhero-2024', 'hours-autonomyhero-2024'],
-      threshold: 5,
+      projectId: config.projectId,
+      site: config.sites,
+      threshold: config.channelThreshold,
       autoCleanup: true
     });
     
@@ -279,45 +384,6 @@ async function handlePRCreation() {
 }
 
 /**
- * Run quality checks
- */
-async function runQualityChecks() {
-  logger.sectionHeader('Quality Checks');
-  
-  try {
-    // Run ESLint
-    logger.info('Running ESLint...');
-    execSync('pnpm run lint', { stdio: 'inherit' });
-    
-    // Run TypeScript checks
-    logger.info('Running TypeScript checks...');
-    execSync('pnpm run typecheck', { stdio: 'inherit' });
-    
-    // Run unit tests
-    logger.info('Running unit tests...');
-    execSync('pnpm run test', { stdio: 'inherit' });
-    
-    // Check documentation quality
-    logger.info('Checking documentation quality...');
-    const docResults = await docQuality.analyzeDocumentation({
-      docsDir: 'docs',
-      requiredDocs: ['setup', 'deployment', 'architecture', 'api', 'configuration'],
-      minCoverage: 80,
-      generateReport: true
-    });
-    
-    if (!docResults.success) {
-      logger.warn('Documentation quality check found issues:', docResults.issues);
-    }
-    
-    logger.success('All quality checks completed!');
-  } catch (error) {
-    logger.error(`Quality checks failed: ${error.message}`);
-    throw error;
-  }
-}
-
-/**
  * Show help information
  */
 function showHelp() {
@@ -330,6 +396,7 @@ Usage:
 Options:
   --skip-preview    Skip preview deployment
   --skip-pr        Skip PR creation
+  --resume        Resume from a specific step
   --help, -h       Show this help message
 
 This tool orchestrates the development workflow by:
@@ -347,6 +414,7 @@ const args = process.argv.slice(2);
 const options = {
   skipPreview: args.includes('--skip-preview'),
   skipPR: args.includes('--skip-pr'),
+  resume: args.includes('--resume'),
   help: args.includes('--help') || args.includes('-h')
 };
 

@@ -277,135 +277,20 @@ async function _generateIndex(fileData, outputFile) {
 }
 
 /**
- * Generate HTML report for documentation analysis
- * @param {Object} results - Analysis results
- * @param {Array} fileList - List of documentation files
- * @param {Array} missingDocs - List of missing required documentation
- * @param {number} coverage - Documentation coverage percentage
- * @param {string} reportPath - Path to save the report
- */
-async function generateHtmlReport(results, fileList, missingDocs, coverage, reportPath) {
-  const html = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Documentation Quality Report</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; }
-    h1 { color: #333; }
-    .summary { background: #f5f5f5; padding: 20px; border-radius: 5px; margin: 20px 0; }
-    .coverage { font-size: 1.2em; font-weight: bold; }
-    .coverage.good { color: #28a745; }
-    .coverage.warning { color: #ffc107; }
-    .coverage.error { color: #dc3545; }
-    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-    th, td { padding: 10px; border: 1px solid #ddd; text-align: left; }
-    th { background: #f5f5f5; }
-    .missing { color: #dc3545; }
-    .metric { margin: 10px 0; }
-    .issue { color: #d32f2f; }
-    .success { color: #4caf50; }
-  </style>
-</head>
-<body>
-  <h1>Documentation Quality Report</h1>
-  <div class="summary">
-    <h2>Summary</h2>
-    <p>Generated on: ${new Date().toLocaleString()}</p>
-    <p>Total Files: ${results.totalFiles}</p>
-    <p>Files with Issues: ${results.filesWithIssues}</p>
-    <p class="coverage ${coverage >= 80 ? 'good' : coverage >= 60 ? 'warning' : 'error'}">
-      Coverage: ${coverage}%
-    </p>
-  </div>
-  
-  <h2>Metrics</h2>
-  <div class="metric">Total Words: ${results.metrics.totalWords}</div>
-  <div class="metric">Total Code Blocks: ${results.metrics.totalCodeBlocks}</div>
-  <div class="metric">Total Images: ${results.metrics.totalImages}</div>
-  
-  <h2>Missing Required Documentation</h2>
-  ${missingDocs.length > 0 ? `
-    <table>
-      <tr>
-        <th>File</th>
-        <th>Status</th>
-      </tr>
-      ${missingDocs.map(doc => `
-        <tr>
-          <td>${doc}</td>
-          <td class="missing">Missing</td>
-        </tr>
-      `).join('')}
-    </table>
-  ` : '<p>No missing documentation found.</p>'}
-  
-  <h2>Documentation Files</h2>
-  <table>
-    <tr>
-      <th>File</th>
-      <th>Size</th>
-      <th>Last Modified</th>
-    </tr>
-    ${fileList.map(file => `
-      <tr>
-        <td>${file.relativePath}</td>
-        <td>${formatBytes(file.size)}</td>
-        <td>${formatDate(file.modified)}</td>
-      </tr>
-    `).join('')}
-  </table>
-  
-  <h2>Issues</h2>
-  ${results.issues.map(issue => `
-    <div class="issue">
-      <h3>${issue.file}</h3>
-      <ul>
-        ${issue.issues.map(i => `<li>${i}</li>`).join('')}
-      </ul>
-    </div>
-  `).join('')}
-</body>
-</html>`;
-
-  await writeFile(reportPath, html);
-  logger.success(`Generated documentation report at ${reportPath}`);
-}
-
-/**
- * Analyze documentation quality
+ * Analyze the documentation in a codebase
  * @param {Object} options - Analysis options
- * @param {string} [options.docsDir='docs'] - Directory containing documentation
- * @param {Array} [options.requiredDocs=['setup', 'deployment', 'architecture', 'api', 'configuration']] - Required documentation files
- * @param {number} [options.minCoverage=80] - Minimum documentation coverage percentage
- * @param {boolean} [options.generateReport=true] - Whether to generate an HTML report
- * @returns {Promise<Object>} Analysis results
+ * @returns {Object} - Analysis results
  */
-export async function analyzeDocumentation(options = {}) {
-  const {
-    docsDir = _DEFAULT_DOCS_DIR,
-    requiredDocs = _DEFAULT_REQUIRED_DOCS,
-    minCoverage = DEFAULT_MIN_COVERAGE,
-    generateReport = true
-  } = options;
+async function analyzeDocumentation(options) {
+  logger.info('Starting documentation analysis...');
 
   try {
-    logger.info('Starting documentation analysis...');
+    // Get all markdown files
+    const docsDir = path.join(process.cwd(), 'docs');
+    const files = await _findMarkdownFiles(docsDir);
     
-    // Find all markdown files
-    const fileList = await _findMarkdownFiles(docsDir);
-    
-    // Find missing required docs
-    const missingDocs = _findMissingDocs(fileList, requiredDocs);
-    
-    // Calculate coverage
-    const coverage = Math.round((fileList.length / requiredDocs.length) * 100);
-    
-    // Analyze each file
     const results = {
-      totalFiles: fileList.length,
+      totalFiles: files.length,
       filesWithIssues: 0,
       issues: [],
       metrics: {
@@ -414,52 +299,33 @@ export async function analyzeDocumentation(options = {}) {
         totalImages: 0
       }
     };
-    
-    for (const file of fileList) {
+
+    for (const file of files) {
       const content = await _readFile(file.path, 'utf8');
-      const analysis = analyzeFile(content, file.relativePath);
+      const relativePath = path.relative(docsDir, file.path);
       
-      results.metrics.totalWords += analysis.wordCount;
-      results.metrics.totalCodeBlocks += analysis.codeBlocks;
-      results.metrics.totalImages += analysis.images;
-      
-      if (analysis.issues.length > 0) {
+      // Analyze content
+      const fileAnalysis = analyzeFile(content, relativePath);
+      results.metrics.totalWords += fileAnalysis.wordCount;
+      results.metrics.totalCodeBlocks += fileAnalysis.codeBlocks;
+      results.metrics.totalImages += fileAnalysis.images;
+
+      if (fileAnalysis.issues.length > 0) {
         results.filesWithIssues++;
         results.issues.push({
-          file: file.relativePath,
-          issues: analysis.issues
+          file: relativePath,
+          issues: fileAnalysis.issues
         });
       }
     }
-    
-    // Generate report if requested
-    if (generateReport) {
-      const reportPath = getHtmlReportPath('docQuality');
-      await generateHtmlReport(results, fileList, missingDocs, coverage, reportPath);
-    }
-    
+
+    // Generate reports
+    await generateReports(results);
+
     logger.success('Documentation analysis completed successfully!');
-    
-    return {
-      success: coverage >= minCoverage && results.filesWithIssues === 0,
-      coverage,
-      ...results,
-      missingDocs,
-      issues: [
-        ...results.issues,
-        ...missingDocs.map(doc => ({
-          type: 'missing',
-          file: doc,
-          message: `Missing required documentation: ${doc}`
-        }))
-      ]
-    };
   } catch (error) {
     logger.error(`Documentation analysis failed: ${error.message}`);
-    return {
-      success: false,
-      error: error.message
-    };
+    process.exit(1);
   }
 }
 
@@ -493,8 +359,47 @@ async function generateReports(results) {
   fs.writeFileSync('temp/docQuality-report.json', jsonReport);
 
   // Generate HTML report
-  const reportPath = getHtmlReportPath('docQuality');
-  await generateHtmlReport(results, [], [], 0, reportPath);
+  const htmlReport = generateHtmlReport(results);
+  fs.writeFileSync('temp/docQuality-report.html', htmlReport);
+}
+
+function generateHtmlReport(results) {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Documentation Quality Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .metric { margin: 10px 0; }
+    .issue { color: #d32f2f; }
+    .success { color: #4caf50; }
+  </style>
+</head>
+<body>
+  <h1>Documentation Quality Report</h1>
+  
+  <h2>Overview</h2>
+  <div class="metric">Total Files: ${results.totalFiles}</div>
+  <div class="metric">Files with Issues: ${results.filesWithIssues}</div>
+  
+  <h2>Metrics</h2>
+  <div class="metric">Total Words: ${results.metrics.totalWords}</div>
+  <div class="metric">Total Code Blocks: ${results.metrics.totalCodeBlocks}</div>
+  <div class="metric">Total Images: ${results.metrics.totalImages}</div>
+  
+  <h2>Issues</h2>
+  ${results.issues.map(issue => `
+    <div class="issue">
+      <h3>${issue.file}</h3>
+      <ul>
+        ${issue.issues.map(i => `<li>${i}</li>`).join('')}
+      </ul>
+    </div>
+  `).join('')}
+</body>
+</html>
+  `;
 }
 
 function getAllMarkdownFiles(dir) {
