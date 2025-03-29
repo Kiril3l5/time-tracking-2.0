@@ -16,15 +16,8 @@ import * as logger from './core/logger.js';
 import path from 'path';
 import fs from 'fs';
 
-// Import Firebase deployment utilities
-import * as deployment from './firebase/deployment.js';
-import * as channelCleanup from './firebase/channel-cleanup.js';
-
-// Import documentation quality checker
-import * as docQuality from './checks/doc-quality.js';
-
-// Import configuration
-import { config } from './config.js';
+// Import preview workflow
+import * as previewWorkflow from './preview/preview.js';
 
 // Simple state management with persistence
 const state = {
@@ -65,7 +58,7 @@ async function runWorkflow(options = {}) {
     // Resume from last successful step if requested
     if (options.resume && state.lastSuccessfulStep) {
       logger.info(`Resuming from step: ${state.lastSuccessfulStep}`);
-      const steps = ['branch', 'sync', 'changes', 'quality', 'build', 'preview', 'pr'];
+      const steps = ['branch', 'sync', 'changes', 'gitignore', 'preview', 'pr'];
       const startIndex = steps.indexOf(state.lastSuccessfulStep);
       if (startIndex > 0) {
         logger.info(`Skipping completed steps: ${steps.slice(0, startIndex).join(', ')}`);
@@ -94,29 +87,22 @@ async function runWorkflow(options = {}) {
       saveState();
     }
 
-    // 4. Run quality checks
+    // 4. Fix gitignore issues
     if (!options.skipCompleted) {
-      await runQualityChecks();
-      state.lastSuccessfulStep = 'quality';
+      await fixGitignore();
+      state.lastSuccessfulStep = 'gitignore';
       saveState();
     }
 
-    // 5. Build
-    if (!options.skipCompleted) {
-      await runBuild();
-      state.lastSuccessfulStep = 'build';
-      saveState();
-    }
-
-    // 6. Run preview deployment
+    // 5. Run preview deployment
     if (!options.skipPreview && !options.skipCompleted) {
       await runPreview();
       state.lastSuccessfulStep = 'preview';
       saveState();
     }
 
-    // 7. Create PR if requested
-    if (state.previewUrls && !options.skipPR && !options.skipCompleted) {
+    // 6. Create PR if requested
+    if (!options.skipPR && !options.skipCompleted) {
       await handlePRCreation();
       state.lastSuccessfulStep = 'pr';
       saveState();
@@ -155,20 +141,13 @@ async function ensureFeatureBranch() {
 
 /**
  * Check if main branch needs syncing
- * @returns {Promise<boolean>} - Whether main needs syncing
  */
 async function needsMainSync() {
   try {
-    // Fetch latest refs without merging
     execSync('git fetch origin main', { stdio: 'pipe' });
-    
-    // Check if main is behind remote
     const diffResult = execSync('git rev-list --count main..origin/main', { encoding: 'utf8' }).trim();
-    const commitsBehind = parseInt(diffResult, 10);
-    
-    return commitsBehind > 0;
+    return parseInt(diffResult, 10) > 0;
   } catch (error) {
-    // If we can't check, assume sync is needed
     return true;
   }
 }
@@ -177,14 +156,9 @@ async function needsMainSync() {
  * Offer to sync main branch
  */
 async function offerMainSync() {
-  // Skip if we're already on main
-  if (state.currentBranch === 'main') {
-    return;
-  }
+  if (state.currentBranch === 'main') return;
 
-  // Check if main needs syncing
   const needsSync = await needsMainSync();
-  
   if (!needsSync) {
     logger.info('Main branch is already in sync with remote');
     return;
@@ -206,170 +180,63 @@ async function handleChanges() {
   logger.info('Uncommitted changes detected:');
   console.log(status);
 
-  // First handle gitignore-related changes
+  logger.info('\nHow would you like to handle these changes?');
+  logger.info('1. Commit changes (create a new commit)');
+  logger.info('2. Stash changes (save for later)');
+  logger.info('3. Discard changes (revert all changes)');
+  logger.info('4. Skip for now (keep working)');
+  
+  const choice = await question('Choose an option (1-4): ');
+  let message;
+  let confirm;
+  
+  switch (choice) {
+    case '1':
+      message = await question('Enter commit message: ');
+      execSync('git add .');
+      execSync(`git commit -m "${message}"`);
+      logger.success('Changes committed successfully!');
+      break;
+      
+    case '2':
+      message = await question('Enter stash message (optional): ');
+      execSync(`git stash push -m "${message || 'Stashed changes'}"`);
+      logger.success('Changes stashed successfully! Use "git stash pop" to restore later.');
+      break;
+      
+    case '3':
+      confirm = await question('Are you sure you want to discard all changes? (yes/NO): ');
+      if (confirm.toLowerCase() === 'yes') {
+        execSync('git reset --hard HEAD');
+        logger.success('Changes discarded successfully!');
+      } else {
+        logger.info('Discarding changes cancelled.');
+      }
+      break;
+      
+    case '4':
+      logger.info('Skipping changes. You can commit them later with "git add . && git commit -m your message"');
+      break;
+      
+    default:
+      logger.info('Invalid option. Skipping changes.');
+  }
+}
+
+/**
+ * Fix gitignore issues
+ */
+async function fixGitignore() {
+  logger.sectionHeader('Fixing Gitignore');
   execSync('node scripts/fix-gitignore.js', { stdio: 'inherit' });
-
-  // Then handle remaining changes
-  const remainingStatus = execSync('git status --porcelain', { encoding: 'utf8' }).trim();
-  if (remainingStatus) {
-    logger.info('\nHow would you like to handle these changes?');
-    logger.info('1. Commit changes (create a new commit)');
-    logger.info('2. Stash changes (save for later)');
-    logger.info('3. Discard changes (revert all changes)');
-    logger.info('4. Skip for now (keep working)');
-    
-    const choice = await question('Choose an option (1-4): ');
-    let message;
-    let confirm;
-    
-    switch (choice) {
-      case '1':
-        message = await question('Enter commit message: ');
-        execSync('git add .');
-        execSync(`git commit -m "${message}"`);
-        logger.success('Changes committed successfully!');
-        break;
-        
-      case '2':
-        message = await question('Enter stash message (optional): ');
-        execSync(`git stash push -m "${message || 'Stashed changes'}"`);
-        logger.success('Changes stashed successfully! Use "git stash pop" to restore later.');
-        break;
-        
-      case '3':
-        confirm = await question('Are you sure you want to discard all changes? (yes/NO): ');
-        if (confirm.toLowerCase() === 'yes') {
-          execSync('git reset --hard HEAD');
-          logger.success('Changes discarded successfully!');
-        } else {
-          logger.info('Discarding changes cancelled.');
-        }
-        break;
-        
-      case '4':
-        logger.info('Skipping changes. You can commit them later with "git add . && git commit -m your message"');
-        break;
-        
-      default:
-        logger.info('Invalid option. Skipping changes.');
-    }
-  }
-}
-
-/**
- * Run build step
- */
-async function runBuild() {
-  logger.sectionHeader('Building');
-  
-  try {
-    logger.info('Building all packages...');
-    execSync('pnpm run build:all', { stdio: 'inherit' });
-    logger.success('Build completed successfully!');
-  } catch (error) {
-    logger.error(`Build failed: ${error.message}`);
-    throw error;
-  }
-}
-
-/**
- * Run quality checks in parallel where possible
- */
-async function runQualityChecks() {
-  logger.sectionHeader('Quality Checks');
-  
-  try {
-    // Run checks in parallel
-    const [lintResult, typecheckResult, testResult, docResult] = await Promise.all([
-      // ESLint
-      execSync('pnpm run lint', { stdio: 'inherit' }),
-      // TypeScript checks
-      execSync('pnpm run typecheck', { stdio: 'inherit' }),
-      // Unit tests
-      execSync('pnpm run test', { stdio: 'inherit' }),
-      // Documentation quality
-      docQuality.analyzeDocumentation({
-        docsDir: config.docsDir,
-        requiredDocs: config.requiredDocs,
-        minCoverage: config.minCoverage,
-        generateReport: true
-      })
-    ]);
-
-    // Check documentation results
-    if (!docResult.success) {
-      logger.warn('Documentation quality check found issues:', docResult.issues);
-      // Don't fail the workflow for documentation issues, just warn
-    }
-    
-    logger.success('All quality checks completed!');
-  } catch (error) {
-    logger.error(`Quality checks failed: ${error.message}`);
-    throw error;
-  }
 }
 
 /**
  * Run preview deployment
  */
 async function runPreview() {
-  logger.sectionHeader('Deploying preview');
-  
-  try {
-    // Generate a unique channel ID
-    const channelId = deployment.generateChannelId({
-      prefix: 'feature',
-      timestamp: Date.now()
-    });
-    
-    // Deploy to preview channel
-    const deployResult = await deployment.deployToPreviewChannel({
-      projectId: config.projectId,
-      site: config.sites,
-      channelId,
-      skipBuild: true // Skip build since we already built
-    });
-    
-    if (!deployResult.success) {
-      throw new Error(`Deployment failed: ${deployResult.error}`);
-    }
-    
-    // Clean up old channels if needed
-    const cleanupResult = await channelCleanup.checkAndCleanupIfNeeded({
-      projectId: config.projectId,
-      site: config.sites,
-      threshold: config.channelThreshold,
-      autoCleanup: true
-    });
-    
-    if (cleanupResult.needsCleanup) {
-      logger.info('Channel cleanup completed');
-    }
-    
-    return deployResult;
-  } catch (error) {
-    logger.error(`Preview deployment failed: ${error.message}`);
-    throw error;
-  }
-}
-
-/**
- * Get preview URLs from the most recent preview
- */
-async function getPreviewUrls() {
-  try {
-    const previewDir = path.join(process.cwd(), 'temp');
-    const urlsFile = path.join(previewDir, 'preview-urls.json');
-    
-    if (fs.existsSync(urlsFile)) {
-      const urls = JSON.parse(fs.readFileSync(urlsFile, 'utf8'));
-      return urls;
-    }
-    return null;
-  } catch (error) {
-    logger.warn('Could not read preview URLs:', error.message);
-    return null;
-  }
+  logger.sectionHeader('Running Preview Deployment');
+  await previewWorkflow.main();
 }
 
 /**
@@ -381,7 +248,6 @@ async function handlePRCreation() {
     const title = await question('Enter PR title: ');
     const description = await question('Enter PR description (optional): ');
     
-    // Create PR by executing the script directly
     execSync(`node scripts/create-pr.js "${title}" "${description}"`, { stdio: 'inherit' });
   }
 }
