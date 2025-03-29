@@ -48,6 +48,66 @@ function getRootDir() {
 }
 
 /**
+ * Get all TypeScript files in the project
+ * @returns {string[]} Array of file paths
+ */
+function getAllTypeScriptFiles() {
+  const files = [];
+  const dirs = [
+    path.join(getRootDir(), 'src'),
+    path.join(getRootDir(), 'packages')
+  ];
+
+  for (const dir of dirs) {
+    if (fs.existsSync(dir)) {
+      files.push(...getFilesRecursively(dir, ['.ts', '.tsx']));
+    }
+  }
+
+  return files;
+}
+
+/**
+ * Check if a variable is used in the code
+ * @param {string} content - File content
+ * @param {string} varName - Variable name to check
+ * @returns {boolean} Whether the variable is used
+ */
+function isVariableUsed(content, varName) {
+  // Skip if it's a destructured variable
+  if (content.includes(`{ ${varName} }`)) return true;
+  
+  // Count occurrences of the variable name
+  const regex = new RegExp(`\\b${varName}\\b`, 'g');
+  const matches = content.match(regex) || [];
+  
+  // If it appears more than once (including the declaration), it's used
+  return matches.length > 1;
+}
+
+/**
+ * Get all files recursively from a directory with specific extensions
+ * @param {string} dir - Directory to scan
+ * @param {string[]} extensions - File extensions to include
+ * @returns {string[]} Array of file paths
+ */
+function getFilesRecursively(dir, extensions) {
+  const files = [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...getFilesRecursively(fullPath, extensions));
+    } else if (extensions.some(ext => entry.name.endsWith(ext))) {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
+}
+
+/**
  * Apply fixes to TypeScript files
  * 
  * @param {Object} options - Options for applying fixes
@@ -73,6 +133,18 @@ export async function fixTypeScriptIssues(options) {
     dryRun = false
   } = options;
   
+  logger.info('Running enhanced TypeScript error fixing...');
+
+  // First run ESLint with auto-fix
+  if (!dryRun) {
+    execSync('pnpm run lint:fix', { stdio: 'inherit' });
+  }
+
+  // Then run TypeScript compiler to catch remaining issues
+  if (!dryRun) {
+    execSync('pnpm run typecheck', { stdio: 'inherit' });
+  }
+
   const dirs = Array.isArray(targetDirs) ? targetDirs : [targetDirs];
   
   if (verbose) {
@@ -172,6 +244,30 @@ export async function fixTypeScriptIssues(options) {
       results.fixes.unusedImports.failed++;
     }
   }
+
+  // Fix any remaining issues
+  if (fix && !dryRun) {
+    const files = getAllTypeScriptFiles();
+    for (const file of files) {
+      let content = fs.readFileSync(file, 'utf8');
+      
+      // Replace any types with unknown or proper types
+      content = content.replace(/: any/g, ': unknown');
+      
+      // Remove console statements
+      content = content.replace(/console\.(log|warn|error|info|debug)\((.*?)\);?/g, '');
+      
+      // Fix unused variables
+      content = content.replace(/const\s+(\w+)\s*=\s*[^;]+;?/g, (match, varName) => {
+        if (!isVariableUsed(content, varName)) {
+          return `// Unused variable: ${varName}`;
+        }
+        return match;
+      });
+
+      fs.writeFileSync(file, content);
+    }
+  }
   
   // Compute summary statistics
   results.summary.totalFilesScanned = Math.max(
@@ -194,6 +290,7 @@ export async function fixTypeScriptIssues(options) {
   results.endTime = new Date();
   results.duration = results.endTime - results.startTime;
   
+  logger.success('TypeScript fixes applied successfully!');
   return results;
 }
 
@@ -986,40 +1083,6 @@ export async function verifyAndFixTypeScriptEnhanced(options = {}) {
     fixResults,
     report: reportData
   };
-}
-
-async function fixTypeScriptIssues() {
-  logger.info('Running enhanced TypeScript error fixing...');
-
-  // First run ESLint with auto-fix
-  execSync('pnpm run lint:fix', { stdio: 'inherit' });
-
-  // Then run TypeScript compiler to catch remaining issues
-  execSync('pnpm run typecheck', { stdio: 'inherit' });
-
-  // Fix any remaining issues
-  const files = getAllTypeScriptFiles();
-  for (const file of files) {
-    let content = fs.readFileSync(file, 'utf8');
-    
-    // Replace any types with unknown or proper types
-    content = content.replace(/: any/g, ': unknown');
-    
-    // Remove console statements
-    content = content.replace(/console\.(log|warn|error|info|debug)\((.*?)\);?/g, '');
-    
-    // Fix unused variables
-    content = content.replace(/const\s+(\w+)\s*=\s*[^;]+;?/g, (match, varName) => {
-      if (!isVariableUsed(content, varName)) {
-        return `// Unused variable: ${varName}`;
-      }
-      return match;
-    });
-
-    fs.writeFileSync(file, content);
-  }
-
-  logger.success('TypeScript fixes applied successfully!');
 }
 
 // Run main function if this file is executed directly
