@@ -1,0 +1,315 @@
+/**
+ * Branch Manager Module
+ * 
+ * Handles Git branch operations, code changes, and commits.
+ */
+
+import { execSync } from 'child_process';
+import * as logger from '../core/logger.js';
+
+/**
+ * Check if a branch is a feature branch
+ * @param {string} branchName - Branch name to check
+ * @returns {boolean} - True if it's a feature branch
+ */
+export function isFeatureBranch(branchName) {
+  const featurePrefixes = ['feature/', 'feat/', 'fix/', 'bugfix/', 'improvement/', 'chore/', 'docs/'];
+  return featurePrefixes.some(prefix => branchName.startsWith(prefix));
+}
+
+/**
+ * Get the current branch name
+ * @returns {string} - Current branch name
+ */
+export function getCurrentBranch() {
+  try {
+    return execSync('git branch --show-current', { encoding: 'utf8' }).trim();
+  } catch (error) {
+    logger.error(`Failed to get current branch: ${error.message}`);
+    return '';
+  }
+}
+
+/**
+ * Check if there are uncommitted changes
+ * @returns {boolean} - True if there are uncommitted changes
+ */
+export function hasUncommittedChanges() {
+  try {
+    const status = execSync('git status --porcelain', { encoding: 'utf8' }).trim();
+    return status.length > 0;
+  } catch (error) {
+    logger.error(`Failed to check for uncommitted changes: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Create a feature branch name from description
+ * @param {string} description - Description of the feature
+ * @returns {string} - A valid branch name
+ */
+export function createBranchName(description) {
+  return 'feature/' + description.toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .substr(0, 40);
+}
+
+/**
+ * Create a new feature branch from main
+ * @param {string} branchName - Name for the new branch
+ * @returns {boolean} - Success status
+ */
+export function createFeatureBranch(branchName) {
+  try {
+    // Make sure main is up to date
+    logger.info("Updating main branch from remote...");
+    execSync('git pull origin main', { stdio: 'inherit' });
+    
+    // Create and checkout new branch
+    execSync(`git checkout -b ${branchName}`, { stdio: 'inherit' });
+    logger.success(`Created and switched to branch: ${branchName}`);
+    return true;
+  } catch (error) {
+    logger.error(`Failed to create branch: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Switch to an existing branch, handling uncommitted changes
+ * @param {string} targetBranch - Branch to switch to
+ * @param {Function} promptFn - Function to prompt the user
+ * @returns {Promise<boolean>} - Success status
+ */
+export async function switchBranch(targetBranch, currentBranch, promptFn) {
+  if (targetBranch === currentBranch) {
+    logger.info(`Already on branch: ${currentBranch}`);
+    return true;
+  }
+  
+  // Handle uncommitted changes
+  if (hasUncommittedChanges()) {
+    logger.warn("You have uncommitted changes that would be affected when switching.");
+    const action = await promptFn("1. Commit changes, 2. Stash changes, 3. Stay on current branch (1/2/3)", "3");
+    
+    if (action === "1") {
+      const message = await promptFn(`Enter commit message`, `Changes before switching to ${targetBranch}`);
+      try {
+        execSync('git add .');
+        execSync(`git commit -m "${message}"`);
+      } catch (error) {
+        logger.error(`Failed to commit changes: ${error.message}`);
+        return false;
+      }
+    } else if (action === "2") {
+      try {
+        execSync(`git stash push -m "Stashed before switching to ${targetBranch}"`);
+        logger.success("Changes stashed successfully.");
+      } catch (error) {
+        logger.error(`Failed to stash changes: ${error.message}`);
+        return false;
+      }
+    } else {
+      logger.info(`Staying on current branch: ${currentBranch}`);
+      return false;
+    }
+  }
+  
+  // Switch to target branch
+  try {
+    execSync(`git checkout ${targetBranch}`, { stdio: 'inherit' });
+    logger.success(`Switched to branch: ${targetBranch}`);
+    return true;
+  } catch (error) {
+    logger.error(`Failed to switch branch: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Sync main branch with remote
+ * @param {Function} promptFn - Function to prompt the user
+ * @returns {Promise<boolean>} - Success status
+ */
+export async function syncMainBranch(promptFn) {
+  logger.sectionHeader('SYNCING MAIN BRANCH');
+  
+  const currentBranch = getCurrentBranch();
+  
+  // If already on main, just pull
+  if (currentBranch === 'main' || currentBranch === 'master') {
+    try {
+      logger.info("Pulling latest changes from remote main...");
+      execSync('git pull origin main', { stdio: 'inherit' });
+      logger.success("Main branch updated successfully!");
+      return true;
+    } catch (error) {
+      logger.error(`Failed to update main branch: ${error.message}`);
+      return false;
+    }
+  }
+  
+  // Check for uncommitted changes
+  if (hasUncommittedChanges()) {
+    logger.warn("You have uncommitted changes that would be affected by switching branches.");
+    
+    const choice = await promptFn("1. Commit changes, 2. Stash changes, 3. Cancel sync (1/2/3)");
+    
+    if (choice === "1") {
+      const commitMessage = await promptFn("Enter commit message");
+      if (!commitMessage) {
+        logger.error("Commit message is required.");
+        return false;
+      }
+      
+      try {
+        execSync('git add .');
+        execSync(`git commit -m "${commitMessage}"`);
+      } catch (error) {
+        logger.error(`Failed to commit changes: ${error.message}`);
+        return false;
+      }
+    } else if (choice === "2") {
+      try {
+        execSync('git stash push -m "Stashed before syncing main"');
+        logger.info("Changes stashed successfully.");
+      } catch (error) {
+        logger.error(`Failed to stash changes: ${error.message}`);
+        return false;
+      }
+    } else {
+      logger.info("Sync cancelled.");
+      return false;
+    }
+  }
+  
+  // Switch to main and pull
+  try {
+    execSync('git checkout main', { stdio: 'inherit' });
+    execSync('git pull origin main', { stdio: 'inherit' });
+    logger.success("Main branch updated successfully!");
+    
+    // Ask if they want to go back to the previous branch
+    if (currentBranch && currentBranch !== 'main' && currentBranch !== 'master') {
+      const goBack = await promptFn(`Switch back to '${currentBranch}'? (Y/n)`, 'Y');
+      if (goBack.toLowerCase() !== 'n') {
+        execSync(`git checkout ${currentBranch}`, { stdio: 'inherit' });
+        logger.success(`Switched back to branch: ${currentBranch}`);
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    logger.error(`Failed during branch operations: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Commit changes with a suggested message based on branch name
+ * @param {string} branchName - Current branch name
+ * @param {Function} promptFn - Function to prompt the user
+ * @returns {Promise<{success: boolean, message?: string}>} - Success status and commit message
+ */
+export async function commitChanges(branchName, promptFn) {
+  if (!hasUncommittedChanges()) {
+    logger.info("No uncommitted changes detected.");
+    return { success: true };
+  }
+  
+  logger.info("You have uncommitted changes.");
+  execSync('git status --short', { stdio: 'inherit' });
+  
+  const shouldCommit = await promptFn("Would you like to commit these changes? (Y/n)", "Y");
+  if (shouldCommit.toLowerCase() === 'n') {
+    return { success: true };
+  }
+  
+  // Generate commit message suggestion based on changes
+  let suggestedMessage = '';
+  
+  try {
+    // Get the branch name without prefix for a default message
+    const nameWithoutPrefix = branchName.replace(/^(feature\/|fix\/|bugfix\/|docs\/|chore\/)/, '');
+    
+    // Convert kebab-case to normal text with capitalization
+    suggestedMessage = nameWithoutPrefix
+      .split('-')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+    
+    // Add conventional commit type prefix based on branch
+    if (branchName.startsWith('feature/')) {
+      suggestedMessage = `feat: ${suggestedMessage}`;
+    } else if (branchName.startsWith('fix/') || branchName.startsWith('bugfix/')) {
+      suggestedMessage = `fix: ${suggestedMessage}`;
+    } else if (branchName.startsWith('docs/')) {
+      suggestedMessage = `docs: ${suggestedMessage}`;
+    } else if (branchName.startsWith('chore/')) {
+      suggestedMessage = `chore: ${suggestedMessage}`;
+    }
+  } catch (error) {
+    suggestedMessage = 'Update project files';
+  }
+  
+  const commitMessage = await promptFn("Enter commit message", suggestedMessage);
+  
+  try {
+    logger.info("Committing changes...");
+    execSync('git add .');
+    execSync(`git commit -m "${commitMessage}"`, { stdio: 'inherit' });
+    logger.success("Changes committed successfully.");
+    
+    return { success: true, message: commitMessage };
+  } catch (error) {
+    logger.error(`Failed to commit changes: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Get a list of modified files between current state and HEAD
+ * @returns {string[]} - Array of modified file paths
+ */
+export function getModifiedFiles() {
+  try {
+    const output = execSync('git diff --name-only HEAD', { encoding: 'utf8' }).trim();
+    return output.split('\n').filter(Boolean);
+  } catch (error) {
+    logger.error(`Failed to get modified files: ${error.message}`);
+    return [];
+  }
+}
+
+/**
+ * Get a list of all local branches
+ * @returns {string[]} - Array of branch names
+ */
+export function getLocalBranches() {
+  try {
+    const output = execSync('git branch', { encoding: 'utf8' }).trim();
+    return output
+      .split('\n')
+      .map(line => line.trim().replace(/^\*\s*/, '')) // Remove the * from current branch
+      .filter(Boolean);
+  } catch (error) {
+    logger.error(`Failed to get local branches: ${error.message}`);
+    return [];
+  }
+}
+
+export default {
+  isFeatureBranch,
+  getCurrentBranch,
+  hasUncommittedChanges,
+  createBranchName,
+  createFeatureBranch,
+  switchBranch,
+  syncMainBranch,
+  commitChanges,
+  getModifiedFiles,
+  getLocalBranches
+}; 

@@ -179,8 +179,12 @@ function resetTerminalTitle() {
 /**
  * Show workflow progress
  * @param {number} stepId - The step ID to display
+ * @param {Object} options - Additional options for display
+ * @param {number} options.totalSubSteps - Total number of sub-steps
+ * @param {number} options.currentSubStep - Current sub-step
+ * @param {string} options.subStepName - Name of the current sub-step
  */
-function showWorkflowProgress(stepId) {
+function showWorkflowProgress(stepId, options = {}) {
   _currentStep = stepId;
   const step = WORKFLOW_STEPS.find(s => s.id === stepId);
   if (!step) return;
@@ -189,8 +193,19 @@ function showWorkflowProgress(stepId) {
   updateTerminalTitle(`${step.name}`);
   
   logger.info('\n');
-  // Display the step without numbering, just the name and description
-  logger.info(`${step.name}`);
+  
+  // Display with step numbering and overall progress
+  let stepDisplay = `STEP ${stepId}/${WORKFLOW_STEPS.length}: ${step.name}`;
+  
+  // If sub-steps are specified, display them
+  if (options.totalSubSteps && options.currentSubStep) {
+    stepDisplay += ` (${options.currentSubStep}/${options.totalSubSteps})`;
+    if (options.subStepName) {
+      stepDisplay += ` - ${options.subStepName}`;
+    }
+  }
+  
+  logger.info(stepDisplay);
   logger.info('='.repeat(50));
   logger.info(`${step.description}`);
 }
@@ -1200,39 +1215,39 @@ function getDefaultCommitMessage(branchName = '') {
 }
 
 /**
- * Open preview dashboard in the default browser
- * @param {object} previewUrls - Object containing preview URLs
- * @returns {boolean} - Whether dashboard was opened successfully
+ * Open the preview dashboard in the browser properly
  */
-function openPreviewDashboard() {
-  logger.info("Opening preview dashboard in your browser...");
-  
-  const dashboardPath = path.join(rootDir, 'preview-dashboard.html');
-  
-  if (!fs.existsSync(dashboardPath)) {
-    logger.warn("Preview dashboard HTML not found. Run a preview deployment first.");
-    return false;
-  }
-  
+function openPreviewDashboardInBrowser() {
   try {
-    // Determine the right command based on OS
-    const openCmd = process.platform === 'win32' ? 'start' : 
-                    process.platform === 'darwin' ? 'open' : 'xdg-open';
-                    
-    // Convert to file URL format for browser compatibility
-    const fileUrl = `file://${dashboardPath.replace(/\\/g, '/')}`;
+    logger.info("Opening preview dashboard in your browser...");
     
-    // Execute the command to open browser
-    executeCommand(`${openCmd} "${fileUrl}"`, { 
-      suppressErrors: true,
-      silent: true
+    // First check if the dashboard file exists
+    const dashboardPath = path.join(process.cwd(), 'preview-dashboard.html');
+    if (!fs.existsSync(dashboardPath)) {
+      logger.warn("Preview dashboard file not found. Cannot open browser.");
+      return false;
+    }
+    
+    // Use the npm script defined in package.json which uses open-cli
+    // This is more reliable than direct shell commands across platforms
+    const openCommand = 'pnpm run dashboard';
+    
+    // Execute the command with proper error handling
+    const result = executeCommand(openCommand, {
+      suppressErrors: true
     });
     
-    logger.success("Preview dashboard opened in browser");
+    if (!result.success) {
+      logger.warn("Failed to automatically open the preview dashboard.");
+      logger.info(`Please open ${dashboardPath} manually in your browser.`);
+      return false;
+    }
+    
+    logger.success("Preview dashboard opened in your browser.");
     return true;
   } catch (error) {
-    logger.error(`Failed to open preview dashboard: ${error.message}`);
-    logger.info(`You can manually open: ${dashboardPath}`);
+    logger.warn(`Error opening preview dashboard: ${error.message}`);
+    logger.info(`Please open ${path.join(process.cwd(), 'preview-dashboard.html')} manually in your browser.`);
     return false;
   }
 }
@@ -1368,42 +1383,208 @@ async function runWorkflow() {
           
           // Jump directly to preview deployment step
           showWorkflowProgress(4); // Preview deployment step ID
-          logger.info("Running preview deployment...");
+          logger.info("Starting preview deployment. This may take a few minutes...");
           
           try {
-            // Execute preview deployment command
-            const previewCommand = 'pnpm run preview:all';
-            logger.info(`Running preview deployment: ${previewCommand}`);
+            // COMPLETELY REWRITTEN PREVIEW DEPLOYMENT LOGIC
+            // Execute steps individually with proper logging and error handling
+            // This avoids duplicating steps and ensures proper control flow
             
-            // Execute the preview script directly
-            const previewResult = executeCommand(previewCommand, { stdio: 'inherit' });
+            let workflowSuccess = true;
+            let previewUrls = null;
             
-            if (previewResult.success) {
-              logger.success("Preview deployment completed successfully!");
+            try {
+              // Step 1: Run code quality checks (ESLint)
+              logger.sectionHeader("RUNNING CODE QUALITY CHECKS");
+              logger.info("Running ESLint to check code quality...");
               
-              // Try to extract preview URLs
-              try {
-                const reportModule = await import('./reports/report-collector.js');
-                workflowData.previewUrls = reportModule.extractPreviewUrls({tempDir: path.join(process.cwd(), 'temp')});
-                
-                // Open preview dashboard automatically
-                openPreviewDashboard();
-              } catch (error) {
-                logger.warn(`Could not extract preview URLs: ${error.message}`);
+              const lintResult = executeCommand('pnpm run lint', {
+                stdio: 'inherit',
+                suppressErrors: true
+              });
+              
+              if (!lintResult.success) {
+                logger.warn("ESLint found code quality issues. Please review them before continuing.");
+                const shouldContinue = await prompt("Would you like to continue despite the lint issues? (y/N): ");
+                if (shouldContinue.toLowerCase() !== 'y') {
+                  logger.info("Exiting workflow. Please fix the linting issues and try again.");
+                  rl.close();
+                  return;
+                }
+              } else {
+                logger.success("ESLint checks passed.");
               }
-            } else {
-              logger.error("Preview deployment failed. Check the output for details.");
+              
+              // Step 2: Run TypeScript type checking
+              logger.sectionHeader("RUNNING TYPE CHECKING");
+              logger.info("Running TypeScript type checking...");
+              
+              const typeCheckResult = executeCommand('pnpm run typecheck', {
+                stdio: 'inherit',
+                suppressErrors: true
+              });
+              
+              if (!typeCheckResult.success) {
+                logger.error("TypeScript found type errors. Please fix them before continuing.");
+                const shouldContinue = await prompt("Would you like to continue despite the type errors? (y/N): ");
+                if (shouldContinue.toLowerCase() !== 'y') {
+                  logger.info("Exiting workflow. Please fix the type errors and try again.");
+                  rl.close();
+                  return;
+                }
+              } else {
+                logger.success("TypeScript checks passed.");
+              }
+              
+              // Step 3: Run unit tests
+              logger.sectionHeader("RUNNING UNIT TESTS");
+              logger.info("Running unit tests...");
+              
+              const testResult = executeCommand('pnpm exec vitest run', {
+                stdio: 'inherit',
+                suppressErrors: true
+              });
+              
+              if (!testResult.success) {
+                logger.error("Unit tests failed. Please fix them before continuing.");
+                const shouldContinue = await prompt("Would you like to continue despite test failures? (y/N): ");
+                if (shouldContinue.toLowerCase() !== 'y') {
+                  logger.info("Exiting workflow. Please fix the failing tests and try again.");
+                  rl.close();
+                  return;
+                }
+              } else {
+                logger.success("Unit tests passed.");
+              }
+              
+              // Step 4: Build the application
+              logger.sectionHeader("BUILDING APPLICATION");
+              logger.info("Building the application...");
+              
+              const buildResult = executeCommand('pnpm run build:all', {
+                stdio: 'inherit',
+                suppressErrors: true
+              });
+              
+              if (!buildResult.success) {
+                logger.error("Application build failed. Cannot continue with deployment.");
+                logger.info("Exiting workflow. Please fix the build errors and try again.");
+                rl.close();
+                return;
+              } else {
+                logger.success("Application built successfully.");
+              }
+              
+              // Step 5: Deploy the preview
+              logger.sectionHeader("DEPLOYING PREVIEW");
+              logger.info("Deploying preview to Firebase...");
+              
+              // Use the Firebase CLI directly to deploy to preview channels
+              // Pass skip-build flag since we already built the application in the previous step
+              const deployCommand = "node scripts/firebase/deployment.js --preview --skip-build";
+              
+              const deployResult = executeCommand(deployCommand, {
+                stdio: 'inherit',
+                suppressErrors: true
+              });
+              
+              if (!deployResult.success) {
+                logger.error("Preview deployment failed. Check the output for details.");
+                workflowSuccess = false;
+              } else {
+                logger.success("Preview deployed successfully!");
+                
+                // Try to extract preview URLs from logs
+                try {
+                  // Import report collector functions dynamically
+                  const reportModule = await import('./reports/report-collector.js');
+                  
+                  // Extract URLs from the logs
+                  const tempDir = path.join(process.cwd(), 'temp');
+                  if (!fs.existsSync(tempDir)) {
+                    fs.mkdirSync(tempDir, { recursive: true });
+                  }
+                  
+                  previewUrls = reportModule.extractPreviewUrls({tempDir});
+                  
+                  if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
+                    logger.info("Preview URLs:");
+                    
+                    if (previewUrls.admin) {
+                      logger.link("Admin Dashboard", previewUrls.admin);
+                    }
+                    
+                    if (previewUrls.hours) {
+                      logger.link("Hours App", previewUrls.hours);
+                    }
+                    
+                    // Generate and open the preview dashboard
+                    logger.info("Generating preview dashboard...");
+                    
+                    try {
+                      // Import report collector module which contains the dashboard generation functionality
+                      const reportCollector = await import('./reports/report-collector.js');
+                      
+                      // Generate the consolidated dashboard using the proper function
+                      const dashboardResult = await reportCollector.collectAndGenerateReport({
+                        previewUrls: previewUrls
+                      });
+                      
+                      if (dashboardResult) {
+                        logger.success("Preview dashboard generated successfully.");
+                        // Open the dashboard in the browser
+                        openPreviewDashboardInBrowser();
+                      } else {
+                        logger.warn("Failed to generate preview dashboard.");
+                      }
+                    } catch (error) {
+                      logger.warn(`Error generating dashboard: ${error.message}`);
+                    }
+                  } else {
+                    logger.warn("Could not extract preview URLs from deployment logs.");
+                  }
+                } catch (error) {
+                  logger.warn(`Error extracting preview URLs: ${error.message}`);
+                }
+              }
+              
+              // Store preview URLs in workflow data
+              workflowData.previewUrls = previewUrls;
+              workflowData.workflowSuccess = workflowSuccess;
+              
+              if (!workflowSuccess) {
+                logger.warn("The preview deployment encountered errors. Please address them before continuing.");
+                
+                const shouldContinue = await prompt("Would you still like to continue with the workflow? (y/N): ");
+                if (shouldContinue.toLowerCase() !== 'y') {
+                  logger.info("Exiting workflow. Please fix the issues and try again.");
+                  rl.close();
+                  return;
+                }
+              }
+            } catch (error) {
+              logger.error(`Error during preview deployment: ${error.message}`);
               workflowData.workflowSuccess = false;
+              
+              const shouldContinue = await prompt("Would you like to continue with the workflow despite the error? (y/N): ");
+              if (shouldContinue.toLowerCase() !== 'y') {
+                logger.info("Exiting workflow. Please fix the issues and try again.");
+                rl.close();
+                return;
+              }
             }
+            
+            // Show workflow summary and exit
+            displayWorkflowSummary(workflowData);
+            rl.close();
+            return;
           } catch (error) {
             logger.error(`Error during preview deployment: ${error.message}`);
             workflowData.workflowSuccess = false;
+            displayWorkflowSummary(workflowData);
+            rl.close();
+            return;
           }
-          
-          // Show workflow summary and exit
-          displayWorkflowSummary(workflowData);
-          rl.close();
-          return;
         } else if (action === "3") {
           // User wants to switch branches - will be handled by the branch switching code below
           logger.info("Proceeding to branch switching...");
@@ -1646,49 +1827,153 @@ async function runWorkflow() {
     
     logger.info("Starting preview deployment. This may take a few minutes...");
     
-    // Run the preview workflow with better error handling
-    const previewCommand = 'pnpm run preview:all';
-    logger.info("\nRunning preview deployment workflow...");
+    // Define total sub-steps for preview deployment
+    const PREVIEW_TOTAL_STEPS = 5;
     
-    // Track overall workflow success
+    // COMPLETELY REWRITTEN PREVIEW DEPLOYMENT LOGIC
+    // Execute steps individually with proper logging and error handling
+    // This avoids duplicating steps and ensures proper control flow
+    
     let workflowSuccess = true;
     let previewUrls = null;
     
     try {
-      // Execute the preview command with dedicated handling for preview deployment
-      // Use inherit for stdio to show real-time output, which is important for long-running commands
-      const result = executeCommand(previewCommand, { 
-        stdio: 'inherit', // Change from 'pipe' to 'inherit' to show real-time output
-        suppressErrors: true,
-        disableCache: true, // Ensure we don't use cached results for deployment
-        timeout: 600000 // 10 minute timeout for preview deployment
+      // Step 1: Run code quality checks (ESLint)
+      showWorkflowProgress(4, {
+        totalSubSteps: PREVIEW_TOTAL_STEPS,
+        currentSubStep: 1,
+        subStepName: "Code Quality Checks"
+      });
+      logger.info("Running ESLint to check code quality...");
+      
+      const lintResult = executeCommand('pnpm run lint', {
+        stdio: 'inherit',
+        suppressErrors: true
       });
       
-      // Since we're using stdio: 'inherit', we won't have output in the result object
-      // Instead, we need to check if the command completed successfully based on exit code
-      if (!result.success) {
-        logger.warn("Preview deployment command exited with non-zero status");
-        
-        // Try to find deployment logs in the temp directory
-        const tempDir = path.join(process.cwd(), 'temp');
-        if (!fs.existsSync(tempDir)) {
-          fs.mkdirSync(tempDir, { recursive: true });
+      if (!lintResult.success) {
+        logger.warn("ESLint found code quality issues. Please review them before continuing.");
+        const shouldContinue = await prompt("Would you like to continue despite the lint issues? (y/N): ");
+        if (shouldContinue.toLowerCase() !== 'y') {
+          logger.info("Exiting workflow. Please fix the linting issues and try again.");
+          rl.close();
+          return;
         }
+      } else {
+        logger.success("ESLint checks passed.");
+      }
+      
+      // Step 2: Run TypeScript type checking
+      showWorkflowProgress(4, {
+        totalSubSteps: PREVIEW_TOTAL_STEPS,
+        currentSubStep: 2,
+        subStepName: "Type Checking"
+      });
+      logger.info("Running TypeScript type checking...");
+      
+      const typeCheckResult = executeCommand('pnpm run typecheck', {
+        stdio: 'inherit',
+        suppressErrors: true
+      });
+      
+      if (!typeCheckResult.success) {
+        logger.error("TypeScript found type errors. Please fix them before continuing.");
+        const shouldContinue = await prompt("Would you like to continue despite the type errors? (y/N): ");
+        if (shouldContinue.toLowerCase() !== 'y') {
+          logger.info("Exiting workflow. Please fix the type errors and try again.");
+          rl.close();
+          return;
+        }
+      } else {
+        logger.success("TypeScript checks passed.");
+      }
+      
+      // Step 3: Run unit tests
+      showWorkflowProgress(4, {
+        totalSubSteps: PREVIEW_TOTAL_STEPS,
+        currentSubStep: 3,
+        subStepName: "Unit Tests"
+      });
+      logger.info("Running unit tests...");
+      
+      const testResult = executeCommand('pnpm exec vitest run', {
+        stdio: 'inherit',
+        suppressErrors: true
+      });
+      
+      if (!testResult.success) {
+        logger.error("Unit tests failed. Please fix them before continuing.");
+        const shouldContinue = await prompt("Would you like to continue despite test failures? (y/N): ");
+        if (shouldContinue.toLowerCase() !== 'y') {
+          logger.info("Exiting workflow. Please fix the failing tests and try again.");
+          rl.close();
+          return;
+        }
+      } else {
+        logger.success("Unit tests passed.");
+      }
+      
+      // Step 4: Build the application
+      showWorkflowProgress(4, {
+        totalSubSteps: PREVIEW_TOTAL_STEPS,
+        currentSubStep: 4,
+        subStepName: "Building Application"
+      });
+      logger.info("Building the application...");
+      
+      const buildResult = executeCommand('pnpm run build:all', {
+        stdio: 'inherit',
+        suppressErrors: true
+      });
+      
+      if (!buildResult.success) {
+        logger.error("Application build failed. Cannot continue with deployment.");
+        logger.info("Exiting workflow. Please fix the build errors and try again.");
+        rl.close();
+        return;
+      } else {
+        logger.success("Application built successfully.");
+      }
+      
+      // Step 5: Deploy the preview
+      showWorkflowProgress(4, {
+        totalSubSteps: PREVIEW_TOTAL_STEPS,
+        currentSubStep: 5,
+        subStepName: "Deploying to Firebase"
+      });
+      logger.info("Deploying preview to Firebase...");
+      
+      // Use the Firebase CLI directly to deploy to preview channels
+      // Pass skip-build flag since we already built the application in the previous step
+      const deployCommand = "node scripts/firebase/deployment.js --preview --skip-build";
+      
+      const deployResult = executeCommand(deployCommand, {
+        stdio: 'inherit',
+        suppressErrors: true
+      });
+      
+      if (!deployResult.success) {
+        logger.error("Preview deployment failed. Check the output for details.");
+        workflowSuccess = false;
+      } else {
+        logger.success("Preview deployed successfully!");
         
-        // Check if deployment actually completed despite errors
-        logger.info("Checking for preview URLs in deployment logs...");
-        
+        // Try to extract preview URLs from logs
         try {
           // Import report collector functions dynamically
           const reportModule = await import('./reports/report-collector.js');
           
-          // Try to extract URLs from logs
+          // Extract URLs from the logs
+          const tempDir = path.join(process.cwd(), 'temp');
+          if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+          }
+          
           previewUrls = reportModule.extractPreviewUrls({tempDir});
           
           if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
-            logger.success("Found preview URLs despite deployment warnings!");
+            logger.info("Preview URLs:");
             
-            // Display the URLs
             if (previewUrls.admin) {
               logger.link("Admin Dashboard", previewUrls.admin);
             }
@@ -1697,61 +1982,42 @@ async function runWorkflow() {
               logger.link("Hours App", previewUrls.hours);
             }
             
-            // Mark as partial success
-            logger.warn("Deployment completed with warnings. Preview URLs are available.");
-            workflowSuccess = true;
+            // Generate and open the preview dashboard
+            logger.info("Generating preview dashboard...");
             
-            // Open preview dashboard in browser automatically
-            openPreviewDashboard();
+            try {
+              // Import report collector module which contains the dashboard generation functionality
+              const reportCollector = await import('./reports/report-collector.js');
+              
+              // Generate the consolidated dashboard using the proper function
+              const dashboardResult = await reportCollector.collectAndGenerateReport({
+                previewUrls: previewUrls
+              });
+              
+              if (dashboardResult) {
+                logger.success("Preview dashboard generated successfully.");
+                // Open the dashboard in the browser
+                openPreviewDashboardInBrowser();
+              } else {
+                logger.warn("Failed to generate preview dashboard.");
+              }
+            } catch (error) {
+              logger.warn(`Error generating dashboard: ${error.message}`);
+            }
           } else {
-            logger.error("Could not find valid preview URLs. Deployment likely failed.");
-            workflowSuccess = false;
+            logger.warn("Could not extract preview URLs from deployment logs.");
           }
-        } catch (extractError) {
-          logger.error(`Error extracting preview URLs: ${extractError.message}`);
-          workflowSuccess = false;
-        }
-      } else {
-        logger.success("Preview deployment command completed successfully!");
-        
-        // Import report collector functions dynamically
-        const reportModule = await import('./reports/report-collector.js');
-        
-        // Extract URLs from logs
-        const tempDir = path.join(process.cwd(), 'temp');
-        if (!fs.existsSync(tempDir)) {
-          fs.mkdirSync(tempDir, { recursive: true });
-        }
-        
-        // Extract URLs from the logs
-        previewUrls = reportModule.extractPreviewUrls({tempDir});
-        
-        if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
-          logger.success("Preview URLs extracted successfully!");
-          
-          // Display the URLs
-          if (previewUrls.admin) {
-            logger.link("Admin Dashboard", previewUrls.admin);
-          }
-          
-          if (previewUrls.hours) {
-            logger.link("Hours App", previewUrls.hours);
-          }
-          
-          workflowSuccess = true;
-          
-          // Open preview dashboard in browser automatically
-          openPreviewDashboard();
-        } else {
-          logger.warn("Could not extract preview URLs from deployment logs.");
-          logger.warn("Deployment may have succeeded, but no URLs were found.");
-          workflowSuccess = true; // Command succeeded, but URL extraction failed
+        } catch (error) {
+          logger.warn(`Error extracting preview URLs: ${error.message}`);
         }
       }
       
+      // Store preview URLs in workflow data
+      workflowData.previewUrls = previewUrls;
+      workflowData.workflowSuccess = workflowSuccess;
+      
       if (!workflowSuccess) {
         logger.warn("The preview deployment encountered errors. Please address them before continuing.");
-        logger.info("You might need to run 'firebase login' to refresh your authentication.");
         
         const shouldContinue = await prompt("Would you still like to continue with the workflow? (y/N): ");
         if (shouldContinue.toLowerCase() !== 'y') {
@@ -1761,8 +2027,8 @@ async function runWorkflow() {
         }
       }
     } catch (error) {
-      logger.error(`Error running preview: ${error.message}`);
-      workflowSuccess = false;
+      logger.error(`Error during preview deployment: ${error.message}`);
+      workflowData.workflowSuccess = false;
       
       const shouldContinue = await prompt("Would you like to continue with the workflow despite the error? (y/N): ");
       if (shouldContinue.toLowerCase() !== 'y') {
@@ -1771,9 +2037,6 @@ async function runWorkflow() {
         return;
       }
     }
-    
-    // Store preview URLs in workflow data
-    workflowData.previewUrls = previewUrls;
     
     // Step 5: Pull Request
     showWorkflowProgress(5);
