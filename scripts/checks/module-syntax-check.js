@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cwd } from 'node:process';
+import { cwd, process } from 'node:process';
 import * as logger from '../core/logger.js';
 import { glob } from 'glob';
 import { execSync } from 'child_process';
@@ -408,45 +408,6 @@ export async function checkModuleSyntax(options = {}) {
       success: false,
       error: error.message
     };
-  }
-}
-
-async function checkModuleSyntax() {
-  logger.info('Checking module syntax consistency...');
-
-  try {
-    // Get all JavaScript files
-    const files = getAllJavaScriptFiles();
-    
-    const results = {
-      totalFiles: files.length,
-      filesWithRequire: [],
-      fixedFiles: []
-    };
-
-    for (const file of files) {
-      const content = fs.readFileSync(file, 'utf8');
-      
-      // Check for require statements
-      if (content.includes('require(')) {
-        results.filesWithRequire.push(file);
-        logger.info(`Found require() in: ${file}`);
-        
-        // Convert to ES modules
-        const fixedContent = convertToESModules(content);
-        fs.writeFileSync(file, fixedContent);
-        results.fixedFiles.push(file);
-        logger.success(`Fixed: ${file}`);
-      }
-    }
-
-    // Generate report
-    await generateReport(results);
-
-    logger.success('Module syntax check completed successfully!');
-  } catch (error) {
-    logger.error(`Module syntax check failed: ${error.message}`);
-    process.exit(1);
   }
 }
 
