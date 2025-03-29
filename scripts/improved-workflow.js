@@ -19,9 +19,13 @@ import fs from 'fs';
 // Import Firebase deployment utilities
 import * as deployment from './firebase/deployment.js';
 import * as channelCleanup from './firebase/channel-cleanup.js';
+import * as urlExtractor from './firebase/url-extractor.js';
 
 // Import documentation quality checker
 import * as docQuality from './checks/doc-quality.js';
+
+// Import command runner for executing shell commands
+import * as commandRunner from './core/command-runner.js';
 
 // Simple state management
 const state = {
