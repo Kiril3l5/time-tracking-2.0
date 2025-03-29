@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import LoginForm from '@common/components/auth/LoginForm';
 import { useViewport } from '@common/hooks/useViewport';
@@ -14,7 +14,7 @@ const LoginPage = () => {
   const { isMobile, isTablet } = useViewport();
   const navigate = useNavigate();
   const location = useLocation();
-  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginError, _setLoginError] = useState<string | null>(null);
 
   // Get the return URL from location state or default to dashboard
   const from = location.state?.from || '/';

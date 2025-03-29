@@ -6,7 +6,7 @@
  * NOTE: For these imports to work correctly, tsconfig.json needs path aliases configured.
  * This is a demo file that will have import errors until path aliases are set up.
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 // In a real implementation you would use path aliases:
 // import MobileLayout from '../layouts/MobileAdminLayout';
 // import MobileHeader from '@common/components/navigation/MobileHeader';

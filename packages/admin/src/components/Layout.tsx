@@ -2,7 +2,6 @@ import { ReactNode } from 'react';
 // import { Outlet } from 'react-router-dom';
 import { Navbar } from './Navbar';
 import { Sidebar } from './Sidebar';
-import { NetworkStatus } from '@common';
 
 interface LayoutProps {
   children: ReactNode;
@@ -20,9 +19,6 @@ export const Layout = ({ children }: LayoutProps) => {
         <main className="flex-1 overflow-y-auto bg-gray-50 p-4">
           {children}
         </main>
-
-        {/* Network status notification */}
-        <NetworkStatus />
       </div>
     </div>
   );

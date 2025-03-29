@@ -1372,7 +1372,7 @@ async function runWorkflow() {
           
           try {
             // Execute preview deployment command
-            const previewCommand = 'pnpm run preview';
+            const previewCommand = 'pnpm run preview:all';
             logger.info(`Running preview deployment: ${previewCommand}`);
             
             // Execute the preview script directly
@@ -1647,7 +1647,7 @@ async function runWorkflow() {
     logger.info("Starting preview deployment. This may take a few minutes...");
     
     // Run the preview workflow with better error handling
-    const previewCommand = 'pnpm run preview';
+    const previewCommand = 'pnpm run preview:all';
     logger.info("\nRunning preview deployment workflow...");
     
     // Track overall workflow success

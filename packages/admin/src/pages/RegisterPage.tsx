@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import RegisterForm from '@common/components/auth/RegisterForm';
 import { useViewport } from '@common/hooks/useViewport';
@@ -13,7 +13,7 @@ const RegisterPage = () => {
   const { isMobile, isTablet } = useViewport();
   const navigate = useNavigate();
   const location = useLocation();
-  const [registrationError, setRegistrationError] = useState<string | null>(null);
+  const [registrationError, _setRegistrationError] = useState<string | null>(null);
 
   // Get the return URL from location state or default to dashboard
   const from = location.state?.from || '/';
