@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { cwd } from 'node:process';
 import * as logger from '../core/logger.js';
 import { glob } from 'glob';
+import { execSync } from 'child_process';
 
 // Get the directory where this script is located
 const __filename = fileURLToPath(import.meta.url);
@@ -408,4 +409,175 @@ export async function checkModuleSyntax(options = {}) {
       error: error.message
     };
   }
+}
+
+async function checkModuleSyntax() {
+  logger.info('Checking module syntax consistency...');
+
+  try {
+    // Get all JavaScript files
+    const files = getAllJavaScriptFiles();
+    
+    const results = {
+      totalFiles: files.length,
+      filesWithRequire: [],
+      fixedFiles: []
+    };
+
+    for (const file of files) {
+      const content = fs.readFileSync(file, 'utf8');
+      
+      // Check for require statements
+      if (content.includes('require(')) {
+        results.filesWithRequire.push(file);
+        logger.info(`Found require() in: ${file}`);
+        
+        // Convert to ES modules
+        const fixedContent = convertToESModules(content);
+        fs.writeFileSync(file, fixedContent);
+        results.fixedFiles.push(file);
+        logger.success(`Fixed: ${file}`);
+      }
+    }
+
+    // Generate report
+    await generateReport(results);
+
+    logger.success('Module syntax check completed successfully!');
+  } catch (error) {
+    logger.error(`Module syntax check failed: ${error.message}`);
+    process.exit(1);
+  }
+}
+
+function getAllJavaScriptFiles() {
+  const files = [];
+  const dirs = [
+    path.join(process.cwd(), 'scripts'),
+    path.join(process.cwd(), 'packages')
+  ];
+
+  for (const dir of dirs) {
+    if (fs.existsSync(dir)) {
+      files.push(...getFilesRecursively(dir, ['.js', '.jsx', '.ts', '.tsx']));
+    }
+  }
+
+  return files;
+}
+
+function getFilesRecursively(dir, extensions) {
+  const files = [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...getFilesRecursively(fullPath, extensions));
+    } else if (extensions.some(ext => entry.name.endsWith(ext))) {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
+}
+
+function convertToESModules(content) {
+  // Replace require statements with imports
+  content = content.replace(
+    /const\s+(\w+)\s*=\s*require\(['"]([^'"]+)['"]\)/g,
+    (match, varName, modulePath) => {
+      // Convert relative paths to proper format
+      const importPath = modulePath.startsWith('.') 
+        ? modulePath 
+        : `'${modulePath}'`;
+      
+      return `import ${varName} from ${importPath};`;
+    }
+  );
+
+  // Replace module.exports with export default
+  content = content.replace(
+    /module\.exports\s*=\s*([^;]+);?/g,
+    'export default $1;'
+  );
+
+  // Replace exports.x with export const x
+  content = content.replace(
+    /exports\.(\w+)\s*=\s*([^;]+);?/g,
+    'export const $1 = $2;'
+  );
+
+  return content;
+}
+
+async function generateReport(results) {
+  const report = {
+    timestamp: new Date().toISOString(),
+    totalFiles: results.totalFiles,
+    filesWithRequire: results.filesWithRequire.length,
+    fixedFiles: results.fixedFiles.length,
+    details: {
+      filesWithRequire: results.filesWithRequire,
+      fixedFiles: results.fixedFiles
+    }
+  };
+
+  // Save JSON report
+  fs.writeFileSync(
+    'temp/module-syntax-report.json',
+    JSON.stringify(report, null, 2)
+  );
+
+  // Generate HTML report
+  const htmlReport = generateHtmlReport(report);
+  fs.writeFileSync('temp/module-syntax-report.html', htmlReport);
+}
+
+function generateHtmlReport(results) {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Module Syntax Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .metric { margin: 10px 0; }
+    .file-list { margin: 20px 0; }
+    .file-list h3 { margin-bottom: 10px; }
+    .file-list ul { list-style-type: none; padding-left: 0; }
+    .file-list li { padding: 5px 0; }
+  </style>
+</head>
+<body>
+  <h1>Module Syntax Report</h1>
+  
+  <h2>Overview</h2>
+  <div class="metric">Total Files: ${results.totalFiles}</div>
+  <div class="metric">Files with require(): ${results.filesWithRequire}</div>
+  <div class="metric">Fixed Files: ${results.fixedFiles}</div>
+  
+  <h2>Details</h2>
+  
+  <div class="file-list">
+    <h3>Files with require()</h3>
+    <ul>
+      ${results.details.filesWithRequire.map(file => `<li>${file}</li>`).join('')}
+    </ul>
+  </div>
+  
+  <div class="file-list">
+    <h3>Fixed Files</h3>
+    <ul>
+      ${results.details.fixedFiles.map(file => `<li>${file}</li>`).join('')}
+    </ul>
+  </div>
+</body>
+</html>
+  `;
+}
+
+// Run check if this file is executed directly
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  checkModuleSyntax();
 } 

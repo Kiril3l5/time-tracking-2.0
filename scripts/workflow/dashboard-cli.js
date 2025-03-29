@@ -14,7 +14,7 @@ import { createRequire } from 'module';
 
 // Polyfill global process object for ESM
 const require = createRequire(import.meta.url);
-const process = require('process');
+import process from 'process';
 
 // Import modules
 import * as logger from '../core/logger.js';

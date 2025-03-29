@@ -19,8 +19,12 @@ import * as commandRunner from '../core/command-runner.js';
 import * as logger from '../core/logger.js';
 import * as channelManager from './channel-manager.js';
 import * as config from '../core/config.js';
+import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
 
 /* global process, setTimeout */
+
+const MAX_CHANNELS = 5;
 
 /**
  * Clean up old preview channels for a site
@@ -37,214 +41,55 @@ import * as config from '../core/config.js';
  * @returns {Promise<Object>} - Cleanup result
  */
 export async function cleanupChannels(options) {
-  const { 
-    projectId, 
-    site, 
-    prefix = null, 
-    keepCount = 5,
-    dryRun = false,
-    quiet = true, // Default to quiet mode to reduce logging
-    batchSize = 5,
-    delayBetweenBatches = 1000 // Reduced delay to make it faster
-  } = options;
-  
-  if (!quiet) {
-    logger.info(`Cleaning up old preview channels for site: ${site}`);
-  
-    if (prefix) {
-      logger.info(`Will keep ${keepCount} most recent channels with prefix '${prefix}'`);
-    } else {
-      logger.info(`Will keep ${keepCount} most recent channels (all prefixes included)`);
-    }
-  
-    if (dryRun) {
-      logger.info('Running in dry-run mode, no channels will be deleted');
-    }
-  }
-  
-  // List all channels
-  const listResult = await channelManager.listChannels({ 
-    projectId, 
-    site,
-    quiet: true // Always use quiet mode for listing
-  });
-  
-  if (!listResult.success) {
-    logger.error('Failed to list channels for cleanup');
-    return {
-      success: false,
-      error: 'Failed to list channels',
-      deleted: []
-    };
-  }
-  
-  let { channels } = listResult;
-  
-  // Filter for channels with the specified prefix if provided and not null
-  if (prefix) {
-    channels = channels.filter(channel => channel.id.startsWith(prefix));
-    if (!quiet) logger.info(`Found ${channels.length} channels with prefix '${prefix}'`);
-  } else {
-    if (!quiet) logger.info(`Found ${channels.length} total channels (no prefix filter)`);
-  }
-  
-  // IMPORTANT: Filter out the 'live' channel which cannot be deleted
-  channels = channels.filter(channel => channel.id !== 'live');
-  
-  // Sort channels by creation time (newest first)
-  // For channels without creation time, assume they're older
-  channels.sort((a, b) => {
-    if (!a.createTime) return 1;
-    if (!b.createTime) return -1;
-    return new Date(b.createTime) - new Date(a.createTime);
-  });
-  
-  // Keep the most recent channels, delete the rest
-  const channelsToKeep = channels.slice(0, keepCount);
-  const channelsToDelete = channels.slice(keepCount);
-  
-  if (channelsToDelete.length === 0) {
-    if (!quiet) logger.info('No channels need to be deleted');
-    return {
-      success: true,
-      deleted: []
-    };
-  }
-  
-  if (!quiet) logger.info(`Keeping ${channelsToKeep.length} channels, deleting ${channelsToDelete.length} old channels`);
-  
-  // Only log detailed channel information if not in quiet mode
-  if (!quiet && channelsToDelete.length > 0) {
-    logger.info('Channels to be deleted:');
-    channelsToDelete.forEach(channel => {
-      const createDate = channel.createTime ? new Date(channel.createTime).toLocaleDateString() : 'unknown';
-      logger.info(`- ${channel.id} (created: ${createDate})`);
-    });
-  }
-  
-  // Delete the old channels in batches to avoid rate limiting
-  const deletedChannels = [];
-  const failedChannels = [];
-  
-  // Create batches of channels to delete
-  const batches = [];
-  for (let i = 0; i < channelsToDelete.length; i += batchSize) {
-    batches.push(channelsToDelete.slice(i, i + batchSize));
-  }
-  
-  if (!quiet) logger.info(`Processing ${batches.length} batches of up to ${batchSize} channels each`);
-  
-  // Process each batch with delay between batches
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-    const batch = batches[batchIndex];
-    if (!quiet) logger.info(`Processing batch ${batchIndex + 1}/${batches.length} with ${batch.length} channels`);
+  logger.info('Starting aggressive channel cleanup...');
+
+  try {
+    // Get all channels for both sites
+    const sites = ['admin-autonomyhero-2024', 'hours-autonomyhero-2024'];
     
-    // Process each channel in the batch
-    for (const channel of batch) {
-      if (dryRun) {
-        // In dry run mode, just add to deleted list for reporting
-        deletedChannels.push(channel.id);
-        continue;
-      }
-      
-      let retry = 0;
-      const maxRetries = 3;
-      let success = false;
-      
-      // Retry loop for each channel
-      while (retry < maxRetries && !success) {
-        try {
-          // Skip the 'live' channel (shouldn't get here due to earlier filter, but just to be safe)
-          if (channel.id === 'live') {
-            if (!quiet) logger.info(`Skipping 'live' channel which cannot be deleted`);
-            success = true;
-            continue;
-          }
+    for (const site of sites) {
+      try {
+        const channels = await listChannels(site);
+        if (channels.length > MAX_CHANNELS) {
+          // Sort channels by creation date (oldest first)
+          const sortedChannels = channels.sort((a, b) => 
+            new Date(a.createdAt) - new Date(b.createdAt)
+          );
           
-          const deleteResult = await channelManager.deleteChannel({
-            projectId,
-            site,
-            channelId: channel.id,
-            quiet: true // Always use quiet mode for deletion to reduce noise
-          });
+          // Delete oldest channels until we're under the limit
+          const channelsToDelete = sortedChannels.slice(0, channels.length - MAX_CHANNELS);
           
-          if (deleteResult.success) {
-            deletedChannels.push(channel.id);
-            if (!quiet) {
-              logger.success(`Deleted channel: ${channel.id}`);
-            }
-            success = true;
-          } else {
-            // Check if the error mentions "Cannot delete the live channel"
-            if (deleteResult.error && deleteResult.error.includes("Cannot delete the live channel")) {
-              if (!quiet) logger.info(`Skipping 'live' channel which cannot be deleted`);
-              success = true; // Mark as success to avoid retries, but don't count it as deleted
-            } else {
-              // If we failed but no exception was thrown, increment retry
-              retry++;
-              if (retry < maxRetries) {
-                if (!quiet) logger.warn(`Failed to delete channel: ${channel.id} (retry ${retry}/${maxRetries})`);
-                // Wait a moment before retry
-                await new Promise(resolve => setTimeout(resolve, 1000));
-              } else {
-                failedChannels.push({
-                  id: channel.id,
-                  error: deleteResult.error || 'Unknown error'
-                });
-                if (!quiet) logger.warn(`Failed to delete channel after ${maxRetries} attempts: ${channel.id}`);
-              }
-            }
-          }
-        } catch (error) {
-          // Check if the error mentions "Cannot delete the live channel"
-          if (error.message && error.message.includes("Cannot delete the live channel")) {
-            if (!quiet) logger.info(`Skipping 'live' channel which cannot be deleted`);
-            success = true; // Mark as success to avoid retries, but don't count it as deleted
-          } else {
-            retry++;
-            if (retry < maxRetries) {
-              if (!quiet) logger.warn(`Error deleting channel: ${channel.id} - ${error.message} (retry ${retry}/${maxRetries})`);
-              // Wait a moment before retry
-              await new Promise(resolve => setTimeout(resolve, 1000));
-            } else {
-              failedChannels.push({
-                id: channel.id,
-                error: error.message || 'Unknown error'
-              });
-              if (!quiet) logger.warn(`Failed to delete channel after ${maxRetries} attempts: ${channel.id}`);
-            }
+          for (const channel of channelsToDelete) {
+            logger.info(`Deleting old channel: ${channel.channelId}`);
+            await deleteChannel(site, channel.channelId);
           }
         }
+      } catch (error) {
+        logger.error(`Failed to cleanup channels for site ${site}: ${error.message}`);
+        // Continue with next site even if one fails
       }
     }
     
-    // Add delay between batches to avoid rate limiting
-    if (batchIndex < batches.length - 1) {
-      if (!quiet) logger.info(`Waiting ${delayBetweenBatches/1000} seconds before processing next batch...`);
-      await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
-    }
+    logger.success('Channel cleanup completed successfully!');
+  } catch (error) {
+    logger.error(`Channel cleanup failed: ${error.message}`);
+    process.exit(1);
   }
-  
-  if (dryRun) {
-    if (!quiet) logger.info(`[DRY RUN] Would have deleted ${deletedChannels.length} channels`);
-  } else {
-    if (!quiet) logger.success(`Successfully deleted ${deletedChannels.length} channels`);
-  }
-  
-  if (failedChannels.length > 0 && !quiet) {
-    logger.warn(`Failed to delete ${failedChannels.length} channels`);
-    failedChannels.forEach(failed => {
-      logger.warn(`  - ${failed.id}: ${failed.error}`);
-    });
-  }
-  
-  // Output summary results instead of detailed channel info in quiet mode
-  return {
-    success: true,
-    deleted: deletedChannels,
-    failed: failedChannels,
-    total: deletedChannels.length + failedChannels.length
-  };
+}
+
+async function listChannels(site) {
+  const output = execSync(
+    `firebase hosting:channel:list --site=${site} --json`,
+    { encoding: 'utf8' }
+  );
+  return JSON.parse(output);
+}
+
+async function deleteChannel(site, channelId) {
+  execSync(
+    `firebase hosting:channel:delete ${channelId} --site=${site} --force`,
+    { stdio: 'inherit' }
+  );
 }
 
 /**
@@ -362,6 +207,11 @@ export async function checkAndCleanupIfNeeded(options) {
     needsCleanup: anyCleanupNeeded,
     sites: results
   };
+}
+
+// Run cleanup if this file is executed directly
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  cleanupChannels();
 }
 
 export default {

@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import * as logger from '../core/logger.js';
 import { parseArgs } from 'node:util';
 import { getReportPath, getHtmlReportPath, createJsonReport } from '../reports/report-collector.js';
+import { execSync } from 'child_process';
 
 // Convert callbacks to promises
 const readdir = promisify(fs.readdir);
@@ -280,158 +281,141 @@ async function _generateIndex(fileData, outputFile) {
  * @param {Object} options - Analysis options
  * @returns {Object} - Analysis results
  */
-function analyzeDocumentation(options) {
-  const {
-    _docsDir = _DEFAULT_DOCS_DIR,
-    outputFile = _DEFAULT_OUTPUT_FILE,
-    _rootDir = process.cwd(),
-    _includePatterns = ['**/*.md'],
-    _excludePatterns = [],
-    _minCoverage = DEFAULT_MIN_COVERAGE,
-    _skipFunctionDocs = false,
-    _skipComponentDocs = false,
-    _skipTsDoc = false,
-    _skipJsDoc = false,
-    _similarityThreshold = DEFAULT_SIMILARITY_THRESHOLD,
-    _requiredDocs = _DEFAULT_REQUIRED_DOCS,
-    generateReportFile = true
-  } = options;
+async function analyzeDocumentation(options) {
+  logger.info('Starting documentation analysis...');
 
-  // Process the files
   try {
-    // Simulate documentation analysis for demo
-    // In a real implementation, this would analyze actual documentation files
-    const stats = {
-      totalFiles: 120,
-      documentedFiles: 96,
-      totalFunctions: 320,
-      documentedFunctions: 256,
-      totalComponents: 45,
-      documentedComponents: 36
-    };
-
-    // These are placeholder calculations - implement actual analysis logic in production
-    const fileCoverage = Math.round((stats.documentedFiles / stats.totalFiles) * 100);
-    const functionCoverage = Math.round((stats.documentedFunctions / stats.totalFunctions) * 100);
-    const componentCoverage = Math.round((stats.documentedComponents / stats.totalComponents) * 100);
-    
-    // Calculate average coverage
-    const overallCoverage = Math.round((fileCoverage + functionCoverage + componentCoverage) / 3);
-    
-    // Example duplicates (would be detected by actual analysis)
-    const duplicates = [
-      {
-        files: ['docs/setup.md', 'docs/getting-started.md'],
-        similarity: 0.75,
-        section: 'Installation Instructions'
-      },
-      {
-        files: ['docs/api.md', 'docs/endpoints.md'],
-        similarity: 0.65,
-        section: 'Authentication'
-      }
-    ];
-    
-    // For demo purposes, we're detecting example "missing docs"
-    const missingDocFiles = [];
+    // Get all markdown files
+    const docsDir = path.join(process.cwd(), 'docs');
+    const files = await _findMarkdownFiles(docsDir);
     
     const results = {
-      stats,
-      fileCoverage,
-      functionCoverage,
-      componentCoverage,
-      overallCoverage,
-      duplicates,
-      missingDocs: missingDocFiles,
-      passedCoverage: overallCoverage >= DEFAULT_MIN_COVERAGE
+      totalFiles: files.length,
+      filesWithIssues: 0,
+      issues: [],
+      metrics: {
+        totalWords: 0,
+        totalCodeBlocks: 0,
+        totalImages: 0
+      }
     };
-    
-    // Generate the HTML report
-    if (generateReportFile && outputFile) {
-      generateHtmlReport(results, outputFile);
+
+    for (const file of files) {
+      const content = await _readFile(file.path, 'utf8');
+      const relativePath = path.relative(docsDir, file.path);
+      
+      // Analyze content
+      const fileAnalysis = analyzeFile(content, relativePath);
+      results.metrics.totalWords += fileAnalysis.wordCount;
+      results.metrics.totalCodeBlocks += fileAnalysis.codeBlocks;
+      results.metrics.totalImages += fileAnalysis.images;
+
+      if (fileAnalysis.issues.length > 0) {
+        results.filesWithIssues++;
+        results.issues.push({
+          file: relativePath,
+          issues: fileAnalysis.issues
+        });
+      }
     }
-    
-    return results;
+
+    // Generate reports
+    await generateReports(results);
+
+    logger.success('Documentation analysis completed successfully!');
   } catch (error) {
-    logger.error(`Error analyzing documentation: ${error.message}`);
-    // Log error details for debugging
-    logger.debug(error.stack);
-    
-    return {
-      error: error.message,
-      passedCoverage: false
-    };
+    logger.error(`Documentation analysis failed: ${error.message}`);
+    process.exit(1);
   }
 }
 
-/**
- * Generate an HTML report from the documentation analysis results
- * @param {Object} results - The analysis results
- * @param {string} outputPath - The path to write the report to
- */
-function generateHtmlReport(results, outputPath) {
-  // Implementation would generate an HTML report
-  // This is a placeholder
-  logger.info(`Generating HTML report at: ${outputPath}`);
+function analyzeFile(content, filePath) {
+  const analysis = {
+    wordCount: content.split(/\s+/).length,
+    codeBlocks: (content.match(/```/g) || []).length / 2,
+    images: (content.match(/!\[.*?\]\((.*?)\)/g) || []).length,
+    issues: []
+  };
+
+  // Check for common issues
+  if (content.length < 100) {
+    analysis.issues.push('File is too short (less than 100 characters)');
+  }
+
+  if (!content.includes('# ')) {
+    analysis.issues.push('Missing main heading (H1)');
+  }
+
+  if (content.includes('TODO') || content.includes('FIXME')) {
+    analysis.issues.push('Contains TODO or FIXME comments');
+  }
+
+  return analysis;
+}
+
+async function generateReports(results) {
+  // Generate JSON report
+  const jsonReport = JSON.stringify(results, null, 2);
+  fs.writeFileSync('temp/docQuality-report.json', jsonReport);
+
+  // Generate HTML report
+  const htmlReport = generateHtmlReport(results);
+  fs.writeFileSync('temp/docQuality-report.html', htmlReport);
+}
+
+function generateHtmlReport(results) {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Documentation Quality Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .metric { margin: 10px 0; }
+    .issue { color: #d32f2f; }
+    .success { color: #4caf50; }
+  </style>
+</head>
+<body>
+  <h1>Documentation Quality Report</h1>
   
-  // Write a simple HTML file
-  const html = `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>Documentation Quality Report</title>
-        <style>
-          body { font-family: sans-serif; margin: 20px; }
-          h1 { color: #333; }
-          .summary { margin: 20px 0; }
-          .issues { margin: 20px 0; }
-          .issue { margin: 10px 0; padding: 10px; background: #f8f8f8; border-left: 4px solid #e74c3c; }
-        </style>
-      </head>
-      <body>
-        <h1>Documentation Quality Report</h1>
-        <div class="summary">
-          <h2>Summary</h2>
-          <p>Overall coverage: ${results.coverage.overall}%</p>
-          <p>Files: ${results.documentedFiles}/${results.totalFiles} (${results.coverage.files}%)</p>
-          <p>Functions: ${results.documentedFunctions}/${results.totalFunctions} (${results.coverage.functions}%)</p>
-          <p>Components: ${results.documentedComponents}/${results.totalComponents} (${results.coverage.components}%)</p>
-        </div>
-        <div class="issues">
-          <h2>Issues (${results.issues.length})</h2>
-          ${results.issues.map(issue => `
-            <div class="issue">
-              <p><strong>${issue.file}:${issue.line}</strong></p>
-              <p>${issue.message}</p>
-            </div>
-          `).join('')}
-        </div>
-      </body>
-    </html>
+  <h2>Overview</h2>
+  <div class="metric">Total Files: ${results.totalFiles}</div>
+  <div class="metric">Files with Issues: ${results.filesWithIssues}</div>
+  
+  <h2>Metrics</h2>
+  <div class="metric">Total Words: ${results.metrics.totalWords}</div>
+  <div class="metric">Total Code Blocks: ${results.metrics.totalCodeBlocks}</div>
+  <div class="metric">Total Images: ${results.metrics.totalImages}</div>
+  
+  <h2>Issues</h2>
+  ${results.issues.map(issue => `
+    <div class="issue">
+      <h3>${issue.file}</h3>
+      <ul>
+        ${issue.issues.map(i => `<li>${i}</li>`).join('')}
+      </ul>
+    </div>
+  `).join('')}
+</body>
+</html>
   `;
-  
-  fs.writeFileSync(outputPath, html);
-  logger.info(`HTML report generated at: ${outputPath}`);
 }
 
-/**
- * Print a summary of the documentation analysis to the console
- * @param {Object} results - The analysis results
- * @param {number} minCoverage - The minimum acceptable coverage percentage
- */
-function printSummary(results, minCoverage) {
-  logger.info('\nDocumentation quality summary:');
-  logger.info(`Files: ${results.documentedFiles}/${results.totalFiles} (${results.coverage.files}%)`);
-  logger.info(`Functions: ${results.documentedFunctions}/${results.totalFunctions} (${results.coverage.functions}%)`);
-  logger.info(`Components: ${results.documentedComponents}/${results.totalComponents} (${results.coverage.components}%)`);
-  logger.info(`Overall coverage: ${results.coverage.overall}%`);
-  
-  if (results.coverage.overall >= minCoverage) {
-    logger.success(`Documentation coverage meets the minimum requirement of ${minCoverage}%`);
-  } else {
-    logger.warn(`Documentation coverage is below the minimum requirement of ${minCoverage}%`);
-    logger.info(`Found ${results.issues.length} documentation issues to fix`);
+function getAllMarkdownFiles(dir) {
+  const files = [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...getAllMarkdownFiles(fullPath));
+    } else if (entry.name.endsWith('.md')) {
+      files.push(fullPath);
+    }
   }
+
+  return files;
 }
 
 /**
@@ -471,17 +455,17 @@ async function _main() {
     
     // Only generate HTML report if explicitly requested
     if (args.htmlOutput) {
-      generateHtmlReport(results, htmlReportPath);
+      generateHtmlReport(results);
     }
     
     // Print summary to console
     printSummary(results, args.minCoverage || DEFAULT_MIN_COVERAGE);
     
     // Determine exit code based on results
-    const success = results.coverage.overall >= (args.minCoverage || DEFAULT_MIN_COVERAGE);
+    const success = results.metrics.totalWords > 0 && results.filesWithIssues === 0;
     
     if (!success) {
-      logger.error(`Documentation coverage (${results.coverage.overall.toFixed(2)}%) is below minimum threshold (${args.minCoverage || DEFAULT_MIN_COVERAGE}%)`);
+      logger.error(`Documentation analysis failed. Found ${results.filesWithIssues} issues`);
       return false;
     }
     
@@ -561,78 +545,27 @@ ${colors.bold}Examples:${colors.reset}
 }
 
 /**
- * Export the analyzeDocumentation function as checkDocQuality to match the function call in preview.js
+ * Print a summary of the documentation analysis to the console
+ * @param {Object} results - The analysis results
+ * @param {number} minCoverage - The minimum acceptable coverage percentage
  */
-export function checkDocQuality(options) {
-  const {
-    _docsDir = 'docs',
-    outputFile,
-    _similarityThreshold = DEFAULT_SIMILARITY_THRESHOLD,
-    _requiredDocs = ['setup', 'deployment', 'configuration', 'architecture', 'api'],
-    _ignoreDirectories = ['node_modules', '.git', 'dist', 'build'],
-    _generateIndex = false
-  } = options;
+function printSummary(results, minCoverage) {
+  logger.info('\nDocumentation quality summary:');
+  logger.info(`Files: ${results.totalFiles}`);
+  logger.info(`Files with issues: ${results.filesWithIssues}`);
+  logger.info(`Total words: ${results.metrics.totalWords}`);
+  logger.info(`Total code blocks: ${results.metrics.totalCodeBlocks}`);
+  logger.info(`Total images: ${results.metrics.totalImages}`);
   
-  const minCoverage = options.minCoverage || DEFAULT_MIN_COVERAGE;
-  
-  try {
-    // Convert the options to the format expected by analyzeDocumentation
-    const analysisOptions = {
-      rootDir: _docsDir,
-      includePatterns: _DEFAULT_INCLUDE_PATTERNS,
-      excludePatterns: _DEFAULT_EXCLUDE_PATTERNS,
-      minCoverage,
-      skipFunctionDocs: false,
-      skipComponentDocs: false,
-      skipTsDoc: false,
-      skipJsDoc: false
-    };
-    
-    // Run the analysis
-    const results = analyzeDocumentation(analysisOptions);
-    
-    // Check if results has the expected structure
-    if (!results || typeof results !== 'object') {
-      throw new Error('Documentation analysis returned invalid results');
-    }
-    
-    // Generate the HTML report if an output file is specified
-    if (outputFile) {
-      try {
-        generateHtmlReport(results, outputFile);
-        logger.info(`Generating HTML report at: ${outputFile}`);
-      } catch (reportError) {
-        logger.error(`Error generating HTML report: ${reportError.message}`);
-      }
-    }
-    
-    // Print a summary (only if results have expected properties)
-    if (results.stats) {
-      printSummary(results, minCoverage);
-    }
-    
-    // Add fallback for missing properties
-    const coverage = results.coverage || { overall: 0 };
-    const overallCoverage = typeof coverage === 'object' ? (coverage.overall || 0) : (typeof coverage === 'number' ? coverage : 0);
-    
-    return {
-      success: overallCoverage >= minCoverage,
-      coverage: overallCoverage,
-      issues: results.issues || [],
-      duplicates: results.duplicates || [], 
-      missingDocs: results.missingDocs || []
-    };
-  } catch (error) {
-    logger.error(`Error in documentation quality check: ${error.message}`);
-    
-    // Return a valid structure even when errors occur
-    return {
-      success: false,
-      coverage: 0,
-      error: error.message,
-      issues: [],
-      duplicates: [],
-      missingDocs: []
-    };
+  if (results.filesWithIssues === 0) {
+    logger.success(`Documentation analysis completed successfully!`);
+  } else {
+    logger.warn(`Documentation analysis completed with ${results.filesWithIssues} issues`);
+    logger.info(`Found ${results.issues.length} documentation issues to fix`);
   }
+}
+
+// Run analysis if this file is executed directly
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  _main();
 } 

@@ -27,6 +27,7 @@ import * as unusedImportFix from './unused-import-fix.js';
 import * as typeValidator from './type-validator.js';
 import { fileURLToPath } from 'url';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { execSync } from 'child_process';
 
 /**
  * Get the directory where this script is located
@@ -985,6 +986,40 @@ export async function verifyAndFixTypeScriptEnhanced(options = {}) {
     fixResults,
     report: reportData
   };
+}
+
+async function fixTypeScriptIssues() {
+  logger.info('Running enhanced TypeScript error fixing...');
+
+  // First run ESLint with auto-fix
+  execSync('pnpm run lint:fix', { stdio: 'inherit' });
+
+  // Then run TypeScript compiler to catch remaining issues
+  execSync('pnpm run typecheck', { stdio: 'inherit' });
+
+  // Fix any remaining issues
+  const files = getAllTypeScriptFiles();
+  for (const file of files) {
+    let content = fs.readFileSync(file, 'utf8');
+    
+    // Replace any types with unknown or proper types
+    content = content.replace(/: any/g, ': unknown');
+    
+    // Remove console statements
+    content = content.replace(/console\.(log|warn|error|info|debug)\((.*?)\);?/g, '');
+    
+    // Fix unused variables
+    content = content.replace(/const\s+(\w+)\s*=\s*[^;]+;?/g, (match, varName) => {
+      if (!isVariableUsed(content, varName)) {
+        return `// Unused variable: ${varName}`;
+      }
+      return match;
+    });
+
+    fs.writeFileSync(file, content);
+  }
+
+  logger.success('TypeScript fixes applied successfully!');
 }
 
 // Run main function if this file is executed directly

@@ -85,10 +85,43 @@ async function ensureFeatureBranch() {
 }
 
 /**
+ * Check if main branch needs syncing
+ * @returns {Promise<boolean>} - Whether main needs syncing
+ */
+async function needsMainSync() {
+  try {
+    // Fetch latest refs without merging
+    execSync('git fetch origin main', { stdio: 'pipe' });
+    
+    // Check if main is behind remote
+    const diffResult = execSync('git rev-list --count main..origin/main', { encoding: 'utf8' }).trim();
+    const commitsBehind = parseInt(diffResult, 10);
+    
+    return commitsBehind > 0;
+  } catch (error) {
+    // If we can't check, assume sync is needed
+    return true;
+  }
+}
+
+/**
  * Offer to sync main branch
  */
 async function offerMainSync() {
-  const shouldSync = await question('Would you like to sync your main branch with remote? (y/N) ');
+  // Skip if we're already on main
+  if (state.currentBranch === 'main') {
+    return;
+  }
+
+  // Check if main needs syncing
+  const needsSync = await needsMainSync();
+  
+  if (!needsSync) {
+    logger.info('Main branch is already in sync with remote');
+    return;
+  }
+
+  const shouldSync = await question('Your local main branch is behind remote. Would you like to sync it? (y/N) ');
   if (shouldSync.toLowerCase() === 'y') {
     execSync('node scripts/sync-main.js', { stdio: 'inherit' });
   }
@@ -110,11 +143,46 @@ async function handleChanges() {
   // Then handle remaining changes
   const remainingStatus = execSync('git status --porcelain', { encoding: 'utf8' }).trim();
   if (remainingStatus) {
-    const shouldCommit = await question('Would you like to commit these changes? (Y/n) ');
-    if (shouldCommit.toLowerCase() !== 'n') {
-      const message = await question('Enter commit message: ');
-      execSync('git add .');
-      execSync(`git commit -m "${message}"`);
+    logger.info('\nHow would you like to handle these changes?');
+    logger.info('1. Commit changes (create a new commit)');
+    logger.info('2. Stash changes (save for later)');
+    logger.info('3. Discard changes (revert all changes)');
+    logger.info('4. Skip for now (keep working)');
+    
+    const choice = await question('Choose an option (1-4): ');
+    let message;
+    let confirm;
+    
+    switch (choice) {
+      case '1':
+        message = await question('Enter commit message: ');
+        execSync('git add .');
+        execSync(`git commit -m "${message}"`);
+        logger.success('Changes committed successfully!');
+        break;
+        
+      case '2':
+        message = await question('Enter stash message (optional): ');
+        execSync(`git stash push -m "${message || 'Stashed changes'}"`);
+        logger.success('Changes stashed successfully! Use "git stash pop" to restore later.');
+        break;
+        
+      case '3':
+        confirm = await question('Are you sure you want to discard all changes? (yes/NO): ');
+        if (confirm.toLowerCase() === 'yes') {
+          execSync('git reset --hard HEAD');
+          logger.success('Changes discarded successfully!');
+        } else {
+          logger.info('Discarding changes cancelled.');
+        }
+        break;
+        
+      case '4':
+        logger.info('Skipping changes. You can commit them later with "git add . && git commit -m your message"');
+        break;
+        
+      default:
+        logger.info('Invalid option. Skipping changes.');
     }
   }
 }

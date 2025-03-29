@@ -16,6 +16,7 @@ import process from 'node:process';
 import * as logger from '../core/logger.js';
 import { generateConsolidatedReport } from './consolidated-report.js';
 import { parseArgs } from 'node:util';
+import { execSync } from 'child_process';
 
 // Temp directory for report files
 const TEMP_DIR = path.join(process.cwd(), 'temp');
@@ -326,6 +327,14 @@ async function collectAndGenerateReport(options = {}) {
       if (cleanupIndividualReports) {
         logger.info('Cleaning up individual reports...');
         cleanupTempDirectory();
+      }
+      
+      // Open dashboard automatically
+      try {
+        execSync('npx open-cli preview-dashboard.html', { stdio: 'pipe' });
+        logger.success('Dashboard opened automatically');
+      } catch (error) {
+        logger.warn('Could not open dashboard automatically. Please open preview-dashboard.html in your browser.');
       }
       
       return true;
