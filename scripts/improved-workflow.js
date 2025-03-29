@@ -65,7 +65,7 @@ async function runWorkflow(options = {}) {
     // Resume from last successful step if requested
     if (options.resume && state.lastSuccessfulStep) {
       logger.info(`Resuming from step: ${state.lastSuccessfulStep}`);
-      const steps = ['branch', 'sync', 'changes', 'build', 'quality', 'preview', 'pr'];
+      const steps = ['branch', 'sync', 'changes', 'quality', 'build', 'preview', 'pr'];
       const startIndex = steps.indexOf(state.lastSuccessfulStep);
       if (startIndex > 0) {
         logger.info(`Skipping completed steps: ${steps.slice(0, startIndex).join(', ')}`);
@@ -94,17 +94,17 @@ async function runWorkflow(options = {}) {
       saveState();
     }
 
-    // 4. Build
-    if (!options.skipCompleted) {
-      await runBuild();
-      state.lastSuccessfulStep = 'build';
-      saveState();
-    }
-
-    // 5. Run quality checks
+    // 4. Run quality checks
     if (!options.skipCompleted) {
       await runQualityChecks();
       state.lastSuccessfulStep = 'quality';
+      saveState();
+    }
+
+    // 5. Build
+    if (!options.skipCompleted) {
+      await runBuild();
+      state.lastSuccessfulStep = 'build';
       saveState();
     }
 
