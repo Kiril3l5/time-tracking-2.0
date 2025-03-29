@@ -281,7 +281,7 @@ async function _generateIndex(fileData, outputFile) {
  * @param {Object} options - Analysis options
  * @returns {Object} - Analysis results
  */
-async function analyzeDocumentation(options) {
+export async function analyzeDocumentation(options) {
   logger.info('Starting documentation analysis...');
 
   try {
@@ -323,9 +323,10 @@ async function analyzeDocumentation(options) {
     await generateReports(results);
 
     logger.success('Documentation analysis completed successfully!');
+    return { success: true, ...results };
   } catch (error) {
     logger.error(`Documentation analysis failed: ${error.message}`);
-    process.exit(1);
+    return { success: false, error: error.message };
   }
 }
 

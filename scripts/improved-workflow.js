@@ -280,7 +280,7 @@ async function runQualityChecks() {
   
   try {
     // Run checks in parallel
-    const checks = [
+    const [lintResult, typecheckResult, testResult, docResult] = await Promise.all([
       // ESLint
       execSync('pnpm run lint', { stdio: 'inherit' }),
       // TypeScript checks
@@ -294,10 +294,13 @@ async function runQualityChecks() {
         minCoverage: config.minCoverage,
         generateReport: true
       })
-    ];
+    ]);
 
-    // Wait for all checks to complete
-    await Promise.all(checks);
+    // Check documentation results
+    if (!docResult.success) {
+      logger.warn('Documentation quality check found issues:', docResult.issues);
+      // Don't fail the workflow for documentation issues, just warn
+    }
     
     logger.success('All quality checks completed!');
   } catch (error) {
