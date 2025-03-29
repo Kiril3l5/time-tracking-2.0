@@ -11,7 +11,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import process from 'node:process';
+import { cwd, process } from '../core/process-utils.js';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'node:url';
 import * as logger from '../core/logger.js';

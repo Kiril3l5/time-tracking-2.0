@@ -18,7 +18,7 @@
 
 import fs from 'fs/promises';
 import path from 'path';
-import process from 'node:process';
+import { cwd, process } from '../core/process-utils.js';
 import * as logger from '../core/logger.js';
 import * as commandRunner from '../core/command-runner.js';
 import * as errorParser from './error-parser.js';

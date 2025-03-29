@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cwd, process } from 'node:process';
+import { cwd, process } from '../core/process-utils.js';
 import * as logger from '../core/logger.js';
 import { glob } from 'glob';
 import { execSync } from 'child_process';
@@ -414,8 +414,8 @@ export async function checkModuleSyntax(options = {}) {
 function getAllJavaScriptFiles() {
   const files = [];
   const dirs = [
-    path.join(process.cwd(), 'scripts'),
-    path.join(process.cwd(), 'packages')
+    path.join(cwd(), 'scripts'),
+    path.join(cwd(), 'packages')
   ];
 
   for (const dir of dirs) {
@@ -539,6 +539,6 @@ function generateHtmlReport(results) {
 }
 
 // Run check if this file is executed directly
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (import.meta.url === `file://${process.argv[1]}`) {
   checkModuleSyntax();
 } 
