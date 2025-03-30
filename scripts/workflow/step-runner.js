@@ -125,16 +125,10 @@ export const WORKFLOW_STEPS = [
       const startTime = Date.now();
       
       try {
-        // Run environment validation
-        const envResult = await runChecks.validateEnvironment();
-        if (!envResult.success) {
-          throw new Error('Environment validation failed');
-        }
-
-        // Run dependency validation
-        const depsResult = await runChecks.validateDependencies();
-        if (!depsResult.success) {
-          throw new Error('Dependency validation failed');
+        // Run health checks
+        const healthResult = await runChecks();
+        if (!healthResult.success) {
+          throw new Error('Health checks failed');
         }
 
         // Track performance
@@ -144,10 +138,7 @@ export const WORKFLOW_STEPS = [
         return {
           success: true,
           duration,
-          output: {
-            environment: envResult,
-            dependencies: depsResult
-          }
+          output: healthResult
         };
       } catch (error) {
         // Track error

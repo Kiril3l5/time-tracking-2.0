@@ -135,7 +135,7 @@ async function runSecurityScan() {
  * @param {Object} options - Validation options
  * @returns {Promise<Object>} Validation results
  */
-async function validateEnvironment(options) {
+export async function validateEnvironment(options) {
   const results = {
     success: true,
     issues: [],
