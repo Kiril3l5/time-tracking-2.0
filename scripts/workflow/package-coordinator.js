@@ -94,62 +94,68 @@ export class PackageCoordinator {
     const startTime = Date.now();
     
     try {
-      // Get all package.json files
-      const findResult = await this.commandRunner.runCommand('find . -name "package.json" -not -path "*/node_modules/*"');
-      if (!findResult.success) {
-        throw new this.errorHandler.WorkflowError('Failed to find package.json files');
-      }
-      
-      const packageFiles = findResult.output.split('\n').filter(Boolean);
+      // Get all package.json files using Node.js fs operations
+      const workspaceRoot = process.cwd();
       const packages = new Map();
       const graph = new Map();
       
-      // Read and validate each package.json
-      for (const file of packageFiles) {
-        const readResult = await this.commandRunner.runCommand(`cat ${file}`);
-        if (!readResult.success) {
-          throw new this.errorHandler.WorkflowError(`Failed to read ${file}`);
-        }
-        
-        try {
-          const packageJson = JSON.parse(readResult.output);
-          const packageName = packageJson.name;
-          
-          // Validate package.json
-          const validation = validateDependencies(packageJson, packageName);
-          if (!validation.isValid) {
-            this.logger.error(`Validation errors in ${file}:`, validation.errors);
-            throw new this.errorHandler.ValidationError(
-              `Invalid package.json in ${file}: ${validation.errors.join(', ')}`
-            );
+      // Read root package.json
+      const rootPkgPath = path.join(workspaceRoot, 'package.json');
+      const rootPkg = await this.readPackageJson(rootPkgPath);
+      packages.set(rootPkg.name, {
+        name: rootPkg.name,
+        path: workspaceRoot,
+        dependencies: rootPkg.dependencies || {},
+        devDependencies: rootPkg.devDependencies || {},
+        peerDependencies: rootPkg.peerDependencies || {}
+      });
+      
+      // Read packages from packages directory
+      const packagesDir = path.join(workspaceRoot, 'packages');
+      const entries = await fs.promises.readdir(packagesDir, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const pkgPath = path.join(packagesDir, entry.name, 'package.json');
+          try {
+            const pkg = await this.readPackageJson(pkgPath);
+            
+            // Validate package.json
+            const validation = validateDependencies(pkg, pkg.name);
+            if (!validation.isValid) {
+              this.logger.error(`Validation errors in ${pkgPath}:`, validation.errors);
+              throw new this.errorHandler.ValidationError(
+                `Invalid package.json in ${pkgPath}: ${validation.errors.join(', ')}`
+              );
+            }
+            
+            // Add warnings to workflow state
+            validation.warnings.forEach(warning => {
+              this.workflowState.addWarning(warning);
+            });
+            
+            packages.set(pkg.name, {
+              name: pkg.name,
+              path: path.join(packagesDir, entry.name),
+              dependencies: pkg.dependencies || {},
+              devDependencies: pkg.devDependencies || {},
+              peerDependencies: pkg.peerDependencies || {}
+            });
+            
+            // Build dependency graph
+            const deps = {
+              ...pkg.dependencies,
+              ...pkg.devDependencies,
+              ...pkg.peerDependencies
+            };
+            
+            graph.set(pkg.name, Object.keys(deps));
+          } catch (error) {
+            if (error instanceof this.errorHandler.ValidationError) {
+              throw error;
+            }
+            throw new this.errorHandler.WorkflowError(`Failed to parse ${pkgPath}: ${error.message}`);
           }
-          
-          // Add warnings to workflow state
-          validation.warnings.forEach(warning => {
-            this.workflowState.addWarning(warning);
-          });
-          
-          packages.set(packageName, {
-            name: packageName,
-            path: file.replace('/package.json', ''),
-            dependencies: packageJson.dependencies || {},
-            devDependencies: packageJson.devDependencies || {},
-            peerDependencies: packageJson.peerDependencies || {}
-          });
-          
-          // Build dependency graph
-          const deps = {
-            ...packageJson.dependencies,
-            ...packageJson.devDependencies,
-            ...packageJson.peerDependencies
-          };
-          
-          graph.set(packageName, Object.keys(deps));
-        } catch (error) {
-          if (error instanceof this.errorHandler.ValidationError) {
-            throw error;
-          }
-          throw new this.errorHandler.WorkflowError(`Failed to parse ${file}: ${error.message}`);
         }
       }
       
