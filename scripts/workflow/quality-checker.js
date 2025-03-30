@@ -26,6 +26,58 @@ export class QualityChecker {
   }
 
   /**
+   * Initialize the quality checker
+   * @returns {Promise<Object>} Initialization result
+   */
+  async initialize() {
+    this.logger.info('Initializing quality checker...');
+    const startTime = Date.now();
+    
+    try {
+      // Check if node_modules exists
+      const nodeModulesResult = await this.commandRunner.runCommand('ls node_modules');
+      if (!nodeModulesResult.success) {
+        throw new this.errorHandler.WorkflowError('node_modules directory not found. Please run pnpm install first.');
+      }
+
+      // Check if pnpm-lock.yaml exists
+      const lockFileResult = await this.commandRunner.runCommand('ls pnpm-lock.yaml');
+      if (!lockFileResult.success) {
+        throw new this.errorHandler.WorkflowError('pnpm-lock.yaml not found. Please run pnpm install first.');
+      }
+
+      // Verify required dependencies are installed
+      const requiredDeps = ['eslint', 'typescript', 'vitest'];
+      for (const dep of requiredDeps) {
+        const result = await this.commandRunner.runCommand(`pnpm list ${dep}`);
+        if (!result.success) {
+          throw new this.errorHandler.WorkflowError(
+            `Required dependency ${dep} is not installed. Please run pnpm install first.`
+          );
+        }
+      }
+      
+      const duration = Date.now() - startTime;
+      this.logger.success(`Quality checker initialized (Duration: ${duration}ms)`);
+      
+      return {
+        success: true,
+        duration
+      };
+      
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      this.logger.error(`Quality checker initialization failed: ${error.message}`);
+      
+      return {
+        success: false,
+        duration,
+        error: error.message
+      };
+    }
+  }
+
+  /**
    * Run quality checks on packages
    * @param {Object} context - Execution context
    * @returns {Promise<Object>} Quality check results
