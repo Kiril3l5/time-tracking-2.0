@@ -21,6 +21,7 @@ import { WORKFLOW_STEPS, stepRunner } from './step-runner.js';
 import getWorkflowState from './workflow-state.js';
 import { PackageCoordinator } from './package-coordinator.js';
 import { QualityChecker } from './quality-checker.js';
+import * as branchManager from './branch-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -62,6 +63,7 @@ export class WorkflowEngine {
     this.stepRunner = stepRunner;
     this.packageCoordinator = packageCoordinator;
     this.qualityChecker = qualityChecker;
+    this.options = options;
     
     // Set verbose mode from options
     if (this.logger) {
@@ -91,53 +93,13 @@ export class WorkflowEngine {
     this.logger.info('Running initial health checks...');
     this.workflowState.setCurrentStep('initial-health-checks');
     try {
-      // Check Node.js version
-      const nodeVersionResult = await this.commandRunner.runCommand('node --version');
-      if (!nodeVersionResult.success) {
-        throw new this.errorHandler.ValidationError(
-          'Failed to get Node.js version',
-          'node-version'
-        );
-      }
-      
-      // Parse version number (remove 'v' prefix)
-      const nodeVersion = nodeVersionResult.output.trim().replace('v', '');
-      const [majorVersion] = nodeVersion.split('.');
-      
-      if (parseInt(majorVersion, 10) < 18) {
-        throw new this.errorHandler.ValidationError(
-          'Node.js version 18 or higher is required',
-          'node-version'
-        );
+      // Check Git status
+      if (branchManager.hasUncommittedChanges()) {
+        this.logger.warn('You have uncommitted changes. Please commit or stash them before running the workflow.');
+        throw new Error('Uncommitted changes detected');
       }
 
-      // Check pnpm version
-      const pnpmVersionResult = await this.commandRunner.runCommand('pnpm --version');
-      if (!pnpmVersionResult.success) {
-        throw new this.errorHandler.ValidationError(
-          'Failed to get pnpm version',
-          'pnpm-version'
-        );
-      }
-      
-      // Parse pnpm version
-      const pnpmVersion = pnpmVersionResult.output.trim();
-      const [pnpmMajorVersion] = pnpmVersion.split('.');
-      
-      if (parseInt(pnpmMajorVersion, 10) < 8) {
-        throw new this.errorHandler.ValidationError(
-          'pnpm version 8 or higher is required',
-          'pnpm-version'
-        );
-      }
-
-      // Check git status
-      const gitStatusResult = await this.commandRunner.runCommand('git status --porcelain');
-      if (gitStatusResult.success && gitStatusResult.output) {
-        this.logger.warn('Working directory has uncommitted changes.');
-      }
-
-      this.logger.success('Initial health checks passed.');
+      this.logger.success('✓ Initial health checks passed.');
       this.workflowState.completeStep('initial-health-checks', { success: true });
     } catch (error) {
       this.logger.error(`Initial health check failed: ${error.message}`);
@@ -153,7 +115,7 @@ export class WorkflowEngine {
    */
   async executeWorkflow(options = {}) {
     this.logger.info('Starting workflow execution...');
-    const workflowStartTime = Date.now();
+    const startTime = Date.now();
     
     // Start performance monitoring
     this.performanceMonitor.start();
@@ -164,6 +126,14 @@ export class WorkflowEngine {
 
       // Run initial health checks
       await this.runInitialHealthChecks();
+
+      // Get current branch
+      const currentBranch = branchManager.getCurrentBranch();
+      if (!currentBranch) {
+        throw new Error('Failed to get current branch');
+      }
+
+      this.logger.info(`Current branch: ${currentBranch}`);
 
       // Analyze dependencies
       this.logger.info('Analyzing package dependencies...');
@@ -188,6 +158,8 @@ export class WorkflowEngine {
           options: options,
           buildOrder: depsAnalysis.buildOrder,
           dependencyGraph: depsAnalysis.graph,
+          branchManager,
+          currentBranch,
         };
         
         this.logger.info(`--- Starting step: ${step.name} ---`);
@@ -253,19 +225,17 @@ export class WorkflowEngine {
       };
       
       this.workflowState.complete(finalResult);
-      this.logger.info(`Workflow finished with status: ${finalStatus}. Total duration: ${formatDuration(Date.now() - workflowStartTime)}`);
+      const duration = Date.now() - startTime;
+      this.logger.info(`Workflow finished with status: ${finalStatus}. Total duration: ${formatDuration(duration)}`);
 
       return this.workflowState.getState();
 
     } catch (error) {
-      this.logger.error(`Workflow execution failed: ${error.message}`);
-      this.workflowState.fail(error);
-      return this.workflowState.getState();
-    } finally {
-      // End performance monitoring
-      this.performanceMonitor.end();
+      this.logger.error('Workflow execution failed:', error.message);
+      throw error;
     }
   }
 }
 
-export default new WorkflowEngine(); 
+// Create and export default instance
+export default new WorkflowEngine();
