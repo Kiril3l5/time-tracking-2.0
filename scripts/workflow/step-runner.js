@@ -108,44 +108,39 @@ export const WORKFLOW_STEPS = [
 
         // Handle branch management
         const currentBranch = getCurrentBranch();
-        const targetBranch = options.targetBranch || 'main';
         
-        if (currentBranch !== targetBranch) {
-          // Check for uncommitted changes
-          if (hasUncommittedChanges()) {
-            logger.warn('You have uncommitted changes that would be affected when switching branches.');
-            
-            const options = [
-              'Stash changes and continue',
-              'Commit changes',
-              'Abort workflow'
-            ];
-            
-            const choice = await commandRunner.promptWorkflowOptions(
-              'Please choose how to handle your uncommitted changes:',
-              options
-            );
-            
-            let message;
-            switch(choice) {
-              case '1':
-                await commandRunner.runCommand('git stash');
-                logger.info('Changes stashed');
-                break;
-              case '2':
-                message = await commandRunner.promptText('Enter commit message: ');
-                await commandRunner.runCommand(`git add . && git commit -m "${message}"`);
-                logger.info('Changes committed');
-                break;
-              case '3':
-              default:
-                throw new Error('Workflow aborted due to uncommitted changes');
-            }
-          }
-
-          const switched = await switchBranch(targetBranch, currentBranch);
-          if (!switched) {
-            throw new Error('Branch switch failed');
+        // Log current branch without switching
+        logger.info(`Current branch: ${currentBranch}`);
+        
+        // Check for uncommitted changes
+        if (hasUncommittedChanges()) {
+          logger.warn('You have uncommitted changes.');
+          
+          const options = [
+            'Stash changes and continue',
+            'Commit changes',
+            'Abort workflow'
+          ];
+          
+          const choice = await commandRunner.promptWorkflowOptions(
+            'Please choose how to handle your uncommitted changes:',
+            options
+          );
+          
+          let message;
+          switch(choice) {
+            case '1':
+              await commandRunner.runCommand('git stash');
+              logger.info('Changes stashed');
+              break;
+            case '2':
+              message = await commandRunner.promptText('Enter commit message: ');
+              await commandRunner.runCommand(`git add . && git commit -m "${message}"`);
+              logger.info('Changes committed');
+              break;
+            case '3':
+            default:
+              throw new Error('Workflow aborted due to uncommitted changes');
           }
         }
 
@@ -157,8 +152,8 @@ export const WORKFLOW_STEPS = [
           success: true,
           duration,
           output: {
-            branch: targetBranch,
-            isNewBranch: currentBranch !== targetBranch,
+            branch: currentBranch,
+            isNewBranch: false,
             auth: authResult
           }
         };
