@@ -94,6 +94,9 @@ export class PackageCoordinator {
     const startTime = Date.now();
     
     try {
+      // Start performance monitoring
+      this.performanceMonitor.start();
+      
       // Analyze dependencies first
       const analysis = await this.analyzeDependencies();
       if (!analysis.success) {
@@ -103,9 +106,6 @@ export class PackageCoordinator {
       // Store analysis results
       this.dependencies = analysis.packages;
       this.buildOrder = analysis.buildOrder;
-      
-      // Initialize performance monitoring
-      await this.performanceMonitor.initialize();
       
       const duration = Date.now() - startTime;
       this.logger.success(`Package coordinator initialized (Duration: ${duration}ms)`);

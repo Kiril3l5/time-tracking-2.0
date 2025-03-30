@@ -89,14 +89,10 @@ export const WORKFLOW_STEPS = [
       const startTime = Date.now();
       
       try {
-        // Initialize components
+        // Initialize only the components we have
         await Promise.all([
           options.packageCoordinator.initialize(),
-          options.qualityChecker.initialize(),
-          options.deploymentManager.initialize(),
-          options.dashboardGenerator.initialize(),
-          options.consolidatedReport.initialize(),
-          options.branchManager.initialize()
+          options.qualityChecker.initialize()
         ]);
 
         // Track performance
