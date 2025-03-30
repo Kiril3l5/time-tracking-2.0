@@ -22,6 +22,7 @@ import getWorkflowState from './workflow-state.js';
 import { PackageCoordinator } from './package-coordinator.js';
 import { QualityChecker } from './quality-checker.js';
 import * as branchManager from './branch-manager.js';
+import { hasUncommittedChanges, handleUncommittedChanges } from './branch-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -91,21 +92,17 @@ export class WorkflowEngine {
    */
   async runInitialHealthChecks() {
     this.logger.info('Running initial health checks...');
-    this.workflowState.setCurrentStep('initial-health-checks');
-    try {
-      // Check Git status
-      if (branchManager.hasUncommittedChanges()) {
-        this.logger.warn('You have uncommitted changes. Please commit or stash them before running the workflow.');
-        throw new Error('Uncommitted changes detected');
+    
+    // Check for uncommitted changes using branch manager
+    if (await hasUncommittedChanges()) {
+      this.logger.warn('You have uncommitted changes.');
+      const shouldContinue = await handleUncommittedChanges();
+      if (!shouldContinue) {
+        throw new Error('Workflow aborted due to uncommitted changes');
       }
-
-      this.logger.success('✓ Initial health checks passed.');
-      this.workflowState.completeStep('initial-health-checks', { success: true });
-    } catch (error) {
-      this.logger.error(`Initial health check failed: ${error.message}`);
-      this.workflowState.addError(error);
-      throw error;
     }
+
+    this.logger.success('✓ Initial health checks passed.');
   }
 
   /**
@@ -128,12 +125,17 @@ export class WorkflowEngine {
       await this.runInitialHealthChecks();
 
       // Get current branch
-      const currentBranch = branchManager.getCurrentBranch();
-      if (!currentBranch) {
+      const currentBranch = await this.commandRunner.runCommand('git rev-parse --abbrev-ref HEAD', {
+        stdio: 'pipe',
+        ignoreError: true
+      });
+
+      if (!currentBranch.success) {
         throw new Error('Failed to get current branch');
       }
 
-      this.logger.info(`Current branch: ${currentBranch}`);
+      const branchName = currentBranch.output.trim();
+      this.logger.info(`Current branch: ${branchName}`);
 
       // Analyze dependencies
       this.logger.info('Analyzing package dependencies...');
@@ -159,7 +161,7 @@ export class WorkflowEngine {
           buildOrder: depsAnalysis.buildOrder,
           dependencyGraph: depsAnalysis.graph,
           branchManager,
-          currentBranch,
+          currentBranch: branchName,
         };
         
         this.logger.info(`--- Starting step: ${step.name} ---`);

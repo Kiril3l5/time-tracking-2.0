@@ -18,7 +18,7 @@ import { setTimeout } from 'timers/promises';
 
 // Import specific functions from modules
 import { verifyAllAuth } from '../auth/auth-manager.js';
-import { getCurrentBranch, hasUncommittedChanges, switchBranch } from './branch-manager.js';
+import { getCurrentBranch, hasUncommittedChanges, switchBranch, handleUncommittedChanges } from './branch-manager.js';
 import { checkDocumentation } from '../checks/doc-freshness.js';
 import { analyzeBundles } from '../checks/bundle-analyzer.js';
 import { analyzeDeadCode } from '../checks/dead-code-detector.js';
@@ -88,7 +88,6 @@ export const WORKFLOW_STEPS = [
     description: 'Verify authentication and manage branch state',
     critical: true,
     async execute(options) {
-      const { workspaceState } = options;
       const startTime = Date.now();
       
       try {
@@ -106,41 +105,16 @@ export const WORKFLOW_STEPS = [
         // Log authentication status
         logger.info(`Authenticated as ${authResult.services.firebase.user}`);
 
-        // Handle branch management
-        const currentBranch = getCurrentBranch();
-        
-        // Log current branch without switching
+        // Get current branch
+        const currentBranch = await getCurrentBranch();
         logger.info(`Current branch: ${currentBranch}`);
         
-        // Check for uncommitted changes
-        if (hasUncommittedChanges()) {
+        // Check for uncommitted changes using branch manager
+        if (await hasUncommittedChanges()) {
           logger.warn('You have uncommitted changes.');
-          
-          const options = [
-            'Stash changes and continue',
-            'Commit changes',
-            'Abort workflow'
-          ];
-          
-          const choice = await commandRunner.promptWorkflowOptions(
-            'Please choose how to handle your uncommitted changes:',
-            options
-          );
-          
-          let message;
-          switch(choice) {
-            case '1':
-              await commandRunner.runCommand('git stash');
-              logger.info('Changes stashed');
-              break;
-            case '2':
-              message = await commandRunner.promptText('Enter commit message: ');
-              await commandRunner.runCommand(`git add . && git commit -m "${message}"`);
-              logger.info('Changes committed');
-              break;
-            case '3':
-            default:
-              throw new Error('Workflow aborted due to uncommitted changes');
+          const shouldContinue = await handleUncommittedChanges();
+          if (!shouldContinue) {
+            throw new Error('Workflow aborted due to uncommitted changes');
           }
         }
 
@@ -217,13 +191,25 @@ export const WORKFLOW_STEPS = [
     description: 'Run quality checks across packages',
     critical: true,
     async execute(options) {
-      const { workspaceState } = options;
       const startTime = Date.now();
       const packageMetrics = new Map();
       
       try {
+        // First analyze dependencies
+        logger.info('Analyzing package dependencies...');
+        const depsAnalysis = await analyzeDependencies();
+        
+        if (!depsAnalysis || !depsAnalysis.buildOrder) {
+          logger.warn('No packages found for quality checks, skipping...');
+          return {
+            success: true,
+            duration: Date.now() - startTime,
+            packageMetrics: {}
+          };
+        }
+
         // Run quality checks in dependency order
-        for (const pkg of workspaceState.buildOrder) {
+        for (const pkg of depsAnalysis.buildOrder) {
           const pkgStartTime = Date.now();
           const result = await qualityChecker.runQualityChecks(pkg, options);
           
@@ -255,7 +241,9 @@ export const WORKFLOW_STEPS = [
       } catch (error) {
         // Track error
         logger.error(`Step ${this.name} failed:`, error);
-        workflowState.trackError(error, this.name, this.critical);
+        if (workflowState) {
+          workflowState.trackError(error, this.name, this.critical);
+        }
 
         return {
           success: false,

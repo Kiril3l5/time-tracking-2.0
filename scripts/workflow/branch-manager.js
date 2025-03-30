@@ -6,6 +6,7 @@
 
 import { execSync } from 'child_process';
 import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
 
 /**
  * Check if a branch is a feature branch
@@ -301,6 +302,39 @@ export function getLocalBranches() {
   }
 }
 
+/**
+ * Handle uncommitted changes interactively
+ * @returns {Promise<boolean>} Whether to continue with the workflow
+ */
+export async function handleUncommittedChanges() {
+  const options = [
+    'Stash changes and continue',
+    'Commit changes',
+    'Abort workflow'
+  ];
+  
+  const choice = await commandRunner.promptWorkflowOptions(
+    'Please choose how to handle your uncommitted changes:',
+    options
+  );
+  
+  let message;
+  switch(choice) {
+    case '1':
+      await commandRunner.runCommand('git stash');
+      logger.info('Changes stashed');
+      return true;
+    case '2':
+      message = await commandRunner.promptText('Enter commit message: ');
+      await commandRunner.runCommand(`git add . && git commit -m "${message}"`);
+      logger.info('Changes committed');
+      return true;
+    case '3':
+    default:
+      return false;
+  }
+}
+
 export default {
   isFeatureBranch,
   getCurrentBranch,
@@ -311,5 +345,6 @@ export default {
   syncMainBranch,
   commitChanges,
   getModifiedFiles,
-  getLocalBranches
+  getLocalBranches,
+  handleUncommittedChanges
 }; 
