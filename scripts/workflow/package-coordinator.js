@@ -86,6 +86,50 @@ export class PackageCoordinator {
   }
 
   /**
+   * Initialize the package coordinator
+   * @returns {Promise<Object>} Initialization result
+   */
+  async initialize() {
+    this.logger.info('Initializing package coordinator...');
+    const startTime = Date.now();
+    
+    try {
+      // Analyze dependencies first
+      const analysis = await this.analyzeDependencies();
+      if (!analysis.success) {
+        throw new this.errorHandler.WorkflowError(`Failed to analyze dependencies: ${analysis.error}`);
+      }
+      
+      // Store analysis results
+      this.dependencies = analysis.packages;
+      this.buildOrder = analysis.buildOrder;
+      
+      // Initialize performance monitoring
+      await this.performanceMonitor.initialize();
+      
+      const duration = Date.now() - startTime;
+      this.logger.success(`Package coordinator initialized (Duration: ${duration}ms)`);
+      
+      return {
+        success: true,
+        duration,
+        packages: this.dependencies,
+        buildOrder: this.buildOrder
+      };
+      
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      this.logger.error(`Package coordinator initialization failed: ${error.message}`);
+      
+      return {
+        success: false,
+        duration,
+        error: error.message
+      };
+    }
+  }
+
+  /**
    * Analyze package dependencies and determine build order
    * @returns {Promise<Object>} Analysis result
    */
