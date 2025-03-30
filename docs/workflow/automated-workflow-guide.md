@@ -131,38 +131,60 @@ The automated workflow streamlines the development process by providing a unifie
 
 ## Workflow Steps
 
-The workflow executes the following steps in sequence:
+The automated workflow executes the following steps in order:
 
-1. **Health Checks**
-   - Security vulnerability scanning
-   - Environment validation
-   - Git configuration checks
-   - Dependency validation
-   - Critical step
-
-2. **Workflow Engine Initialization**
-   - Initialize package coordinator
-   - Initialize step runner
+1. **Workflow Engine Initialization** (Critical)
+   - Initialize all workflow components
+   - Set up package coordinator
    - Initialize quality checker
-   - Initialize deployment manager
+   - Set up deployment manager
    - Initialize dashboard generator
-   - Initialize consolidated report
+   - Set up consolidated report
    - Initialize branch manager
-   - Critical step
 
-3. **Workflow Execution**
-   - Execute steps in sequence
-   - Track progress
-   - Handle errors
-   - Generate reports
-   - Critical step
+2. **Environment Validation** (Critical)
+   - Validate development environment
+   - Check required tools and dependencies
+   - Verify environment variables
+   - Validate package dependencies
+   - Ensure all required services are available
 
-4. **Results & Cleanup**
-   - Log results
-   - Generate summary
-   - Clean up resources
-   - Exit with appropriate code
-   - Non-critical step
+3. **Security & Git Checks** (Critical)
+   - Run security vulnerability scanning
+   - Validate Git configuration
+   - Check repository security settings
+   - Verify access permissions
+   - Scan for sensitive data
+
+4. **Quality Checks** (Critical)
+   - Run code quality checks
+   - Execute linting
+   - Run unit tests
+   - Perform type checking
+   - Generate coverage reports
+
+5. **Build Application** (Critical)
+   - Build packages in dependency order
+   - Compile TypeScript
+   - Bundle assets
+   - Generate production builds
+   - Verify build outputs
+
+6. **Deployment** (Critical)
+   - Deploy to preview environment
+   - Set up preview URLs
+   - Configure environment variables
+   - Verify deployment health
+   - Run smoke tests
+
+7. **Results & Cleanup** (Non-critical)
+   - Generate dashboard
+   - Create consolidated report
+   - Clean up temporary resources
+   - Archive build artifacts
+   - Update status reports
+
+Each step is designed to be independent and can be retried if it fails. Critical steps must succeed for the workflow to continue, while non-critical steps can fail without stopping the entire workflow.
 
 ## Error Handling & Recovery
 

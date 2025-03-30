@@ -29,8 +29,6 @@ import errorHandler from '../core/error-handler.js';
 import { QualityChecker } from './quality-checker.js';
 import { PackageCoordinator } from './package-coordinator.js';
 import { deployPackage } from './deployment-manager.js';
-import { analyzeDependencies } from './package-coordinator.js';
-import { runQualityChecks } from './quality-checker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -84,52 +82,30 @@ async function withRetry(fn, maxRetries = MAX_RETRIES, initialDelay = RETRY_DELA
 export const WORKFLOW_STEPS = [
   {
     id: 1,
-    name: 'Authentication & Branch Management',
-    description: 'Verify authentication and manage branch state',
+    name: 'Workflow Engine Initialization',
+    description: 'Initialize all workflow components',
     critical: true,
     async execute(options) {
       const startTime = Date.now();
       
       try {
-        // Verify authentication using auth manager
-        const authResult = await verifyAllAuth({
-          requireFirebase: true,
-          requireGit: true,
-          progressTracker: options.progressTracker
-        });
-
-        if (!authResult.success) {
-          throw new Error(authResult.errors.join(', '));
-        }
-
-        // Log authentication status
-        logger.info(`Authenticated as ${authResult.services.firebase.user}`);
-
-        // Get current branch
-        const currentBranch = await getCurrentBranch();
-        logger.info(`Current branch: ${currentBranch}`);
-        
-        // Check for uncommitted changes using branch manager
-        if (await hasUncommittedChanges()) {
-          logger.warn('You have uncommitted changes.');
-          const shouldContinue = await handleUncommittedChanges();
-          if (!shouldContinue) {
-            throw new Error('Workflow aborted due to uncommitted changes');
-          }
-        }
+        // Initialize components
+        await Promise.all([
+          options.packageCoordinator.initialize(),
+          options.qualityChecker.initialize(),
+          options.deploymentManager.initialize(),
+          options.dashboardGenerator.initialize(),
+          options.consolidatedReport.initialize(),
+          options.branchManager.initialize()
+        ]);
 
         // Track performance
         const duration = Date.now() - startTime;
-        performanceMonitor.trackStepPerformance('auth-branch', duration);
+        performanceMonitor.trackStepPerformance('initialization', duration);
 
         return {
           success: true,
-          duration,
-          output: {
-            branch: currentBranch,
-            isNewBranch: false,
-            auth: authResult
-          }
+          duration
         };
       } catch (error) {
         // Track error
@@ -146,30 +122,35 @@ export const WORKFLOW_STEPS = [
   },
   {
     id: 2,
-    name: 'Code Changes',
-    description: 'Handle code changes and commits',
+    name: 'Environment Validation',
+    description: 'Validate environment and dependencies',
     critical: true,
     async execute(options) {
-      const { workspaceState } = options;
       const startTime = Date.now();
       
       try {
-        // Check for uncommitted changes
-        const hasChanges = hasUncommittedChanges();
-        if (hasChanges) {
-          logger.warn('There are uncommitted changes in the workspace');
+        // Run environment validation
+        const envResult = await runChecks.validateEnvironment();
+        if (!envResult.success) {
+          throw new Error('Environment validation failed');
+        }
+
+        // Run dependency validation
+        const depsResult = await runChecks.validateDependencies();
+        if (!depsResult.success) {
+          throw new Error('Dependency validation failed');
         }
 
         // Track performance
         const duration = Date.now() - startTime;
-        performanceMonitor.trackStepPerformance('code-changes', duration);
+        performanceMonitor.trackStepPerformance('environment-validation', duration);
 
         return {
           success: true,
           duration,
           output: {
-            hasChanges,
-            commitMessage: hasChanges ? 'Uncommitted changes detected' : 'No changes'
+            environment: envResult,
+            dependencies: depsResult
           }
         };
       } catch (error) {
@@ -187,63 +168,41 @@ export const WORKFLOW_STEPS = [
   },
   {
     id: 3,
-    name: 'Quality Checks',
-    description: 'Run quality checks across packages',
+    name: 'Security & Git Checks',
+    description: 'Run security and Git configuration checks',
     critical: true,
     async execute(options) {
       const startTime = Date.now();
-      const packageMetrics = new Map();
       
       try {
-        // First analyze dependencies
-        logger.info('Analyzing package dependencies...');
-        const depsAnalysis = await analyzeDependencies();
-        
-        if (!depsAnalysis || !depsAnalysis.buildOrder) {
-          logger.warn('No packages found for quality checks, skipping...');
-          return {
-            success: true,
-            duration: Date.now() - startTime,
-            packageMetrics: {}
-          };
+        // Run security vulnerability scanning
+        const securityResult = await runChecks.securityScan();
+        if (!securityResult.success) {
+          throw new Error('Security vulnerability scan failed');
         }
 
-        // Run quality checks in dependency order
-        for (const pkg of depsAnalysis.buildOrder) {
-          const pkgStartTime = Date.now();
-          const result = await qualityChecker.runQualityChecks(pkg, options);
-          
-          if (!result.success) {
-            throw new Error(`Quality checks failed for package ${pkg}`);
-          }
-
-          // Track package metrics
-          const pkgDuration = Date.now() - pkgStartTime;
-          packageMetrics.set(pkg, {
-            duration: pkgDuration,
-            issues: result.issues,
-            warnings: result.warnings
-          });
-
-          // Track performance
-          performanceMonitor.trackStepPerformance(`quality-${pkg}`, pkgDuration);
+        // Run Git configuration checks
+        const gitResult = await runChecks.validateGitConfig();
+        if (!gitResult.success) {
+          throw new Error('Git configuration validation failed');
         }
 
-        // Track total performance
+        // Track performance
         const duration = Date.now() - startTime;
-        performanceMonitor.trackStepPerformance('quality-total', duration);
+        performanceMonitor.trackStepPerformance('security-git-checks', duration);
 
         return {
           success: true,
           duration,
-          packageMetrics: Object.fromEntries(packageMetrics)
+          output: {
+            security: securityResult,
+            git: gitResult
+          }
         };
       } catch (error) {
         // Track error
         logger.error(`Step ${this.name} failed:`, error);
-        if (workflowState) {
-          workflowState.trackError(error, this.name, this.critical);
-        }
+        workflowState.trackError(error, this.name, this.critical);
 
         return {
           success: false,
@@ -255,46 +214,27 @@ export const WORKFLOW_STEPS = [
   },
   {
     id: 4,
-    name: 'Build Application',
-    description: 'Build packages in dependency order',
+    name: 'Quality Checks',
+    description: 'Run quality checks across packages',
     critical: true,
     async execute(options) {
-      const { workspaceState } = options;
       const startTime = Date.now();
-      const packageMetrics = new Map();
       
       try {
-        // Build packages in dependency order
-        for (const pkg of workspaceState.buildOrder) {
-          const pkgStartTime = Date.now();
-          const result = await commandRunner.runCommand(`pnpm --filter ${pkg} build`, {
-            cwd: dirname(__dirname),
-            stdio: 'inherit'
-          });
-
-          if (!result.success) {
-            throw new Error(`Build failed for package ${pkg}`);
-          }
-
-          // Track package metrics
-          const pkgDuration = Date.now() - pkgStartTime;
-          packageMetrics.set(pkg, {
-            duration: pkgDuration,
-            output: result.output
-          });
-
-          // Track performance
-          performanceMonitor.trackStepPerformance(`build-${pkg}`, pkgDuration);
+        // Run quality checks
+        const qualityResult = await qualityChecker.runQualityChecks(options);
+        if (!qualityResult.success) {
+          throw new Error('Quality checks failed');
         }
 
-        // Track total performance
+        // Track performance
         const duration = Date.now() - startTime;
-        performanceMonitor.trackStepPerformance('build-total', duration);
+        performanceMonitor.trackStepPerformance('quality-checks', duration);
 
         return {
           success: true,
           duration,
-          packageMetrics: Object.fromEntries(packageMetrics)
+          output: qualityResult
         };
       } catch (error) {
         // Track error
@@ -311,43 +251,30 @@ export const WORKFLOW_STEPS = [
   },
   {
     id: 5,
-    name: 'Deployment',
-    description: 'Deploy packages to preview environment',
+    name: 'Build Application',
+    description: 'Build packages in dependency order',
     critical: true,
     async execute(options) {
-      const { workspaceState } = options;
       const startTime = Date.now();
-      const packageMetrics = new Map();
       
       try {
-        // Deploy packages in dependency order
-        for (const pkg of workspaceState.buildOrder) {
-          const pkgStartTime = Date.now();
-          const result = await deployPackage(pkg, options);
-
-          if (!result.success) {
-            throw new Error(`Deployment failed for package ${pkg}: ${result.error}`);
-          }
-
-          // Track package metrics
-          const pkgDuration = Date.now() - pkgStartTime;
-          packageMetrics.set(pkg, {
-            duration: pkgDuration,
-            previewUrl: result.previewUrl
-          });
-
-          // Track performance
-          performanceMonitor.trackStepPerformance(`deploy-${pkg}`, pkgDuration);
+        // Build packages
+        const buildResult = await commandRunner.runCommand('pnpm build', {
+          cwd: dirname(__dirname),
+          stdio: 'inherit'
+        });
+        if (!buildResult.success) {
+          throw new Error('Build failed');
         }
 
-        // Track total performance
+        // Track performance
         const duration = Date.now() - startTime;
-        performanceMonitor.trackStepPerformance('deploy-total', duration);
+        performanceMonitor.trackStepPerformance('build', duration);
 
         return {
           success: true,
           duration,
-          packageMetrics: Object.fromEntries(packageMetrics)
+          output: buildResult
         };
       } catch (error) {
         // Track error
@@ -364,29 +291,72 @@ export const WORKFLOW_STEPS = [
   },
   {
     id: 6,
-    name: 'Reports',
-    description: 'Generate reports and dashboard',
+    name: 'Deployment',
+    description: 'Deploy packages to preview environment',
+    critical: true,
+    async execute(options) {
+      const startTime = Date.now();
+      
+      try {
+        // Deploy preview
+        const deployResult = await deployPackage(options);
+        if (!deployResult.success) {
+          throw new Error('Deployment failed');
+        }
+
+        // Track performance
+        const duration = Date.now() - startTime;
+        performanceMonitor.trackStepPerformance('deployment', duration);
+
+        return {
+          success: true,
+          duration,
+          output: deployResult
+        };
+      } catch (error) {
+        // Track error
+        logger.error(`Step ${this.name} failed:`, error);
+        workflowState.trackError(error, this.name, this.critical);
+
+        return {
+          success: false,
+          duration: Date.now() - startTime,
+          error: error.message
+        };
+      }
+    }
+  },
+  {
+    id: 7,
+    name: 'Results & Cleanup',
+    description: 'Generate reports and clean up resources',
     critical: false,
     async execute(options) {
-      const { workspaceState } = options;
       const startTime = Date.now();
       
       try {
         // Generate dashboard
         const dashboardResult = await generateDashboard({
           ...options,
-          workspaceState
+          workspaceState: options.workflowState
         });
 
         // Generate consolidated report
         const reportResult = await generateReport({
           ...options,
-          workspaceState
+          workspaceState: options.workflowState
         });
+
+        // Clean up resources
+        await Promise.all([
+          options.deploymentManager.cleanup(),
+          options.dashboardGenerator.cleanup(),
+          options.consolidatedReport.cleanup()
+        ]);
 
         // Track performance
         const duration = Date.now() - startTime;
-        performanceMonitor.trackStepPerformance('reports', duration);
+        performanceMonitor.trackStepPerformance('results-cleanup', duration);
 
         return {
           success: true,
@@ -446,78 +416,6 @@ export function shouldRunStep(step, state) {
   return dependencies.every(dep => state.completedSteps.includes(dep));
 }
 
-/**
- * Execute a workflow step with error handling and performance tracking.
- * @param {Object} step - Step definition from WORKFLOW_STEPS
- * @param {Object} context - Execution context containing dependencies
- * @returns {Promise<Object>} Step execution result
- */
-export async function executeStep(step, context) {
-  const { logger, commandRunner, performanceMonitor, errorHandler, workflowState } = context;
-  const stepStartTime = Date.now();
-  
-  try {
-    logger.info(`Starting step: ${step.name}`);
-    performanceMonitor.startStep(step.name);
-    
-    // Execute step with retry logic
-    const result = await withRetry(async () => {
-      switch (step.name) {
-        case 'verify-authentication':
-          return await verifyAllAuth({
-            requireFirebase: true,
-            requireGit: true,
-            trackProgress: true
-          });
-          
-        case 'analyze-dependencies':
-          return await analyzeDependencies();
-          
-        case 'run-quality-checks':
-          return await runQualityChecks(context);
-          
-        case 'deploy-packages':
-          return await deployPackage(context);
-          
-        default:
-          throw new errorHandler.WorkflowError(`Unknown step: ${step.name}`);
-      }
-    });
-    
-    const duration = Date.now() - stepStartTime;
-    performanceMonitor.endStep(step.name, duration);
-    
-    logger.success(`Completed step: ${step.name} (Duration: ${duration}ms)`);
-    return {
-      success: true,
-      duration,
-      output: result
-    };
-    
-  } catch (error) {
-    const duration = Date.now() - stepStartTime;
-    performanceMonitor.endStep(step.name, duration, error);
-    
-    // Handle different error types
-    if (error instanceof errorHandler.ValidationError) {
-      logger.error(`Validation error in step ${step.name}:`, error.message);
-    } else if (error instanceof errorHandler.WorkflowError) {
-      logger.error(`Workflow error in step ${step.name}:`, error.message);
-    } else {
-      logger.error(`Error in step ${step.name}:`, error.message);
-    }
-    
-    // Add error to workflow state
-    workflowState.addError(error);
-    
-    return {
-      success: false,
-      duration,
-      error: error.message
-    };
-  }
-}
-
 export class StepRunner {
   constructor() {
     this.logger = logger;
@@ -545,13 +443,15 @@ export class StepRunner {
         );
       }
 
-      // Execute step
-      const result = await step.execute({
-        ...context,
-        logger: this.logger,
-        commandRunner: this.commandRunner,
-        progressTracker: this.progressTracker,
-        performanceMonitor: this.performanceMonitor
+      // Execute step with retry logic
+      const result = await withRetry(async () => {
+        return await step.execute({
+          ...context,
+          logger: this.logger,
+          commandRunner: this.commandRunner,
+          progressTracker: this.progressTracker,
+          performanceMonitor: this.performanceMonitor
+        });
       });
 
       // Validate result
@@ -584,6 +484,11 @@ export class StepRunner {
 
 // Export singleton instance
 export const stepRunner = new StepRunner();
+
+// Export executeStep function
+export async function executeStep(step, context) {
+  return stepRunner.executeStep(step, context);
+}
 
 export default {
   WORKFLOW_STEPS,

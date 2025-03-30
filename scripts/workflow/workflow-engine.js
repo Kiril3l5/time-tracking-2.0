@@ -22,7 +22,8 @@ import getWorkflowState from './workflow-state.js';
 import { PackageCoordinator } from './package-coordinator.js';
 import { QualityChecker } from './quality-checker.js';
 import * as branchManager from './branch-manager.js';
-import { hasUncommittedChanges, handleUncommittedChanges } from './branch-manager.js';
+import { verifyAllAuth } from '../auth/auth-manager.js';
+import { getCurrentBranch, hasUncommittedChanges, switchBranch, handleUncommittedChanges } from './branch-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -93,7 +94,20 @@ export class WorkflowEngine {
   async runInitialHealthChecks() {
     this.logger.info('Running initial health checks...');
     
-    // Check for uncommitted changes using branch manager
+    // First verify authentication
+    const authResult = await verifyAllAuth({
+      requireFirebase: true,
+      requireGit: true,
+      progressTracker: this.options.progressTracker
+    });
+
+    if (!authResult.success) {
+      throw new Error(authResult.errors.join(', '));
+    }
+
+    this.logger.info(`Authenticated as ${authResult.services.firebase.user}`);
+
+    // Then check for uncommitted changes
     if (await hasUncommittedChanges()) {
       this.logger.warn('You have uncommitted changes.');
       const shouldContinue = await handleUncommittedChanges();
@@ -121,10 +135,7 @@ export class WorkflowEngine {
       // Initialize workflow state
       this.workflowState.initialize(options);
 
-      // Run initial health checks
-      await this.runInitialHealthChecks();
-
-      // Get current branch
+      // Get current branch first - needed for context
       const currentBranch = await this.commandRunner.runCommand('git rev-parse --abbrev-ref HEAD', {
         stdio: 'pipe',
         ignoreError: true
@@ -137,12 +148,24 @@ export class WorkflowEngine {
       const branchName = currentBranch.output.trim();
       this.logger.info(`Current branch: ${branchName}`);
 
-      // Analyze dependencies
+      // Run initial health checks (only uncommitted changes now)
+      await this.runInitialHealthChecks();
+
+      // Analyze dependencies first - needed for all subsequent steps
       this.logger.info('Analyzing package dependencies...');
       this.workflowState.setCurrentStep('analyze-dependencies');
       const depsAnalysis = await this.packageCoordinator.analyzeDependencies();
+      
+      if (!depsAnalysis || !depsAnalysis.buildOrder) {
+        throw new Error('Failed to analyze dependencies: No packages found');
+      }
+
       this.workflowState.updateMetrics({ dependencies: depsAnalysis });
-      this.workflowState.completeStep('analyze-dependencies', { success: true, buildOrder: depsAnalysis.buildOrder, graph: depsAnalysis.graph });
+      this.workflowState.completeStep('analyze-dependencies', { 
+        success: true, 
+        buildOrder: depsAnalysis.buildOrder, 
+        graph: depsAnalysis.graph 
+      });
       this.logger.success('Dependency analysis complete.');
 
       // Execute workflow steps sequentially
