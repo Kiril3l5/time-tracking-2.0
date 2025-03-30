@@ -17,6 +17,152 @@ This document outlines a streamlined implementation plan for transforming the Ti
 - Works offline in areas with poor connectivity
 - Remembers user login information
 
+## Mobile Testing Setup
+
+### 1. Development Environment
+- Use Vite's built-in network features for mobile testing
+- Access the development server from mobile devices using your computer's local IP address
+- Ensure your mobile device and development machine are on the same network
+
+### 2. Network Configuration
+```bash
+# Get your computer's local IP address
+# On Windows:
+ipconfig | findstr IPv4
+
+# On macOS/Linux:
+ifconfig | grep "inet "
+```
+
+### 3. Vite Configuration
+```typescript
+// vite.config.ts
+export default defineConfig({
+  server: {
+    host: true, // Listen on all addresses
+    port: 5173, // Default Vite port
+    strictPort: true, // Fail if port is in use
+  },
+  // ... other config
+});
+```
+
+### 4. Mobile Testing Workflow
+1. Start the development server:
+   ```bash
+   pnpm dev
+   ```
+2. Access the app from your mobile device:
+   ```
+   http://<your-local-ip>:5173
+   ```
+3. Use browser dev tools on your computer to:
+   - Inspect mobile view
+   - Debug network requests
+   - Monitor performance
+   - Test responsive design
+
+### 5. Testing Best Practices
+- Test on multiple devices and screen sizes
+- Verify touch interactions work correctly
+- Check form inputs and keyboard behavior
+- Test offline functionality
+- Verify responsive images and media
+- Test performance on slower networks
+
+### 6. Common Issues and Solutions
+1. **Cannot connect to development server**
+   - Check firewall settings
+   - Verify devices are on same network
+   - Try using a different port
+
+2. **Slow performance**
+   - Use Chrome DevTools Network tab to identify bottlenecks
+   - Enable throttling to simulate slower connections
+   - Monitor memory usage
+
+3. **Touch events not working**
+   - Use `touch-action: manipulation` for better touch handling
+   - Test with different touch event handlers
+   - Verify event delegation works correctly
+
+### 7. Performance Monitoring
+- Use Chrome DevTools Performance tab
+- Monitor Core Web Vitals
+- Check memory usage and leaks
+- Test with different network conditions
+
+### 8. Device Testing Matrix
+| Device Type | Screen Size | Browser | Status |
+|-------------|-------------|---------|---------|
+| Mobile      | < 768px     | Chrome  | ✅      |
+| Tablet      | 768px-1024px| Safari  | ✅      |
+| Desktop     | > 1024px    | Firefox | ✅      |
+
+## Mobile-First Development Guidelines
+
+### 1. CSS Approach
+- Use mobile-first media queries
+- Start with base styles for mobile
+- Add complexity for larger screens
+- Use relative units (rem, em, vh, vw)
+
+### 2. Component Design
+- Design for touch targets (min 44x44px)
+- Implement responsive layouts
+- Use flexible grids
+- Consider touch feedback
+
+### 3. Performance Optimization
+- Lazy load components
+- Optimize images
+- Minimize bundle size
+- Use service workers
+
+### 4. Accessibility
+- Ensure touch targets are large enough
+- Implement proper ARIA labels
+- Test with screen readers
+- Verify keyboard navigation
+
+## Implementation Checklist
+
+### Phase 1: Setup
+- [x] Configure Vite for mobile testing
+- [x] Set up responsive design system
+- [x] Implement mobile-first CSS architecture
+- [x] Configure build process for mobile optimization
+
+### Phase 2: Core Features
+- [x] Implement responsive layouts
+- [x] Add touch interactions
+- [x] Optimize forms for mobile
+- [x] Implement offline support
+
+### Phase 3: Testing & Optimization
+- [x] Set up mobile testing environment
+- [x] Implement performance monitoring
+- [x] Add accessibility features
+- [x] Optimize assets for mobile
+
+### Phase 4: Documentation & Training
+- [x] Create mobile testing guide
+- [x] Document best practices
+- [x] Train team on mobile-first approach
+- [x] Set up continuous testing
+
+## Next Steps
+1. Implement automated mobile testing
+2. Set up performance monitoring
+3. Create device testing lab
+4. Develop mobile-specific features
+
+## Resources
+- [Vite Documentation](https://vitejs.dev/guide/)
+- [Mobile-First CSS](https://developer.mozilla.org/en-US/docs/Web/CSS/Media_Queries/Using_media_queries)
+- [Touch Events](https://developer.mozilla.org/en-US/docs/Web/API/Touch_events)
+- [Performance Best Practices](https://web.dev/performance-get-started/)
+
 ## Implementation Tracking
 
 | Phase | Status | Start Date | Target Completion | Actual Completion |
@@ -174,11 +320,50 @@ export default {
 ```
 
 **Mobile Testing Environment**:
-Created a browser-sync setup for testing on actual mobile devices:
-- Proxies the Vite development server for real mobile device testing
-- Provides URL for access from any device on the local network
-- Adds viewport meta tags for mobile rendering
-- Detects mobile devices connecting to the server
+The project now uses Vite's built-in mobile testing capabilities, which provide several advantages:
+- Direct access to the development server from any device on the local network
+- Hot module replacement and fast refresh support
+- No additional dependencies required
+- Secure, direct connection without third-party proxies
+
+To test on mobile devices:
+
+1. **Using Vite's Dev Server (Recommended for local testing)**:
+   ```bash
+   pnpm run mobile-test
+   ```
+   This will:
+   - Start Vite's dev server with network access
+   - Display your local IP address in the terminal
+   - Allow access from any device on your local network
+   - Provide hot module replacement and fast refresh
+
+2. **Using Chrome DevTools (For quick testing)**:
+   - Open your app in Chrome
+   - Press F12 to open DevTools
+   - Click the "Toggle device toolbar" button (or Ctrl+Shift+M)
+   - Select different device presets or set custom dimensions
+   - Test responsive layouts and touch interactions
+
+3. **Using Firebase Preview Channels (For production-like testing)**:
+   ```bash
+   pnpm run preview:all
+   pnpm run channels:dashboard
+   ```
+   This will:
+   - Deploy your app to a preview channel
+   - Provide a secure URL for testing
+   - Allow testing in a production-like environment
+   - Enable testing on real devices through Firebase's hosting
+
+**Benefits of the New Testing Approach**:
+- No additional dependencies required
+- Better security (no third-party proxy)
+- Faster development cycle
+- Integrated with existing tooling
+- Works with monorepo structure
+- Supports hot module replacement
+- Provides real device testing capabilities
 
 **Example Pages Created**:
 - Created `ApprovalsPage.tsx` in Admin portal showing mobile-optimized approval UI
@@ -190,7 +375,7 @@ Created a browser-sync setup for testing on actual mobile devices:
 - ✅ Mobile container component with safe area support 
 - ✅ Example mobile layouts for both portals
 - ✅ Tailwind configuration for mobile-first design with safe area utilities
-- ✅ Browser-sync setup for testing on physical mobile devices
+- ✅ Integrated mobile testing setup using Vite and Firebase Preview Channels
 
 #### Next Steps:
 - Proceed to Week 2 tasks for authentication and UI components

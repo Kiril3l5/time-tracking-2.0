@@ -1,422 +1,258 @@
-#!/usr/bin/env node
+/* global process */
 
 /**
  * Dependency Check Module
  * 
- * Utilities for checking that required dependencies are properly installed
- * before running the workflow. This helps prevent runtime errors caused
- * by missing modules.
- * 
- * Features:
- * - Check for required npm packages
- * - Verify external tool availability (e.g., Firebase CLI)
- * - Suggest installation commands when dependencies are missing
- * - Optionally auto-install missing dependencies
- * 
- * @module core/dependency-check
- * @example
- * // Example of basic usage in a workflow
- * import { verifyDependencies } from './core/dependency-check.js';
- * import { errorTracker } from './core/error-handler.js';
- * 
- * const result = await verifyDependencies({
- *   requiredPackages: ['firebase-tools', 'chalk'],
- *   requiredCommands: ['git', 'firebase'],
- *   errorTracker
- * });
- * 
- * if (!result.success) {
- *   console.error('Missing dependencies detected');
- *   process.exit(1);
- * }
+ * Provides centralized dependency validation and management.
  */
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'url';
-import { execSync } from 'node:child_process';
-import * as logger from './logger.js';
-import { DependencyError } from './error-handler.js';
+import { logger } from './logger.js';
+import { existsSync, readFileSync } from 'fs';
+import { join, dirname, basename } from 'path';
+import { errorTracker } from './error-handler.js';
+import { performanceMonitor } from './performance-monitor.js';
+import { commandRunner } from './command-runner.js';
 
-/* global process */
+export class DependencyChecker {
+  constructor() {
+    this.requiredDependencies = {
+      node: '>=14.0.0',
+      pnpm: '>=6.0.0',
+      firebase: '>=9.0.0',
+      git: '>=2.0.0'
+    };
 
-// Initialize directory paths
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, '../..');
+    this.workspaceDependencies = new Map();
+    this.dependencyCache = new Map();
+    this.cacheTimeout = 5 * 60 * 1000; // 5 minutes
+  }
 
-/**
- * Check if a package is installed by checking its existence in node_modules
- * 
- * @function isPackageInstalled
- * @param {string} packageName - The name of the package to check
- * @returns {boolean} - Whether the package is installed
- * @description Verifies if a npm package is installed in the project's node_modules directory.
- * This is a more reliable method than trying to require the package, as it works even
- * for packages that are only used by CLI tools or for TypeScript types.
- * @example
- * if (isPackageInstalled('firebase-tools')) {
- *   // Firebase tools are available
- * } else {
- *   console.warn('Firebase tools not found in node_modules');
- * }
- */
-export function isPackageInstalled(packageName) {
-  const packagePath = path.join(rootDir, 'node_modules', packageName);
-  return fs.existsSync(packagePath);
-}
-
-/**
- * Check if an external CLI tool is installed
- * 
- * @function isCommandAvailable
- * @param {string} command - The command to check (e.g., 'firebase', 'git')
- * @returns {boolean} - Whether the command is available in the system PATH
- * @description Tests if a command-line tool is available in the system by using the
- * 'which' command (Unix) or 'where' command (Windows). Returns true if the command
- * is found in the PATH, false otherwise.
- * @example
- * if (isCommandAvailable('firebase')) {
- *   // Firebase CLI is installed
- * } else {
- *   console.warn('Firebase CLI not found, please install it');
- * }
- */
-export function isCommandAvailable(command) {
-  try {
-    // Different check command based on platform
-    const checkCommand = process.platform === 'win32'
-      ? `where ${command}`
-      : `which ${command}`;
+  /**
+   * Check all dependencies
+   * @returns {Promise<boolean>} Whether all dependencies are valid
+   */
+  async checkAll() {
+    const startTime = Date.now();
     
-    execSync(checkCommand, { stdio: 'ignore' });
+    try {
+      // Check system dependencies
+      const systemCheck = await this.checkSystemDependencies();
+      if (!systemCheck.success) {
+        logger.error('System dependencies check failed');
+        return false;
+      }
+
+      // Check workspace dependencies
+      const workspaceCheck = await this.checkWorkspaceDependencies();
+      if (!workspaceCheck.success) {
+        logger.error('Workspace dependencies check failed');
+        return false;
+      }
+
+      // Track performance
+      const duration = Date.now() - startTime;
+      performanceMonitor.trackStepPerformance('dependency-check', duration);
+
+      return true;
+    } catch (error) {
+      errorTracker.addError(error);
+      return false;
+    }
+  }
+
+  /**
+   * Check system dependencies
+   * @private
+   * @returns {Promise<Object>} Check result
+   */
+  async checkSystemDependencies() {
+    const result = {
+      success: true,
+      missing: [],
+      outdated: []
+    };
+
+    for (const [dep, version] of Object.entries(this.requiredDependencies)) {
+      try {
+        const installed = await this.getInstalledVersion(dep);
+        if (!installed) {
+          result.missing.push(dep);
+          result.success = false;
+        } else if (!this.satisfiesVersion(installed, version)) {
+          result.outdated.push({ dep, required: version, installed });
+          result.success = false;
+        }
+      } catch (error) {
+        logger.warn(`Failed to check ${dep} version:`, error.message);
+        result.success = false;
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Check workspace dependencies
+   * @private
+   * @returns {Promise<Object>} Check result
+   */
+  async checkWorkspaceDependencies() {
+    const result = {
+      success: true,
+      issues: []
+    };
+
+    try {
+      // Read package.json
+      const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
+      
+      // Check dependencies
+      const deps = {
+        ...packageJson.dependencies,
+        ...packageJson.devDependencies
+      };
+
+      for (const [dep, version] of Object.entries(deps)) {
+        const installed = await this.getInstalledVersion(dep);
+        if (!installed) {
+          result.issues.push(`Missing dependency: ${dep}`);
+          result.success = false;
+        }
+      }
+
+      // Check for duplicate dependencies
+      const duplicates = this.findDuplicateDependencies(deps);
+      if (duplicates.length > 0) {
+        result.issues.push(`Duplicate dependencies: ${duplicates.join(', ')}`);
+        result.success = false;
+      }
+
+    } catch (error) {
+      logger.error('Failed to check workspace dependencies:', error.message);
+      result.success = false;
+    }
+
+    return result;
+  }
+
+  /**
+   * Get installed version of a dependency
+   * @private
+   * @param {string} dep - Dependency name
+   * @returns {Promise<string|null>} Installed version
+   */
+  async getInstalledVersion(dep) {
+    // Check cache first
+    const cached = this.dependencyCache.get(dep);
+    if (cached && Date.now() - cached.timestamp < this.cacheTimeout) {
+      return cached.version;
+    }
+
+    try {
+      let version;
+      switch (dep) {
+        case 'node':
+          version = process.version;
+          break;
+        case 'pnpm':
+          version = await this.runCommand('pnpm --version');
+          break;
+        case 'firebase':
+          version = await this.runCommand('firebase --version');
+          break;
+        case 'git':
+          version = await this.runCommand('git --version');
+          break;
+        default:
+          version = await this.runCommand(`npm list ${dep} --json`);
+      }
+
+      // Cache the result
+      this.dependencyCache.set(dep, {
+        version,
+        timestamp: Date.now()
+      });
+
+      return version;
+    } catch (error) {
+      logger.debug(`Failed to get ${dep} version:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Run a command and get its output
+   * @private
+   * @param {string} command - Command to run
+   * @returns {Promise<string>} Command output
+   */
+  async runCommand(command) {
+    const result = await commandRunner.run(command, {
+      captureOutput: true,
+      silent: true
+    });
+    return result.output.trim();
+  }
+
+  /**
+   * Check if version satisfies requirement
+   * @private
+   * @param {string} version - Installed version
+   * @param {string} required - Required version
+   * @returns {boolean} Whether version satisfies requirement
+   */
+  satisfiesVersion(version, required) {
+    // Remove 'v' prefix if present
+    version = version.replace(/^v/, '');
+    
+    // Handle version ranges
+    if (required.startsWith('>=')) {
+      const minVersion = required.slice(2);
+      return this.compareVersions(version, minVersion) >= 0;
+    }
+    
     return true;
-  } catch (error) {
-    return false;
   }
-}
 
-/**
- * Detect the package manager used in the project
- * 
- * @function detectPackageManager
- * @returns {string} - The package manager name: 'npm', 'yarn', or 'pnpm'
- * @description Determines which package manager is being used in the project
- * by checking for the existence of lock files (pnpm-lock.yaml, yarn.lock, or 
- * defaulting to npm). This helps ensure that the correct package manager commands
- * are used when installing dependencies.
- * @example
- * const pkgManager = detectPackageManager();
- * console.log(`This project uses ${pkgManager}`);
- * // Could output: "This project uses pnpm"
- */
-export function detectPackageManager() {
-  // Check for lockfiles to determine the package manager
-  if (fs.existsSync(path.join(rootDir, 'pnpm-lock.yaml'))) {
-    return 'pnpm';
-  } else if (fs.existsSync(path.join(rootDir, 'yarn.lock'))) {
-    return 'yarn';
-  } else {
-    return 'npm';
-  }
-}
-
-/**
- * Validate that the preferred package manager is being used
- * 
- * @function validatePreferredPackageManager
- * @param {string} [preferredManager='pnpm'] - The preferred package manager to use
- * @returns {Object} - Validation result
- * @description Checks if the project is using the preferred package manager.
- * Returns information about the detected package manager and whether it matches
- * the preferred one. If not, it logs a warning with instructions on how to switch.
- * @example
- * const result = validatePreferredPackageManager();
- * if (!result.isPreferred) {
- *   // Take action or provide guidance on switching package managers
- * }
- */
-export function validatePreferredPackageManager(preferredManager = 'pnpm') {
-  const detected = detectPackageManager();
-  const isPreferred = detected === preferredManager;
-  
-  if (!isPreferred) {
-    logger.warn(`Project is using ${detected} but ${preferredManager} is preferred.`);
-    logger.info(`To switch to ${preferredManager}:`);
+  /**
+   * Compare two versions
+   * @private
+   * @param {string} v1 - First version
+   * @param {string} v2 - Second version
+   * @returns {number} Comparison result
+   */
+  compareVersions(v1, v2) {
+    const parts1 = v1.split('.').map(Number);
+    const parts2 = v2.split('.').map(Number);
     
-    if (preferredManager === 'pnpm') {
-      logger.info('1. Install pnpm globally: npm install -g pnpm');
-      logger.info('2. Remove node_modules directory and package-lock.json/yarn.lock');
-      logger.info('3. Run: pnpm install');
-    } else if (preferredManager === 'yarn') {
-      logger.info('1. Install yarn globally: npm install -g yarn');
-      logger.info('2. Remove node_modules directory and package-lock.json/pnpm-lock.yaml');
-      logger.info('3. Run: yarn install');
-    } else {
-      logger.info('1. Remove node_modules directory and yarn.lock/pnpm-lock.yaml');
-      logger.info('2. Run: npm install');
-    }
-  }
-  
-  return {
-    detected,
-    isPreferred,
-    preferredManager
-  };
-}
-
-/**
- * Attempts to install a missing package
- * 
- * @function installPackage
- * @param {string} packageName - Name of the package to install
- * @param {string} [packageManager='npm'] - The package manager to use ('npm', 'yarn', or 'pnpm')
- * @returns {boolean} True if installation was successful, false otherwise
- * @description Tries to install a missing npm package using the specified package manager.
- * Returns true if the installation succeeds (verified by checking if the package is
- * available after installation), or false if it fails.
- * @example
- * // Try to install firebase-tools using the detected package manager
- * const pkgManager = detectPackageManager();
- * if (installPackage('firebase-tools', pkgManager)) {
- *   console.log('Successfully installed firebase-tools');
- * } else {
- *   console.error('Failed to install firebase-tools');
- * }
- */
-export function installPackage(packageName, packageManager = 'npm') {
-  try {
-    logger.info(`Installing missing package: ${packageName}`);
-    
-    const installCommand = {
-      'npm': `npm install ${packageName}`,
-      'yarn': `yarn add ${packageName}`,
-      'pnpm': `pnpm add ${packageName}`
-    }[packageManager];
-    
-    execSync(installCommand, { stdio: 'inherit' });
-    return isPackageInstalled(packageName);
-  } catch (err) {
-    logger.error(`Failed to install ${packageName}: ${err.message}`);
-    return false;
-  }
-}
-
-/**
- * Verifies that all required dependencies are available
- * 
- * @function verifyDependencies
- * @param {Object} options - Configuration options
- * @param {string[]} [options.requiredPackages=[]] - Array of required npm package names
- * @param {string[]} [options.requiredCommands=[]] - Array of required external commands
- * @param {boolean} [options.autoInstall=false] - Whether to attempt auto-installation of missing packages
- * @param {Object} [options.errorTracker] - Error tracking instance from error-handler.js
- * @returns {Promise<Object>} Result object with properties:
- *   - success {boolean}: Whether all dependencies are available
- *   - missingPackages {string[]}: List of packages that are missing
- *   - missingCommands {string[]}: List of commands that are missing
- * @description Comprehensively checks for all required dependencies, both npm packages
- * and CLI commands. Can optionally attempt to auto-install missing npm packages.
- * If an error tracker is provided, it logs dependency errors there for centralized
- * error reporting. Returns a Promise that resolves with the verification status and details
- * about any missing dependencies.
- * @example
- * // Check for required dependencies
- * const result = await verifyDependencies({
- *   requiredPackages: ['firebase-tools', 'chalk'],
- *   requiredCommands: ['git', 'firebase'],
- *   autoInstall: true,
- *   errorTracker
- * });
- * 
- * if (result.success) {
- *   console.log('All dependencies are available');
- * } else {
- *   console.error('Missing dependencies:');
- *   if (result.missingPackages.length > 0) {
- *     console.error('Packages:', result.missingPackages.join(', '));
- *   }
- *   if (result.missingCommands.length > 0) {
- *     console.error('Commands:', result.missingCommands.join(', '));
- *   }
- * }
- */
-export function verifyDependencies({ 
-  requiredPackages = [], 
-  requiredCommands = [], 
-  autoInstall = false,
-  errorTracker
-}) {
-  return new Promise((resolve, reject) => {
-    const missingPackages = [];
-    const missingCommands = [];
-    
-    // Check required packages
-    for (const pkg of requiredPackages) {
-      if (!isPackageInstalled(pkg)) {
-        missingPackages.push(pkg);
-      }
+    for (let i = 0; i < 3; i++) {
+      if (parts1[i] > parts2[i]) return 1;
+      if (parts1[i] < parts2[i]) return -1;
     }
     
-    // Check required commands
-    for (const cmd of requiredCommands) {
-      if (!isCommandAvailable(cmd)) {
-        missingCommands.push(cmd);
-      }
-    }
-    
-    // Return early if everything is available
-    if (missingPackages.length === 0 && missingCommands.length === 0) {
-      logger.info('All required dependencies are available.');
-      resolve({
-        success: true,
-        missingPackages: [],
-        missingCommands: []
-      });
-      return;
-    }
-    
-    // Report missing dependencies
-    if (missingPackages.length > 0) {
-      logger.warn(`Missing required packages: ${missingPackages.join(', ')}`);
-      
-      if (autoInstall) {
-        const packageManager = detectPackageManager();
-        logger.info(`Using ${packageManager} to install missing packages...`);
-        
-        const failedInstalls = [];
-        
-        for (const pkg of missingPackages) {
-          if (!installPackage(pkg, packageManager)) {
-            failedInstalls.push(pkg);
-          }
-        }
-        
-        if (failedInstalls.length > 0) {
-          const error = new DependencyError(
-            `Failed to install packages: ${failedInstalls.join(', ')}`,
-            'dependency-verification',
-            null,
-            `Run "${packageManager} install" to install all dependencies manually.`
-          );
-          
-          if (errorTracker) {
-            errorTracker.addError(error);
-          }
-          
-          resolve({
-            success: false,
-            missingPackages: failedInstalls,
-            missingCommands
-          });
-          return;
-        }
-        
-        logger.success('Successfully installed all missing packages.');
-        // Re-call the function without async/await and use a then() promise chain
-        verifyDependencies({ 
-          requiredPackages, 
-          requiredCommands, 
-          autoInstall: false,
-          errorTracker
-        }).then(retryResult => {
-          resolve(retryResult);
-        });
-        return;
+    return 0;
+  }
+
+  /**
+   * Find duplicate dependencies
+   * @private
+   * @param {Object} deps - Dependencies object
+   * @returns {string[]} List of duplicate dependencies
+   */
+  findDuplicateDependencies(deps) {
+    const seen = new Map();
+    const duplicates = [];
+
+    for (const [dep, version] of Object.entries(deps)) {
+      if (seen.has(dep)) {
+        duplicates.push(dep);
       } else {
-        const packageManager = detectPackageManager();
-        const installCommand = {
-          'npm': `npm install`,
-          'yarn': `yarn install`,
-          'pnpm': `pnpm install`
-        }[packageManager];
-        
-        const error = new DependencyError(
-          `Missing required packages: ${missingPackages.join(', ')}`,
-          'dependency-verification',
-          null,
-          `Run "${installCommand}" to install all dependencies.`
-        );
-        
-        if (errorTracker) {
-          errorTracker.addError(error);
-        }
+        seen.set(dep, version);
       }
     }
-    
-    // Report missing commands
-    if (missingCommands.length > 0) {
-      const commandSuggestions = missingCommands.map(cmd => {
-        if (cmd === 'firebase') return 'npm install -g firebase-tools';
-        if (cmd === 'git') return 'Install Git from https://git-scm.com/downloads';
-        if (cmd === 'node') return 'Install Node.js from https://nodejs.org/';
-        return `Install ${cmd} for your operating system`;
-      });
-      
-      const error = new DependencyError(
-        `Missing required commands: ${missingCommands.join(', ')}`,
-        'dependency-verification',
-        null,
-        commandSuggestions.join('\n')
-      );
-      
-      if (errorTracker) {
-        errorTracker.addError(error);
-      }
-    }
-    
-    // Resolve with the final result
-    resolve({
-      success: false,
-      missingPackages,
-      missingCommands
-    });
-  });
+
+    return duplicates;
+  }
 }
 
-/**
- * Creates a dependency checker with pre-configured options
- * 
- * @function createDependencyChecker
- * @param {Object} defaultOptions - Default configuration options for verifyDependencies
- * @returns {Function} Configured dependency checker function that accepts additional options
- * @description Factory function that creates a specialized dependency checker with pre-configured
- * default options. This is useful when you need to check similar dependencies in multiple places
- * but with slight variations.
- * @example
- * // Create a checker for Firebase-related dependencies
- * const checkFirebaseDeps = createDependencyChecker({
- *   requiredPackages: ['firebase-tools', 'firebase-admin'],
- *   requiredCommands: ['firebase'],
- *   errorTracker
- * });
- * 
- * // Later in the code, use the checker with additional options
- * const result = checkFirebaseDeps({
- *   // These options will be merged with the defaults
- *   autoInstall: true
- * });
- * 
- * if (!result.success) {
- *   console.error('Firebase dependencies not satisfied');
- * }
- */
-export function createDependencyChecker(defaultOptions = {}) {
-  return function(options = {}) {
-    return verifyDependencies({
-      ...defaultOptions,
-      ...options
-    });
-  };
-}
-
-/**
- * Alias for verifyDependencies for backward compatibility
- * 
- * @function checkDependencies
- * @type {function}
- * @description Alias of the verifyDependencies function to maintain backward compatibility
- * with older code that might still use the checkDependencies function name.
- * New code should use verifyDependencies instead.
- */
-export const checkDependencies = verifyDependencies; 
+export const dependencyChecker = new DependencyChecker(); 

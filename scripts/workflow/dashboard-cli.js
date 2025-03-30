@@ -8,22 +8,15 @@
  */
 
 // Core imports
-import * as path from 'path';
+import { logger } from '../core/logger.js';
 import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
-
-// Polyfill global process object for ESM
-const require = createRequire(import.meta.url);
+import { dirname } from 'path';
+import { generateDashboard } from './dashboard-generator.js';
 import process from 'process';
 
-// Import modules
-import * as logger from '../core/logger.js';
-import * as consolidatedReport from './consolidated-report.js';
-import * as dashboardGenerator from './dashboard-generator.js';
-
-// Configuration
-const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = path.resolve(SCRIPT_DIR, '../..');
+// Get the script's directory for resolving paths
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Parse command line arguments
 function parseArgs() {
@@ -76,10 +69,10 @@ async function handleGenerate(options) {
   logger.info("Generating dashboard...");
   
   if (options.cleanup) {
-    await dashboardGenerator.cleanupDashboard();
+    await generateDashboard.cleanupDashboard();
   }
   
-  const result = await dashboardGenerator.generateDashboard({
+  const result = await generateDashboard.generateDashboard({
     openInBrowser: !options.skipOpen,
     verbose: options.verbose
   });
@@ -99,9 +92,9 @@ async function handleOpen() {
   logger.info("Opening dashboard...");
   
   // Load preview URLs
-  const previewUrls = dashboardGenerator.loadPreviewUrls();
+  const previewUrls = generateDashboard.loadPreviewUrls();
   
-  const result = await dashboardGenerator.generateDashboard({
+  const result = await generateDashboard.generateDashboard({
     previewUrls,
     openInBrowser: true
   });
@@ -119,7 +112,7 @@ async function handleOpen() {
 async function handleCleanup() {
   logger.info("Cleaning up dashboard and report files...");
   
-  const result = await dashboardGenerator.cleanupDashboard();
+  const result = await generateDashboard.cleanupDashboard();
   
   if (result.success) {
     logger.success("Dashboard and reports cleaned up successfully!");
@@ -161,7 +154,7 @@ async function main() {
 }
 
 // Run if executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (__filename === process.argv[1]) {
   main().catch(error => {
     logger.error(`Uncaught error: ${error.message}`);
     logger.debug(error.stack || error);

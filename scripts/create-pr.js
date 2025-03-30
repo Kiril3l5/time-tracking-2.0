@@ -31,7 +31,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import * as logger from './core/logger.js';
+import { logger } from './core/logger.js';
 
 // Get the root directory
 const __filename = fileURLToPath(import.meta.url);

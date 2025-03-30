@@ -36,7 +36,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import * as logger from './logger.js';
+import { logger } from './logger.js';
 
 /* global process */
 

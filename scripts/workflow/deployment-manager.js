@@ -1,208 +1,214 @@
 /**
  * Deployment Manager Module
  * 
- * Handles deployment to Firebase preview channels and URL extraction.
- * Properly integrates with existing Firebase modules.
+ * Handles deployment of packages to preview environments.
+ * Manages Firebase deployments and channel cleanup.
  */
 
-import * as logger from '../core/logger.js';
-import * as authManager from '../auth/auth-manager.js';
-import * as channelCleanup from '../firebase/channel-cleanup.js';
-import * as channelManager from '../firebase/channel-manager.js';
-import * as deploymentManager from '../firebase/deployment.js';
-import * as urlExtractor from '../firebase/url-extractor.js';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
+import { progressTracker } from '../core/progress-tracker.js';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+import { verifyAllAuth } from '../auth/auth-manager.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 /**
- * Extract user information from auth result
- * @param {Object} authResult - Authentication result object
- * @returns {Object} - Extracted user information
- */
-function extractUserInfo(authResult) {
-  if (!authResult || !authResult.services) {
-    return {
-      gitUserName: "Unknown",
-      gitUserEmail: "Unknown",
-      firebaseEmail: "Unknown"
-    };
-  }
-
-  // Extract Git user info with proper fallbacks
-  const gitInfo = authResult.services.gitAuth || {};
-  const gitUserName = gitInfo.userName || gitInfo.name || "Unknown";
-  const gitUserEmail = gitInfo.userEmail || gitInfo.email || "Unknown";
-  
-  // Extract Firebase info with proper fallbacks
-  const firebaseInfo = authResult.services.firebase || {};
-  const firebaseEmail = firebaseInfo.email || (firebaseInfo.user ? firebaseInfo.user.email : "Unknown");
-  
-  return {
-    gitUserName,
-    gitUserEmail,
-    firebaseEmail
-  };
-}
-
-/**
- * Verify authentication for deployment
- * @param {Function} promptFn - Function to prompt the user
- * @returns {Promise<boolean>} - Success status
- */
-export async function verifyAuthentication(promptFn) {
-  logger.info("Verifying authentication...");
-  const authResult = await authManager.verifyAllAuth();
-  
-  if (!authResult.success) {
-    logger.error("Authentication verification failed.");
-    
-    if (!authResult.services.firebase.authenticated) {
-      logger.error("Firebase authentication failed. Run: firebase login");
-    }
-    
-    if (!authResult.services.gitAuth.authenticated) {
-      logger.error("Git authentication failed. Configure Git user name and email.");
-    }
-    
-    const continueAnyway = await promptFn("Continue with the workflow anyway? (y/N)", "N");
-    return continueAnyway.toLowerCase() === 'y';
-  } else {
-    const { gitUserName, gitUserEmail, firebaseEmail } = extractUserInfo(authResult);
-    
-    logger.success(`Firebase authenticated as: ${firebaseEmail}`);
-    logger.success(`Git user: ${gitUserName} <${gitUserEmail}>`);
-    return true;
-  }
-}
-
-/**
- * Deploy to Firebase preview channel
+ * Deploy a package to preview environment
+ * @param {string} pkg - Package name
  * @param {Object} options - Deployment options
- * @param {string} options.branchName - Current branch name
- * @param {boolean} options.skipBuild - Whether to skip build
- * @param {Function} options.promptFn - Function to prompt the user
- * @returns {Promise<{success: boolean, previewUrls?: Object}>} - Success status and preview URLs
+ * @returns {Promise<Object>} Deployment result
  */
-export async function deployToPreview(options) {
-  const { branchName, skipBuild = false, promptFn } = options;
-  
+export async function deployPackage(pkg, options = {}) {
+  const startTime = Date.now();
+  const result = {
+    success: false,
+    previewUrl: null,
+    error: null,
+    duration: 0
+  };
+
   try {
-    logger.info(`Deploying branch '${branchName}' to Firebase preview channel`);
-    
-    // Use the existing deployment module
-    const deployResult = await deploymentManager.deployToPreviewChannel({
-      skipBuild,
-      branchName,
-      verbose: options.verbose
+    logger.info(`Deploying package: ${pkg}`);
+
+    // Verify authentication using the auth manager
+    const authResult = await verifyAllAuth({
+      requireFirebase: true,
+      requireGit: false,
+      progressTracker
     });
-    
-    if (!deployResult || !deployResult.success) {
-      logger.error("Preview deployment failed.");
-      
-      if (promptFn) {
-        const continueAnyway = await promptFn("Continue despite deployment failure? (y/N)", "N");
-        return { 
-          success: continueAnyway.toLowerCase() === 'y',
-          error: "Deployment failed"
-        };
-      }
-      
-      return { success: false, error: "Deployment failed" };
+
+    if (!authResult.success) {
+      throw new Error(authResult.errors.join(', '));
     }
-    
-    // Get preview URLs
-    let previewUrls = deployResult.previewUrls || null;
-    
-    // If URLs weren't returned directly, try to extract them
-    if (!previewUrls && deployResult.logs) {
-      try {
-        previewUrls = urlExtractor.extractPreviewUrls(deployResult.logs);
-        logger.success("Successfully extracted preview URLs");
-      } catch (error) {
-        logger.warn(`Error extracting preview URLs: ${error.message}`);
-      }
+
+    // Deploy to Firebase
+    const deployResult = await deployToFirebase(pkg, options);
+    if (!deployResult.success) {
+      throw new Error(deployResult.error);
     }
-    
-    // Log the URLs
-    if (previewUrls && (previewUrls.admin || previewUrls.hours)) {
-      logger.info("\nPreview URLs:");
-      
-      if (previewUrls.admin) {
-        logger.info(`Admin Dashboard: ${previewUrls.admin}`);
-      }
-      
-      if (previewUrls.hours) {
-        logger.info(`Hours App: ${previewUrls.hours}`);
-      }
-    } else {
-      logger.warn("No preview URLs found");
+
+    // Extract preview URL
+    const previewUrl = extractPreviewUrl(deployResult.output);
+    if (!previewUrl) {
+      throw new Error('Failed to extract preview URL');
     }
-    
-    return { 
-      success: true, 
-      previewUrls 
+
+    result.success = true;
+    result.previewUrl = previewUrl;
+    result.duration = Date.now() - startTime;
+
+    return result;
+
+  } catch (error) {
+    logger.error(`Deployment failed for package ${pkg}:`, error);
+    result.error = error.message;
+    result.duration = Date.now() - startTime;
+    return result;
+  }
+}
+
+/**
+ * Deploy package to Firebase
+ * @param {string} pkg - Package name
+ * @param {Object} options - Deployment options
+ * @returns {Promise<Object>} Deployment result
+ */
+async function deployToFirebase(pkg, options) {
+  try {
+    const result = await commandRunner.runCommand(`firebase deploy --only hosting:${pkg}`, {
+      cwd: dirname(__dirname),
+      stdio: 'inherit'
+    });
+
+    return {
+      success: result.success,
+      output: result.output,
+      error: result.success ? null : 'Deployment failed'
     };
   } catch (error) {
-    logger.error(`Deployment error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message 
+    return {
+      success: false,
+      output: null,
+      error: error.message
     };
   }
 }
 
 /**
- * Clean up old preview channels
+ * Extract preview URL from deployment output
+ * @param {string} output - Deployment output
+ * @returns {string|null} Preview URL
+ */
+function extractPreviewUrl(output) {
+  if (!output) return null;
+
+  // Look for URL pattern in output
+  const urlMatch = output.match(/https:\/\/[a-zA-Z0-9-]+\.web\.app/);
+  return urlMatch ? urlMatch[0] : null;
+}
+
+/**
+ * Clean up preview channels
  * @param {Object} options - Cleanup options
- * @param {boolean} options.auto - Whether to automatically clean up 
- * @param {Function} options.promptFn - Function to prompt the user
- * @returns {Promise<boolean>} - Success status
+ * @returns {Promise<Object>} Cleanup result
  */
 export async function cleanupPreviewChannels(options = {}) {
+  const startTime = Date.now();
+  const result = {
+    success: false,
+    channelsCleaned: 0,
+    error: null,
+    duration: 0
+  };
+
   try {
-    logger.info("Checking for old preview channels to clean up...");
-    
-    // Check how many channels exist
-    const channelList = await channelManager.listChannels();
-    logger.info(`Found ${channelList.length} preview channels.`);
-    
-    // Run cleanup if needed (threshold is 5 channels)
-    if (channelList.length > 5) {
-      logger.info("Running channel cleanup to remove old channels...");
-      
-      // If auto cleanup is enabled or user confirms
-      let shouldCleanup = options.auto;
-      
-      if (!shouldCleanup && options.promptFn) {
-        const confirm = await options.promptFn(
-          `There are ${channelList.length} channels (threshold: 5). Clean up old channels? (Y/n)`, 
-          "Y"
-        );
-        shouldCleanup = confirm.toLowerCase() !== 'n';
-      }
-      
-      if (shouldCleanup) {
-        await channelCleanup.cleanupChannels({ 
-          auto: true,
-          verbose: options.verbose
-        });
-        logger.success("Successfully cleaned up old preview channels");
-      } else {
-        logger.info("Channel cleanup skipped by user");
-      }
-    } else {
-      logger.info("Channel cleanup not needed (less than 5 channels exist).");
+    logger.info('Cleaning up preview channels...');
+
+    // Get list of channels
+    const channelsResult = await commandRunner.runCommand('firebase hosting:channel:list', {
+      cwd: dirname(__dirname),
+      stdio: 'inherit'
+    });
+
+    if (!channelsResult.success) {
+      throw new Error('Failed to list channels');
     }
-    
-    return true;
+
+    // Parse channels and clean up old ones
+    const channels = parseChannels(channelsResult.output);
+    const channelsToClean = filterChannelsToClean(channels, options);
+
+    // Delete channels
+    for (const channel of channelsToClean) {
+      const deleteResult = await commandRunner.runCommand(`firebase hosting:channel:delete ${channel.id}`, {
+        cwd: dirname(__dirname),
+        stdio: 'inherit'
+      });
+
+      if (deleteResult.success) {
+        result.channelsCleaned++;
+      }
+    }
+
+    result.success = true;
+    result.duration = Date.now() - startTime;
+
+    return result;
+
   } catch (error) {
-    logger.warn(`Channel management error: ${error.message}`);
-    logger.info("Continuing despite channel management error.");
-    return false;
+    logger.error('Channel cleanup failed:', error);
+    result.error = error.message;
+    result.duration = Date.now() - startTime;
+    return result;
   }
+}
+
+/**
+ * Parse channel list from Firebase output
+ * @param {string} output - Firebase output
+ * @returns {Array<Object>} List of channels
+ */
+function parseChannels(output) {
+  if (!output) return [];
+
+  // Parse channel information from output
+  const lines = output.split('\n');
+  const channels = [];
+
+  for (const line of lines) {
+    const match = line.match(/([a-zA-Z0-9-]+)\s+([^\s]+)\s+([^\s]+)/);
+    if (match) {
+      channels.push({
+        id: match[1],
+        url: match[2],
+        lastUpdated: match[3]
+      });
+    }
+  }
+
+  return channels;
+}
+
+/**
+ * Filter channels that should be cleaned up
+ * @param {Array<Object>} channels - List of channels
+ * @param {Object} options - Filter options
+ * @returns {Array<Object>} Channels to clean
+ */
+function filterChannelsToClean(channels, options) {
+  const now = new Date();
+  const maxAge = options.maxAge || 7 * 24 * 60 * 60 * 1000; // 7 days default
+
+  return channels.filter(channel => {
+    const lastUpdated = new Date(channel.lastUpdated);
+    return now - lastUpdated > maxAge;
+  });
 }
 
 export default {
-  verifyAuthentication,
-  deployToPreview,
-  cleanupPreviewChannels,
-  extractUserInfo
+  deployPackage,
+  cleanupPreviewChannels
 }; 

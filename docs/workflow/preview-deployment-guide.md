@@ -2,9 +2,51 @@
 
 This comprehensive guide covers both the technical architecture and user instructions for the Preview Deployment Workflow system.
 
+> **Related Documentation**
+> - [Automated Workflow Guide](./automated-workflow-guide.md) - Overview of the complete development workflow
+> - [Firebase Configuration Guide](../firebase/firebase-config-guide.md) - Firebase setup and configuration
+> - [GitHub Workflow Guide](../github/github-workflow-guide.md) - PR creation and management
+> - [Security Implementation Guide](../main_readme/security-implementation-guide.md) - For security details
+
+## How This Guide Fits In
+
+This guide is part of our larger development workflow documentation:
+
+1. **Automated Workflow Guide**: Provides the high-level overview and step-by-step instructions
+2. **This Guide**: Focuses on the technical details of preview deployments
+3. **Firebase Guide**: Covers Firebase configuration and setup
+4. **GitHub Guide**: Details PR creation and management
+
+When using the automated workflow:
+1. The workflow guide will tell you when a preview deployment is needed
+2. This guide provides the technical details about how previews work
+3. Use this guide for troubleshooting or when you need to run preview deployments manually
+
 ## 📘 Quick Start Guide for Users
 
 > **This section is a beginner-friendly guide to using our Firebase preview deployment tools.**
+
+### Integration with Automated Workflow
+
+The preview deployment is a key step in the automated workflow. When you run `pnpm run workflow`:
+
+1. The workflow will automatically:
+   - Run quality checks
+   - Build the application
+   - Deploy to a preview channel
+   - Create a PR with the preview URL
+
+2. You can also run preview deployments independently:
+   ```bash
+   # Run just the preview deployment
+   pnpm run preview
+   
+   # Create preview and PR
+   pnpm run preview-and-pr
+   
+   # Quick preview with PR
+   pnpm run preview-quick-and-pr
+   ```
 
 ### What You Can Do
 
@@ -29,12 +71,20 @@ This comprehensive guide covers both the technical architecture and user instruc
 | `pnpm run preview:list` | Legacy command to list all active preview channels |
 | `pnpm run preview:cleanup` | Legacy interactive tool to clean up old preview channels |
 | `pnpm run preview:cleanup:auto` | Legacy command to automatically clean up old channels |
+| `pnpm run preview:analyze` | Run bundle analysis and dead code detection |
+| `pnpm run preview:quality` | Run all quality checks including documentation freshness |
 
 ### New Command-Line Options
 
 | Option | Description |
 |--------|-------------|
 | `--auto-install-deps` | Automatically install missing dependencies |
+| `--skip-bundle-analysis` | Skip bundle size analysis |
+| `--skip-dead-code` | Skip dead code detection |
+| `--skip-doc-freshness` | Skip documentation freshness check |
+| `--bundle-threshold=<size>` | Set bundle size warning threshold |
+| `--dead-code-threshold=<lines>` | Set dead code warning threshold |
+| `--doc-freshness-days=<days>` | Set documentation freshness threshold |
 
 ### Step-by-Step Instructions
 
@@ -55,12 +105,12 @@ The preview script will:
 - **Automatically clean up old previews** if necessary
 - **Build all packages** (common, admin, hours)
 - **Analyze bundle sizes** - Checks for significant increases in bundle size
-- **Scan for dependency vulnerabilities** - Identifies security risks in your dependencies
+- **Run dependency audit** - Uses `pnpm audit` to check for known vulnerabilities in dependencies
 - **Detect dead code** - Finds unused code, imports, and CSS
 - **Check documentation quality** - Identifies duplicate content and validates key documentation
-- **Verify module syntax consistency** - Ensures consistent ES Module usage
+- **Run ESLint checks** - Validates code quality including import syntax consistency
 - **Validate GitHub workflow files** - Checks workflow configurations against package.json scripts
-- **Deploy to a new unique preview channel** with your git branch name (without rebuilding thanks to skipBuild optimization)
+- **Deploy to a new unique preview channel** with your git branch name
 - **Show you the working preview URLs**
 
 Example output:
@@ -88,9 +138,22 @@ Step 6: Analyzing bundle sizes...
 ✓ Bundle size analysis passed
 Bundle size report generated at ./bundle-report.html
 
-Step 7: Scanning dependencies for vulnerabilities...
+Step 7: Running dependency audit...
 ✓ No vulnerabilities found
-...
+Audit report generated at ./audit-report.json
+
+Step 8: Detecting dead code...
+✓ Dead code analysis passed
+Dead code report generated at ./dead-code-report.html
+
+Step 9: Running ESLint checks...
+✓ ESLint checks passed
+Lint report generated at ./lint-report.json
+
+Step 10: Checking documentation freshness...
+✓ Documentation freshness check passed
+Documentation report generated at ./doc-report.html
+
 Deploying to channel: preview-feature-login-20240510123456
 ...
 Preview URLs:
@@ -168,14 +231,30 @@ This improved error handling:
 
 #### Troubleshooting Quick Tips
 
-- **Authentication Issues?** Run `firebase login` to verify you're logged in
-- **Git Issues?** Make sure your Git user name and email are configured
-- **Empty Preview?** Make sure your `.env` file has all Firebase variables
-- **URL Not Working?** Try opening in an incognito window or clearing browser cache
-- **Hit 10 Channel Limit?** Run `pnpm run channels:cleanup` to remove old previews
-- **Failed Vulnerability Scan?** Check vulnerability-report.html for details
-- **Missing Packages?** Run `pnpm install` to install all required dependencies or use the `--auto-install-deps` flag
-- **Errors in Workflow?** Check the detailed error messages and suggested fixes in the error summary
+- **Authentication Issues?** 
+  - Run `firebase login` to verify you're logged in
+  - See [Firebase Configuration Guide](../firebase/firebase-config-guide.md) for setup details
+- **Git Issues?** 
+  - Make sure your Git user name and email are configured
+  - See [Automated Workflow Guide](./automated-workflow-guide.md) for Git setup
+- **Empty Preview?** 
+  - Make sure your `.env` file has all Firebase variables
+  - See [Firebase Configuration Guide](../firebase/firebase-config-guide.md) for environment setup
+- **URL Not Working?** 
+  - Try opening in an incognito window or clearing browser cache
+  - Check the [Preview Deployment Guide](./preview-deployment-guide.md#url-troubleshooting) for more details
+- **Hit 10 Channel Limit?** 
+  - Run `pnpm run channels:cleanup` to remove old previews
+  - See [Channel Management](./preview-deployment-guide.md#channel-management) for details
+- **Failed Vulnerability Scan?** 
+  - Check vulnerability-report.html for details
+  - See [Security Best Practices](./preview-deployment-guide.md#security) for guidance
+- **Missing Packages?** 
+  - Run `pnpm install` to install all required dependencies
+  - Use the `--auto-install-deps` flag for automatic installation
+- **Errors in Workflow?** 
+  - Check the detailed error messages and suggested fixes
+  - See [Automated Workflow Guide](./automated-workflow-guide.md#troubleshooting) for workflow-specific issues
 
 ### Bundle Size Analysis
 
@@ -391,7 +470,10 @@ scripts/
 │   ├── progress-tracker.js    # Step progress visualization
 │   ├── config.js              # Configuration parsing
 │   ├── error-handler.js       # Centralized error handling & aggregation
-│   └── dependency-check.js    # Dependency validation and installation
+│   ├── dependency-check.js    # Dependency validation and installation
+│   ├── performance-monitor.js # Performance monitoring
+│   ├── health-checks.js       # Health check utilities
+│   └── process-utils.js       # Process management utilities
 │
 ├── auth/                      # Authentication-related functionality
 │   ├── firebase-auth.js       # Firebase authentication verification
@@ -411,19 +493,7 @@ scripts/
 │   └── workflow-validation.js # GitHub Actions workflow validation
 │
 ├── typescript/                # TypeScript-specific utilities
-│   ├── error-parser.js        # Parse TypeScript errors with cross-platform support
-│   ├── duplicate-import-fix.js # Fix duplicate import statements
-│   ├── unused-import-fix.js   # Remove unused imports
-│   ├── type-validator.js      # Validate TypeScript types
-│   ├── typescript-fixer.js    # Main TypeScript fixing orchestrator
-│   └── query-types-fixer.js   # Fix React Query type imports
-│
-├── test-types/                # Test-related utilities
-│   ├── firebase-type-def.js   # Firebase testing type definitions
-│   ├── vitest-matchers.js     # Custom test matchers for Vitest
-│   ├── test-setup-manager.js  # Test setup file management
-│   ├── typescript-config.js   # TypeScript configuration for tests
-│   └── test-deps-fixer.js     # Fix test dependencies and JSX runtime
+│   └── type-validator.js      # Validate TypeScript types
 │
 ├── firebase/                  # Firebase-related utilities
 │   ├── channel-manager.js     # List, sort, and manage preview channels
@@ -436,27 +506,19 @@ scripts/
 │   ├── module-syntax-fix.js   # Fix ES module syntax issues
 │   ├── build-runner.js        # Run the build process
 │   ├── build-validator.js     # Validate build outputs
-│   └── build-fallback.js      # Fallback mechanisms for build failures
+│   ├── build-fallback.js      # Fallback mechanisms for build failures
+│   └── build-cache.js         # Build caching utilities
 │
 ├── reports/                   # Report generation utilities
 │   ├── report-collector.js    # Collects and processes individual reports
-│   └── consolidated-report.js # Generates the consolidated HTML dashboard
+│   ├── consolidated-report.js # Generates the consolidated HTML dashboard
+│   └── html-to-json.js        # Converts HTML reports to JSON format
 │
-├── preview/                   # Legacy preview system 
-│   ├── preview.js             # Legacy preview implementation
-│   ├── firebase-deploy.js     # Legacy Firebase deployment
-│   ├── firebase-auth.js       # Legacy authentication
-│   ├── logger.js              # Legacy logging
-│   ├── colors.js              # Legacy color utilities
-│   ├── config.js              # Legacy configuration
-│   ├── environment.js         # Legacy environment handling
-│   ├── github.js              # Legacy GitHub integration
-│   └── progress-tracker.js    # Legacy progress tracking
+├── github/                    # GitHub integration
+│   └── pr-manager.js          # Pull request management
 │
 ├── utils.js                   # Main export index for all utility functions
-├── preview-cleanup.js         # Preview channel cleanup entry point (legacy)
 ├── deploy.js                  # Deployment-only script
-├── deploy-test.js             # Legacy test deployment script
 └── preview.js                 # Main orchestration script
 ```
 
@@ -946,3 +1008,107 @@ For more information on specific workflows, consult these related guides:
 - [Automated Workflow Guide](./automated-workflow-guide.md) - Learn how to use the all-in-one workflow automation tool
 - [Firebase Hosting Documentation](https://firebase.google.com/docs/hosting) - Official Firebase Hosting documentation
 - [GitHub Actions Workflows](./.github/workflows) - CI/CD configuration for the project
+
+### Quality Reports
+
+The preview workflow now generates several quality reports:
+
+1. **Bundle Analysis Report** (`bundle-report.html`)
+   - Total bundle sizes
+   - Individual file sizes
+   - Size changes from previous builds
+   - Optimization suggestions
+
+2. **Dead Code Report** (`dead-code-report.html`)
+   - Unused code locations
+   - Dead imports
+   - Unused CSS
+   - Cleanup suggestions
+
+3. **Documentation Report** (`doc-report.html`)
+   - Documentation coverage
+   - Freshness status
+   - Duplicate content
+   - Missing documentation
+
+4. **Consolidated Report** (`preview-report.html`)
+   - Combined metrics
+   - Quality scores
+   - Performance data
+   - Recommendations
+
+## Performance Optimization
+
+The preview system includes several performance optimizations:
+
+### 1. Preview Generation
+- **Incremental builds** - Only rebuilds changed components
+- **Parallel processing** - Concurrent preview generation
+- **Resource optimization** - Efficient resource usage
+- **Caching strategy** - Smart caching of preview assets
+
+### 2. Preview Delivery
+- **CDN integration** - Fast content delivery
+- **Asset optimization** - Compressed and optimized assets
+- **Lazy loading** - On-demand resource loading
+- **Connection optimization** - Efficient network usage
+
+### 3. Resource Management
+- **Memory efficiency** - Optimized memory usage
+- **Storage optimization** - Efficient storage usage
+- **Cleanup automation** - Automatic resource cleanup
+- **Resource monitoring** - Real-time resource tracking
+
+## Security Features
+
+The preview system includes comprehensive security measures:
+
+### 1. Preview Access
+- **Authentication** - Secure preview access
+- **Authorization** - Role-based access control
+- **Session management** - Secure session handling
+- **Access logging** - Preview access tracking
+
+### 2. Data Protection
+- **Data isolation** - Secure data separation
+- **Encryption** - Data encryption in transit
+- **Secure storage** - Protected data storage
+- **Data validation** - Input validation
+
+### 3. Environment Security
+- **Environment isolation** - Secure environment separation
+- **Configuration protection** - Protected configuration
+- **Secret management** - Secure secret handling
+- **Security monitoring** - Real-time security tracking
+
+## Command Reference
+
+| Command | Description | Options |
+|---------|-------------|---------|
+| `pnpm run preview` | Create preview deployment | `--skip-bundle-analysis`, `--skip-dead-code` |
+| `pnpm run preview:clean` | Clean preview deployments | `--all`, `--older-than=<days>` |
+| `pnpm run preview:list` | List preview deployments | `--active`, `--expired` |
+| `pnpm run preview:info` | Show preview details | `--url`, `--status` |
+| `pnpm run preview:share` | Share preview link | `--team`, `--external` |
+| `pnpm run preview:monitor` | Monitor preview status | `--watch`, `--metrics` |
+| `pnpm run preview:test` | Test preview deployment | `--browser`, `--mobile` |
+| `pnpm run preview:archive` | Archive preview | `--keep-days=<days>` |
+
+### Common Options
+| Option | Description |
+|--------|-------------|
+| `--skip-bundle-analysis` | Skip bundle size analysis |
+| `--skip-dead-code` | Skip dead code detection |
+| `--all` | Clean all preview deployments |
+| `--older-than=<days>` | Clean previews older than specified days |
+| `--active` | Show only active previews |
+| `--expired` | Show only expired previews |
+| `--url` | Show preview URL |
+| `--status` | Show preview status |
+| `--team` | Share with team members |
+| `--external` | Share with external users |
+| `--watch` | Watch for status changes |
+| `--metrics` | Show performance metrics |
+| `--browser` | Test in browser |
+| `--mobile` | Test on mobile devices |
+| `--keep-days=<days>` | Keep preview for specified days |

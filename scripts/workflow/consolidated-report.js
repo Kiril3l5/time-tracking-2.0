@@ -1,413 +1,272 @@
 /**
- * Consolidated Report Module
+ * Consolidated Report Generator
  * 
- * Handles the final reporting step of the workflow, consolidating data
- * from various checks and generating a comprehensive dashboard.
+ * Generates a comprehensive report combining results from:
+ * - Health checks
+ * - TypeScript quality checks
+ * - Test results
+ * - Build results
+ * - Documentation quality
  */
 
-import * as path from 'path';
-import * as fs from 'fs';
-import { execSync } from 'child_process';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
+import { progressTracker } from '../core/progress-tracker.js';
 import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { existsSync, mkdirSync } from 'fs';
+import { execSync } from 'child_process';
+import { readFile, writeFile, mkdir } from 'fs/promises';
+import process from 'node:process';
 
-// Configuration
-const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = path.resolve(SCRIPT_DIR, '../..');
-const TEMP_DIR = path.join(PROJECT_ROOT, '.temp');
-const DASHBOARD_TEMPLATE = path.join(PROJECT_ROOT, 'templates', 'preview-dashboard.html');
-const DASHBOARD_OUTPUT = path.join(TEMP_DIR, 'preview-dashboard.html');
-
-// Report file paths
-const REPORT_PATHS = {
-  bundle: path.join(TEMP_DIR, 'bundle-report.json'),
-  deadCode: path.join(TEMP_DIR, 'deadcode-report.json'),
-  vulnerability: path.join(TEMP_DIR, 'vulnerability-report.json'),
-  docsQuality: path.join(TEMP_DIR, 'docs-quality-report.json'),
-  importSyntax: path.join(TEMP_DIR, 'import-syntax-report.json'),
-  previewUrls: path.join(TEMP_DIR, 'preview-urls.json'),
-  lintErrors: path.join(TEMP_DIR, 'lint-errors.json'),
-  typeErrors: path.join(TEMP_DIR, 'type-errors.json'),
-  testResults: path.join(TEMP_DIR, 'test-results.json'),
-};
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 /**
- * Ensure the temp directory exists
+ * Generate a consolidated report combining all quality metrics
+ * @param {Object} data Report data
+ * @returns {Promise<Object>} Generated report
  */
-function ensureTempDir() {
-  if (!fs.existsSync(TEMP_DIR)) {
-    fs.mkdirSync(TEMP_DIR, { recursive: true });
-  }
-}
+export async function generateReport(data) {
+  const {
+    metrics,
+    qualityResults,
+    documentationResults,
+    bundleAnalysis,
+    deadCodeResults,
+    docFreshnessResults
+  } = data;
 
-/**
- * Save preview URLs to file
- * @param {Object} urls - The preview URLs
- */
-function savePreviewUrls(urls) {
-  ensureTempDir();
-  fs.writeFileSync(
-    REPORT_PATHS.previewUrls,
-    JSON.stringify(urls || {}, null, 2)
-  );
-}
-
-/**
- * Load preview URLs from file
- * @returns {Object} The preview URLs
- */
-function loadPreviewUrls() {
-  try {
-    if (fs.existsSync(REPORT_PATHS.previewUrls)) {
-      return JSON.parse(fs.readFileSync(REPORT_PATHS.previewUrls, 'utf8'));
-    }
-  } catch (error) {
-    logger.debug(`Error loading preview URLs: ${error.message}`);
-  }
-  return {};
-}
-
-/**
- * Load a report file
- * @param {string} reportPath - Path to the report file
- * @returns {Object} The report data or null if not found
- */
-function loadReportFile(reportPath) {
-  try {
-    if (fs.existsSync(reportPath)) {
-      return JSON.parse(fs.readFileSync(reportPath, 'utf8'));
-    }
-  } catch (error) {
-    logger.debug(`Error loading report file ${reportPath}: ${error.message}`);
-  }
-  return null;
-}
-
-/**
- * Load all report data
- * @returns {Object} The consolidated report data
- */
-function loadReportData() {
-  const reports = {
-    bundleSize: loadReportFile(REPORT_PATHS.bundle),
-    deadCode: loadReportFile(REPORT_PATHS.deadCode),
-    vulnerability: loadReportFile(REPORT_PATHS.vulnerability),
-    docsQuality: loadReportFile(REPORT_PATHS.docsQuality),
-    importSyntax: loadReportFile(REPORT_PATHS.importSyntax),
-    lintErrors: loadReportFile(REPORT_PATHS.lintErrors),
-    typeErrors: loadReportFile(REPORT_PATHS.typeErrors),
-    testResults: loadReportFile(REPORT_PATHS.testResults),
-    previewUrls: loadPreviewUrls()
+  const report = {
+    timestamp: new Date().toISOString(),
+    metrics: {
+      ...metrics,
+      bundleSize: bundleAnalysis?.totalSize || 0,
+      deadCodeCount: deadCodeResults?.totalDeadCode || 0,
+      docFreshnessScore: docFreshnessResults?.freshnessScore || 0
+    },
+    quality: {
+      lint: qualityResults?.lint || {},
+      typescript: qualityResults?.typescript || {},
+      tests: qualityResults?.tests || {}
+    },
+    documentation: {
+      quality: documentationResults || {},
+      freshness: docFreshnessResults || {}
+    },
+    bundle: {
+      analysis: bundleAnalysis || {},
+      sizeDiff: bundleAnalysis?.sizeDiff || 0
+    },
+    deadCode: deadCodeResults || {}
   };
-  
-  return reports;
+
+  // Generate HTML report
+  const htmlReport = generateHtmlReport(report);
+
+  // Save report
+  await saveReport(report, htmlReport);
+
+  return report;
 }
 
 /**
- * Generate HTML for the dashboard
- * @param {Object} data - The consolidated report data
- * @returns {string} The HTML content
+ * Generate HTML report
+ * @param {Object} report Report data
+ * @returns {string} HTML report
  */
-function generateDashboardHTML(data) {
-  // Try to use the template if it exists
-  let templateHTML = '';
-  
-  try {
-    if (fs.existsSync(DASHBOARD_TEMPLATE)) {
-      templateHTML = fs.readFileSync(DASHBOARD_TEMPLATE, 'utf8');
-    } else {
-      // If no template found, use a basic template
-      templateHTML = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Preview Dashboard</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 1200px; margin: 0 auto; padding: 20px; }
-    h1, h2, h3 { color: #0066cc; }
-    .card { background: #f9f9f9; border-radius: 5px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-    .success { color: #2ecc71; }
-    .warning { color: #f39c12; }
-    .error { color: #e74c3c; }
-    .url-list { list-style-type: none; padding: 0; }
-    .url-list li { margin-bottom: 10px; }
-    .url-list a { color: #3498db; text-decoration: none; }
-    .url-list a:hover { text-decoration: underline; }
-    .metrics-table { width: 100%; border-collapse: collapse; }
-    .metrics-table th, .metrics-table td { text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }
-    .metrics-table th { background-color: #f2f2f2; }
-  </style>
-</head>
-<body>
-  <h1>Preview Dashboard</h1>
-  
-  <div class="card">
-    <h2>Preview URLs</h2>
-    <ul class="url-list" id="preview-urls">
-      <li>No preview URLs available</li>
-    </ul>
-  </div>
-  
-  <div class="card">
-    <h2>Quality Metrics</h2>
-    <table class="metrics-table" id="quality-metrics">
-      <tr>
-        <th>Metric</th>
-        <th>Status</th>
-        <th>Details</th>
-      </tr>
-      <tr>
-        <td>No metrics available</td>
-        <td></td>
-        <td></td>
-      </tr>
-    </table>
-  </div>
-  
-  <script>
-    // This will be replaced with the actual data
-    const dashboardData = DASHBOARD_DATA_PLACEHOLDER;
-    
-    // Populate preview URLs
-    const urlList = document.getElementById('preview-urls');
-    if (dashboardData.previewUrls && Object.keys(dashboardData.previewUrls).length > 0) {
-      urlList.innerHTML = '';
-      for (const [name, url] of Object.entries(dashboardData.previewUrls)) {
-        urlList.innerHTML += \`<li><strong>\${name}:</strong> <a href="\${url}" target="_blank">\${url}</a></li>\`;
-      }
-    }
-    
-    // Populate quality metrics
-    const metricsTable = document.getElementById('quality-metrics');
-    if (dashboardData) {
-      metricsTable.innerHTML = \`
-        <tr>
-          <th>Metric</th>
-          <th>Status</th>
-          <th>Details</th>
-        </tr>
-      \`;
-      
-      // Add bundle size info
-      if (dashboardData.bundleSize) {
-        const status = dashboardData.bundleSize.sizeIncrease > 10 ? 'warning' : 'success';
-        metricsTable.innerHTML += \`
-          <tr>
-            <td>Bundle Size</td>
-            <td class="\${status}">\${dashboardData.bundleSize.sizeIncrease > 10 ? 'Warning' : 'OK'}</td>
-            <td>\${dashboardData.bundleSize.totalSize ? dashboardData.bundleSize.totalSize + 'KB' : ''} 
-                \${dashboardData.bundleSize.sizeIncrease ? '(' + dashboardData.bundleSize.sizeIncrease + '% change)' : ''}</td>
-          </tr>
-        \`;
-      }
-      
-      // Add dead code info
-      if (dashboardData.deadCode) {
-        const status = dashboardData.deadCode.totalFiles > 0 ? 'warning' : 'success';
-        metricsTable.innerHTML += \`
-          <tr>
-            <td>Dead Code</td>
-            <td class="\${status}">\${dashboardData.deadCode.totalFiles > 0 ? 'Warning' : 'OK'}</td>
-            <td>\${dashboardData.deadCode.totalFiles || 0} files with unused code</td>
-          </tr>
-        \`;
-      }
-      
-      // Add vulnerability info
-      if (dashboardData.vulnerability) {
-        const status = dashboardData.vulnerability.highSeverity > 0 ? 'error' : 'success';
-        metricsTable.innerHTML += \`
-          <tr>
-            <td>Vulnerabilities</td>
-            <td class="\${status}">\${dashboardData.vulnerability.highSeverity > 0 ? 'Critical' : 'OK'}</td>
-            <td>\${dashboardData.vulnerability.highSeverity || 0} high severity, 
-                \${dashboardData.vulnerability.mediumSeverity || 0} medium severity</td>
-          </tr>
-        \`;
-      }
-      
-      // Add docs quality info
-      if (dashboardData.docsQuality) {
-        const status = dashboardData.docsQuality.totalIssues > 0 ? 'warning' : 'success';
-        metricsTable.innerHTML += \`
-          <tr>
-            <td>Documentation</td>
-            <td class="\${status}">\${dashboardData.docsQuality.totalIssues > 0 ? 'Warning' : 'OK'}</td>
-            <td>\${dashboardData.docsQuality.totalIssues || 0} documentation issues</td>
-          </tr>
-        \`;
-      }
-      
-      // Add import syntax info
-      if (dashboardData.importSyntax) {
-        const status = dashboardData.importSyntax.inconsistentFiles > 0 ? 'warning' : 'success';
-        metricsTable.innerHTML += \`
-          <tr>
-            <td>Import Syntax</td>
-            <td class="\${status}">\${dashboardData.importSyntax.inconsistentFiles > 0 ? 'Warning' : 'OK'}</td>
-            <td>\${dashboardData.importSyntax.inconsistentFiles || 0} files with inconsistent imports</td>
-          </tr>
-        \`;
-      }
-      
-      // Add lint error info
-      if (dashboardData.lintErrors) {
-        const status = dashboardData.lintErrors.total > 0 ? 'warning' : 'success';
-        metricsTable.innerHTML += \`
-          <tr>
-            <td>ESLint</td>
-            <td class="\${status}">\${dashboardData.lintErrors.total > 0 ? 'Warning' : 'OK'}</td>
-            <td>\${dashboardData.lintErrors.total || 0} linting issues</td>
-          </tr>
-        \`;
-      }
-      
-      // Add type error info
-      if (dashboardData.typeErrors) {
-        const status = dashboardData.typeErrors.total > 0 ? 'warning' : 'success';
-        metricsTable.innerHTML += \`
-          <tr>
-            <td>TypeScript</td>
-            <td class="\${status}">\${dashboardData.typeErrors.total > 0 ? 'Warning' : 'OK'}</td>
-            <td>\${dashboardData.typeErrors.total || 0} type errors</td>
-          </tr>
-        \`;
-      }
-      
-      // Add test results
-      if (dashboardData.testResults) {
-        const failedTests = dashboardData.testResults.failed || 0;
-        const status = failedTests > 0 ? 'error' : 'success';
-        metricsTable.innerHTML += \`
-          <tr>
-            <td>Tests</td>
-            <td class="\${status}">\${failedTests > 0 ? 'Failed' : 'Passed'}</td>
-            <td>\${dashboardData.testResults.passed || 0} passed, \${failedTests} failed</td>
-          </tr>
-        \`;
-      }
-    }
-  </script>
-</body>
-</html>
-      `;
-    }
-  } catch (error) {
-    logger.error(`Error reading dashboard template: ${error.message}`);
-    return null;
-  }
-  
-  // Replace the placeholder with actual data
-  return templateHTML.replace(
-    'DASHBOARD_DATA_PLACEHOLDER',
-    JSON.stringify(data, null, 2)
-  );
+function generateHtmlReport(report) {
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Workflow Report</title>
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 2rem;
+            background: #f8f9fa;
+          }
+          .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          }
+          h1 {
+            color: #2c3e50;
+            margin-bottom: 2rem;
+          }
+          h2 {
+            color: #34495e;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #eee;
+          }
+          .timestamp {
+            color: #7f8c8d;
+            font-size: 0.9rem;
+            margin-bottom: 2rem;
+          }
+          .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+          }
+          .metric-card {
+            background: #f8f9fa;
+            padding: 1.5rem;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+          }
+          .metric-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #3498db;
+            margin-bottom: 0.5rem;
+          }
+          .metric-label {
+            color: #7f8c8d;
+            font-size: 0.9rem;
+          }
+          .section {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+          }
+          pre {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 0.9rem;
+          }
+          .success {
+            color: #27ae60;
+          }
+          .warning {
+            color: #f1c40f;
+          }
+          .error {
+            color: #e74c3c;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>Workflow Report</h1>
+          <div class="timestamp">Generated: ${report.timestamp}</div>
+          
+          <h2>Metrics</h2>
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <div class="metric-value">${formatBytes(report.metrics.bundleSize)}</div>
+              <div class="metric-label">Bundle Size</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-value">${report.metrics.deadCodeCount}</div>
+              <div class="metric-label">Dead Code Lines</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-value">${report.metrics.docFreshnessScore}%</div>
+              <div class="metric-label">Documentation Freshness</div>
+            </div>
+          </div>
+
+          <h2>Quality Results</h2>
+          <div class="section">
+            <h3>Linting</h3>
+            <pre>${JSON.stringify(report.quality.lint, null, 2)}</pre>
+            
+            <h3>TypeScript</h3>
+            <pre>${JSON.stringify(report.quality.typescript, null, 2)}</pre>
+            
+            <h3>Tests</h3>
+            <pre>${JSON.stringify(report.quality.tests, null, 2)}</pre>
+          </div>
+
+          <h2>Documentation</h2>
+          <div class="section">
+            <h3>Quality</h3>
+            <pre>${JSON.stringify(report.documentation.quality, null, 2)}</pre>
+            
+            <h3>Freshness</h3>
+            <pre>${JSON.stringify(report.documentation.freshness, null, 2)}</pre>
+          </div>
+
+          <h2>Bundle Analysis</h2>
+          <div class="section">
+            <h3>Analysis</h3>
+            <pre>${JSON.stringify(report.bundle.analysis, null, 2)}</pre>
+            
+            <h3>Size Difference</h3>
+            <div class="metric-value ${report.bundle.sizeDiff > 0 ? 'error' : 'success'}">
+              ${formatBytes(report.bundle.sizeDiff)}
+            </div>
+          </div>
+
+          <h2>Dead Code Analysis</h2>
+          <div class="section">
+            <pre>${JSON.stringify(report.deadCode, null, 2)}</pre>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
 }
 
 /**
- * Generate the dashboard file
- * @param {Object} reports - The report data
- * @returns {string} The path to the dashboard file
+ * Save report to file
+ * @param {Object} report Report data
+ * @param {string} htmlReport HTML report
  */
-function generateDashboardFile(reports) {
-  const dashboardHTML = generateDashboardHTML(reports);
-  
-  if (dashboardHTML) {
-    ensureTempDir();
-    fs.writeFileSync(DASHBOARD_OUTPUT, dashboardHTML);
-    logger.success(`Dashboard generated at ${DASHBOARD_OUTPUT}`);
-    return DASHBOARD_OUTPUT;
+async function saveReport(report, htmlReport) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const reportDir = join(process.cwd(), 'reports');
+  const reportFile = join(reportDir, `report-${timestamp}.json`);
+  const htmlFile = join(reportDir, `report-${timestamp}.html`);
+
+  // Ensure reports directory exists
+  if (!existsSync(reportDir)) {
+    mkdirSync(reportDir, { recursive: true });
   }
-  
-  return null;
+
+  // Save JSON report
+  await writeFile(reportFile, JSON.stringify(report, null, 2));
+  logger.info(`Saved JSON report to: ${reportFile}`);
+
+  // Save HTML report
+  await writeFile(htmlFile, htmlReport);
+  logger.info(`Saved HTML report to: ${htmlFile}`);
+
+  return {
+    json: reportFile,
+    html: htmlFile
+  };
 }
 
 /**
- * Open the dashboard in the default browser
- * @param {string} dashboardPath - Path to the dashboard file
+ * Format bytes to human readable string
+ * @param {number} bytes Number of bytes
+ * @returns {string} Formatted string
  */
-async function openDashboard(dashboardPath) {
-  try {
-    const open = (await import('open')).default;
-    await open(`file://${dashboardPath}`);
-    logger.info("Dashboard opened in browser");
-  } catch (error) {
-    logger.error(`Error opening dashboard: ${error.message}`);
-    logger.info(`You can manually open the dashboard at: ${dashboardPath}`);
-  }
-}
-
-/**
- * Run the consolidated report generation
- * @param {Object} options - Report options
- * @param {Object} options.previewUrls - Preview URLs to include in the report
- * @param {boolean} options.openInBrowser - Whether to open the dashboard in the browser
- * @returns {Promise<{success: boolean, dashboardPath: string}>} - Result
- */
-export async function generateConsolidatedReport(options = {}) {
-  logger.info("Generating consolidated report...");
-  
-  try {
-    // Save preview URLs if provided
-    if (options.previewUrls) {
-      savePreviewUrls(options.previewUrls);
-    }
-    
-    // Load all report data
-    const reportData = loadReportData();
-    
-    // Generate the dashboard file
-    const dashboardPath = generateDashboardFile(reportData);
-    
-    // Open in browser if requested
-    if (options.openInBrowser && dashboardPath) {
-      await openDashboard(dashboardPath);
-    }
-    
-    return {
-      success: true,
-      dashboardPath
-    };
-  } catch (error) {
-    logger.error(`Error generating consolidated report: ${error.message}`);
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-}
-
-/**
- * Clean up report files
- * @returns {Promise<{success: boolean}>} - Result
- */
-export async function cleanupReports() {
-  logger.info("Cleaning up report files...");
-  
-  try {
-    const reportFiles = Object.values(REPORT_PATHS);
-    
-    for (const reportFile of reportFiles) {
-      if (fs.existsSync(reportFile)) {
-        fs.unlinkSync(reportFile);
-      }
-    }
-    
-    return { success: true };
-  } catch (error) {
-    logger.error(`Error cleaning up reports: ${error.message}`);
-    return {
-      success: false,
-      error: error.message
-    };
-  }
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 export default {
-  generateConsolidatedReport,
-  savePreviewUrls,
-  loadPreviewUrls,
-  cleanupReports
+  generateReport
 }; 

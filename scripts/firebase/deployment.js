@@ -39,12 +39,12 @@
  * });
  */
 
-import * as commandRunner from '../core/command-runner.js';
-import * as logger from '../core/logger.js';
-import * as config from '../core/config.js';
-import * as urlExtractor from './url-extractor.js';
-import * as path from 'path';
-import * as fs from 'fs';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
+import { config } from '../core/config.js';
+import { urlExtractor } from './url-extractor.js';
+import path from 'path';
+import fs from 'fs';
 
 /* global process */
 

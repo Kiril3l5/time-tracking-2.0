@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execSync } from 'child_process';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
 import fs from 'fs';
 import path from 'path';
 

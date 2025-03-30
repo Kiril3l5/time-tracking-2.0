@@ -30,9 +30,10 @@
  * console.log(`Latest commit: ${commitMessage}`);
  */
 
-import * as commandRunner from '../core/command-runner.js';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
 import fs from 'fs';
+import fetch from 'node-fetch';
 
 /* global process */
 
@@ -551,20 +552,13 @@ export function getRepositoryInfo() {
     
     const url = result.output.trim();
     
-    // Parse different git URL formats
-    let match;
-    
-    // HTTPS format: https://github.com/owner/repo.git
-    match = url.match(/https:\/\/github\.com\/([^\/]+)\/([^\/\.]+)(\.git)?$/);
-    if (match) {
-      return {
-        owner: match[1],
-        repo: match[2]
-      };
+    // Try HTTPS format
+    let match = url.match(/https:\/\/github.com\/([^/]+)\/([^/.]+)(.git)?$/);
+    if (!match) {
+      // Try SSH format
+      match = url.match(/git@github.com:([^/]+)\/([^/.]+)(.git)?$/);
     }
     
-    // SSH format: git@github.com:owner/repo.git
-    match = url.match(/git@github\.com:([^\/]+)\/([^\/\.]+)(\.git)?$/);
     if (match) {
       return {
         owner: match[1],

@@ -38,28 +38,29 @@
 import { parseArgs } from 'node:util';
 
 // Import core modules
-import * as logger from './core/logger.js';
-import * as commandRunner from './core/command-runner.js';
-import * as config from './core/config.js';
-import * as environment from './core/environment.js';
-import * as _progressTracker from './core/progress-tracker.js';
+import { logger } from './core/logger.js';
+import { commandRunner } from './core/command-runner.js';
+import { config } from './core/config.js';
+import { environment } from './core/environment.js';
+import { progressTracker } from './core/progress-tracker.js';
+import { performanceMonitor } from './core/performance-monitor.js';
 
 // Import authentication modules
-import * as _firebaseAuth from './auth/firebase-auth.js';
-import * as _github from './auth/git-auth.js';
-import * as authManager from './auth/auth-manager.js';
+import { verifyFirebaseAuth } from './auth/firebase-auth.js';
+import { verifyGitAuth } from './auth/git-auth.js';
+import { verifyAuth } from './auth/auth-manager.js';
 
 // Import test and check modules
-import * as testRunner from './checks/test-runner.js';
-import * as _lintCheck from './checks/lint-check.js';
-import * as _typescriptCheck from './checks/typescript-check.js';
-import * as _typeValidator from './typescript/type-validator.js';
+import { runTests } from './checks/test-runner.js';
+import { runLintCheck } from './checks/lint-check.js';
+import { runTypeScriptCheck } from './checks/typescript-check.js';
+import { validateTypes } from './typescript/type-validator.js';
 
 // Import Firebase modules
-import * as deployment from './firebase/deployment.js';
+import { deployToFirebase } from './firebase/deployment.js';
 
 // Import build modules
-import * as buildManager from './build/build-manager.js';
+import { buildPackages } from './build/build-manager.js';
 
 /* global process */
 
@@ -148,7 +149,7 @@ async function verifyAuthentication() {
   logger.sectionHeader('Verifying Authentication');
   
   // Check for authentication using the auth manager
-  const authResult = await authManager.verifyAllAuth();
+  const authResult = await verifyAuth();
   
   if (authResult.success) {
     logger.success('Authentication verified successfully');
@@ -210,7 +211,7 @@ async function runQualityChecks(args) {
   }
   
   // Run the tests
-  const testResults = await testRunner.runTests(tests, {
+  const testResults = await runTests(tests, {
     stopOnFailure: true,
     verbose: args.verbose
   });
@@ -246,7 +247,7 @@ async function buildApplication(args) {
   });
   
   // Run the build
-  const buildResult = await buildManager.runBuild({
+  const buildResult = await buildPackages.runBuild({
     buildScript,
     envType: 'production',
     clean: true,
@@ -257,7 +258,7 @@ async function buildApplication(args) {
   
   if (buildResult.success) {
     // Get build size info
-    const sizeInfo = buildManager.getBuildSize({
+    const sizeInfo = buildPackages.getBuildSize({
       buildDir: config.getFirebaseConfig().buildDir || 'build'
     });
     
@@ -396,7 +397,7 @@ async function deployProduction(args) {
   }
   
   // Deploy to Firebase hosting
-  const deployResult = await deployment.deployToProduction({
+  const deployResult = await deployToFirebase({
     projectId,
     site,
     buildDir,
@@ -443,7 +444,7 @@ async function main() {
     
     // Enable verbose logging if specified
     if (args.verbose) {
-      logger.setVerbose(true);
+      logger.setLevel('debug');
     }
     
     // Start log file if requested

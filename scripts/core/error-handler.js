@@ -40,9 +40,10 @@
  * }
  */
 
-import * as logger from './logger.js';
+import { logger } from './logger.js';
+import { performanceMonitor } from './performance-monitor.js';
 
-/* global process */
+/* global process, console */
 
 /**
  * Base error class for workflow errors
@@ -64,17 +65,15 @@ export class WorkflowError extends Error {
    * Create a new workflow error
    * 
    * @param {string} message - Error message describing what went wrong
-   * @param {string} [step=null] - Workflow step where the error occurred (e.g., 'Authentication', 'Build')
-   * @param {Error} [cause=null] - Original error that caused this error (for error chaining)
-   * @param {string} [suggestion=null] - Suggestion for resolving the error
+   * @param {string} [category=workflow] - Category of the error (e.g., 'authentication', 'validation', 'resource', 'performance')
+   * @param {string} [severity=error] - Severity of the error (e.g., 'error', 'warning')
    */
-  constructor(message, step = null, cause = null, suggestion = null) {
+  constructor(message, category = 'workflow', severity = 'error') {
     super(message);
-    this.name = this.constructor.name;
-    this.step = step;
-    this.cause = cause;
-    this.suggestion = suggestion;
-    this.timestamp = new Date();
+    this.name = 'WorkflowError';
+    this.category = category;
+    this.severity = severity;
+    this.timestamp = new Date().toISOString();
   }
 
   /**
@@ -91,18 +90,59 @@ export class WorkflowError extends Error {
   format() {
     let result = `[${this.name}] ${this.message}`;
     
-    if (this.step) {
-      result += `\nStep: ${this.step}`;
+    if (this.category) {
+      result += `\nCategory: ${this.category}`;
     }
     
-    if (this.cause) {
-      result += `\nCause: ${this.cause.message}`;
+    if (this.severity) {
+      result += `\nSeverity: ${this.severity}`;
     }
     
+    return result;
+  }
+}
+
+/**
+ * Error in validation step
+ * 
+ * @class ValidationError
+ * @extends WorkflowError
+ * @description Specialized error for validation-related issues, such as
+ * invalid configuration, missing required fields, or format violations.
+ * @example
+ * const validationError = new ValidationError(
+ *   "Invalid configuration format", 
+ *   "config",
+ *   originalError
+ * );
+ */
+export class ValidationError extends WorkflowError {
+  /**
+   * Create a new validation error
+   * 
+   * @param {string} message - Error message describing the validation failure
+   * @param {string} [field=null] - Field that failed validation
+   * @param {Error} [cause=null] - Original error that caused this failure
+   */
+  constructor(message, field = null, cause = null) {
+    super(message, 'validation', 'error');
+    this.name = 'ValidationError';
+    this.field = field;
+    this._cause = cause;
+    this.suggestion = 'Check the validation rules and ensure all required fields are present and valid.';
+  }
+
+  format() {
+    let result = super.format();
+    if (this.field) {
+      result += `\nField: ${this.field}`;
+    }
+    if (this._cause) {
+      result += `\nCause: ${this._cause.message}`;
+    }
     if (this.suggestion) {
       result += `\nSuggestion: ${this.suggestion}`;
     }
-    
     return result;
   }
 }
@@ -125,19 +165,10 @@ export class AuthenticationError extends WorkflowError {
    * Create a new authentication error
    * 
    * @param {string} message - Error message describing the authentication failure
-   * @param {Error} [cause=null] - Original error that caused this failure
    */
-  constructor(message, cause = null) {
-    super(message, 'Authentication', cause);
-    
-    // Add common suggestions based on error message patterns
-    if (message.includes('firebase')) {
-      this.suggestion = 'Try running "firebase login" to authenticate with Firebase.';
-    } else if (message.includes('git') || message.includes('github')) {
-      this.suggestion = 'Ensure your Git credentials are configured correctly with "git config".';
-    } else {
-      this.suggestion = 'Check your network connection and authentication credentials.';
-    }
+  constructor(message) {
+    super(message, 'authentication', 'error');
+    this.name = 'AuthenticationError';
   }
 }
 
@@ -164,7 +195,8 @@ export class QualityCheckError extends WorkflowError {
    * @param {Error} [cause=null] - Original error that caused this failure
    */
   constructor(message, checkType, cause = null) {
-    super(message, `Quality Check (${checkType})`, cause);
+    super(message, `Quality Check (${checkType})`, 'error');
+    this._cause = cause; // Store cause for potential use in format()
     
     // Add suggestions based on check type
     switch(checkType) {
@@ -180,6 +212,17 @@ export class QualityCheckError extends WorkflowError {
       default:
         this.suggestion = 'Review errors and fix issues manually.';
     }
+  }
+
+  format() {
+    let result = super.format();
+    if (this._cause) {
+      result += `\nCause: ${this._cause.message}`;
+    }
+    if (this.suggestion) {
+      result += `\nSuggestion: ${this.suggestion}`;
+    }
+    return result;
   }
 }
 
@@ -203,8 +246,20 @@ export class BuildError extends WorkflowError {
    * @param {Error} [cause=null] - Original error that caused this failure
    */
   constructor(message, cause = null) {
-    super(message, 'Build', cause);
+    super(message, 'build', 'error');
+    this._cause = cause; // Store cause for potential use in format()
     this.suggestion = 'Check build logs for errors and ensure all dependencies are installed.';
+  }
+
+  format() {
+    let result = super.format();
+    if (this._cause) {
+      result += `\nCause: ${this._cause.message}`;
+    }
+    if (this.suggestion) {
+      result += `\nSuggestion: ${this.suggestion}`;
+    }
+    return result;
   }
 }
 
@@ -228,8 +283,20 @@ export class DeploymentError extends WorkflowError {
    * @param {Error} [cause=null] - Original error that caused this failure
    */
   constructor(message, cause = null) {
-    super(message, 'Deployment', cause);
+    super(message, 'deployment', 'error');
+    this._cause = cause; // Store cause for potential use in format()
     this.suggestion = 'Verify Firebase configuration and permissions.';
+  }
+
+  format() {
+    let result = super.format();
+    if (this._cause) {
+      result += `\nCause: ${this._cause.message}`;
+    }
+    if (this.suggestion) {
+      result += `\nSuggestion: ${this.suggestion}`;
+    }
+    return result;
   }
 }
 
@@ -253,8 +320,20 @@ export class DependencyError extends WorkflowError {
    * @param {Error} [cause=null] - Original error that caused this issue
    */
   constructor(message, cause = null) {
-    super(message, 'Dependency Management', cause);
+    super(message, 'dependency', 'error');
+    this._cause = cause; // Store cause for potential use in format()
     this.suggestion = 'Run "pnpm install" to install missing dependencies.';
+  }
+
+  format() {
+    let result = super.format();
+    if (this._cause) {
+      result += `\nCause: ${this._cause.message}`;
+    }
+    if (this.suggestion) {
+      result += `\nSuggestion: ${this.suggestion}`;
+    }
+    return result;
   }
 }
 
@@ -283,6 +362,14 @@ export class ErrorAggregator {
    */
   constructor() {
     this.errors = [];
+    this.errorCategories = {
+      workflow: [],
+      authentication: [],
+      validation: [],
+      resource: [],
+      performance: []
+    };
+    this.maxErrors = 100;
   }
 
   /**
@@ -303,7 +390,35 @@ export class ErrorAggregator {
       this.errors.push(error);
     } else {
       // Convert standard errors to WorkflowError
-      this.errors.push(new WorkflowError(error.message, null, error));
+      const workflowError = new WorkflowError(error.message, null, null, null);
+      this.errors.push(workflowError);
+    }
+
+    // Add to category array
+    if (error.category && this.errorCategories[error.category]) {
+      this.errorCategories[error.category].push(error);
+    }
+
+    // Limit total errors
+    if (this.errors.length > this.maxErrors) {
+      this.errors.shift();
+    }
+
+    // Log based on severity
+    switch (error.severity) {
+      case 'error':
+        logger.error(error.message);
+        break;
+      case 'warning':
+        logger.warn(error.message);
+        break;
+      default:
+        logger.info(error.message);
+    }
+
+    // Track performance impact
+    if (error.category === 'performance') {
+      performanceMonitor.trackStepPerformance('error-handling', 0);
     }
   }
 
@@ -432,9 +547,6 @@ export class ErrorAggregator {
       
       for (const error of errors) {
         logger.error(`- ${error.message}`);
-        if (error.cause) {
-          logger.error(`  Cause: ${error.cause.message}`);
-        }
         if (error.suggestion) {
           logger.info(`  Suggestion: ${error.suggestion}`);
         }
@@ -463,14 +575,14 @@ export class ErrorAggregator {
  *   // Process will exit with code 1
  * }
  */
-export function handleError(error, step = null, exit = false) {
+export function handleError(error, _step = null, exit = false) {
   let workflowError;
   
   // Convert to WorkflowError if needed
   if (error instanceof WorkflowError) {
     workflowError = error;
   } else {
-    workflowError = new WorkflowError(error.message, step, error);
+    workflowError = new WorkflowError(error.message, null, null, null);
   }
   
   // Log the error
@@ -542,13 +654,18 @@ export const errorTracker = new ErrorAggregator();
  * }
  */
 export function handleFatalError(error) {
-  logger.error('FATAL ERROR: Workflow terminated unexpectedly');
-  logger.error(error.message);
-  logger.error(error.stack);
+  // Use console.error as fallback for fatal errors to avoid circular dependencies
+  console.error('FATAL ERROR: Workflow terminated unexpectedly');
+  console.error(error);
   
-  // Ensure logs are saved
-  if (logger.stopFileLogging) {
-    logger.stopFileLogging();
+  // Try to use logger if available, but don't fail if it's not
+  try {
+    if (logger && typeof logger.error === 'function') {
+      logger.error('FATAL ERROR: Workflow terminated unexpectedly');
+      logger.error(error);
+    }
+  } catch (e) {
+    // Ignore logger errors in fatal error handler
   }
   
   process.exit(1);
@@ -565,29 +682,26 @@ process.on('unhandledRejection', (reason) => {
 });
 
 /**
- * Default export for the error-handler module
- * 
- * @export {Object} default
- * @description Exports all error classes and utility functions for easy import in other modules.
- * @example
- * import errorHandler from './error-handler.js';
- * 
- * try {
- *   // Code that might fail
- * } catch (error) {
- *   const workflowError = errorHandler.handleError(error);
- * }
+ * Default error handler instance
  */
-export default {
+const errorHandler = {
   WorkflowError,
+  ValidationError,
   AuthenticationError,
   QualityCheckError,
   BuildError,
   DeploymentError,
   DependencyError,
   ErrorAggregator,
-  handleError,
+  handleError(error) {
+    if (error instanceof WorkflowError) {
+      return error;
+    }
+    return new WorkflowError(error.message);
+  },
   handleDependencyError,
   errorTracker,
   handleFatalError
-}; 
+};
+
+export default errorHandler; 

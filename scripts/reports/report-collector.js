@@ -13,7 +13,7 @@
 import fs from 'fs';
 import path from 'path';
 import process from 'node:process';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
 import { generateConsolidatedReport } from './consolidated-report.js';
 import { parseArgs } from 'node:util';
 import { execSync } from 'child_process';

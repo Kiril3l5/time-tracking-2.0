@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+/* global console */
+
+/* eslint-disable no-console */
+
 /**
  * Progress Tracker Module
  * 
@@ -43,9 +47,7 @@
  * progressTracker.finishProgress(true, 'Deployment successful!');
  */
 
-/* global console */
-
-import * as logger from './logger.js';
+import { logger } from './logger.js';
 import { colors, styled } from './colors.js';
 
 // Track the current state
@@ -80,7 +82,7 @@ export function initProgress(steps, title) {
   stepTimes = [];
   
   if (title) {
-    logger.section(title);
+    logger.sectionHeader(title);
   }
 }
 
@@ -357,15 +359,16 @@ Note: Detailed metrics collection has been disabled to reduce file generation.
   `;
 }
 
-export default {
+// Create and export a singleton instance
+export const progressTracker = {
   initProgress,
   startStep,
   updateStep,
   completeStep,
   finishProgress,
-  getElapsedTime,
-  getStepElapsedTime,
-  formatDuration,
-  getProgressStats,
-  generateReport
-}; 
+  getStepTimes: getStepElapsedTime,
+  getTotalTime: getElapsedTime,
+  resetProgress: initProgress
+};
+
+export default progressTracker; 

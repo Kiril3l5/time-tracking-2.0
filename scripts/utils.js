@@ -11,22 +11,22 @@
  */
 
 // Core utilities
-import * as logger from './core/logger.js';
-import * as colors from './core/colors.js';
-import * as commandRunner from './core/command-runner.js';
-import * as progressTracker from './core/progress-tracker.js';
-import * as config from './core/config.js';
+import { logger } from './core/logger.js';
+import { colors } from './core/colors.js';
+import { commandRunner } from './core/command-runner.js';
+import { progressTracker } from './core/progress-tracker.js';
+import { config } from './core/config.js';
 
 // Authentication utilities
-import * as auth from './auth/auth-manager.js';
-import * as firebaseAuth from './auth/firebase-auth.js';
-import * as gitAuth from './auth/git-auth.js';
+import { auth } from './auth/auth-manager.js';
+import { firebaseAuth } from './auth/firebase-auth.js';
+import { gitAuth } from './auth/git-auth.js';
 
 // Firebase utilities
-import * as firebaseDeployment from './firebase/deployment.js';
+import { firebaseDeployment } from './firebase/deployment.js';
 
 // Environment and validation utilities
-import * as environment from './checks/env-validator.js';
+import { environment } from './checks/env-validator.js';
 
 // Re-export all modules
 export { logger, colors, commandRunner, progressTracker, config };

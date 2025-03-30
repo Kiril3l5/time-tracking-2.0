@@ -1,0 +1,22 @@
+{
+  "timestamp": "2025-03-30T18:08:17.321Z",
+  "metrics": {
+    "bundleSize": 0,
+    "deadCodeCount": 0,
+    "docFreshnessScore": 0
+  },
+  "quality": {
+    "lint": {},
+    "typescript": {},
+    "tests": {}
+  },
+  "documentation": {
+    "quality": {},
+    "freshness": {}
+  },
+  "bundle": {
+    "analysis": {},
+    "sizeDiff": 0
+  },
+  "deadCode": {}
+}

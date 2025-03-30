@@ -26,10 +26,10 @@
 
 import process from 'node:process';
 import { parseArgs } from 'node:util';
-import * as logger from '../core/logger.js';
-import * as config from '../core/config.js';
-import * as channelManager from './channel-manager.js';
-import * as channelCleanup from './channel-cleanup.js';
+import { logger } from '../core/logger.js';
+import { config } from '../core/config.js';
+import { channelManager } from './channel-manager.js';
+import { channelCleanup } from './channel-cleanup.js';
 
 // Parse command-line arguments
 function parseArguments() {
@@ -278,7 +278,7 @@ async function main() {
     
     // Enable verbose logging if requested
     if (args.verbose) {
-      logger.setVerbose(true);
+      logger.setLevel('debug');
     }
     
     // Execute the requested command

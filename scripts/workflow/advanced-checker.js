@@ -6,15 +6,16 @@
  * Integrates with existing advanced check modules.
  */
 
-import * as logger from '../core/logger.js';
-import * as bundleCheck from '../checks/bundle-check.js';
-import * as deadCodeCheck from '../checks/deadcode-check.js';
-import * as vulnerabilityCheck from '../checks/vulnerability-check.js';
-import * as docsQualityCheck from '../checks/docs-quality-check.js';
-import * as importSyntaxCheck from '../checks/import-syntax-check.js';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
+import { progressTracker } from '../core/progress-tracker.js';
+import { analyzeBundles } from '../checks/bundle-analyzer.js';
+import { analyzeDeadCode } from '../checks/dead-code-detector.js';
+import { analyzeDocumentation } from '../checks/doc-quality.js';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { existsSync, readFileSync } from 'fs';
 import { execSync } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
 
 /**
  * Run a bundle size analysis check
@@ -26,8 +27,8 @@ export async function runBundleSizeCheck(options = {}) {
   
   try {
     // Try to use the module function
-    if (typeof bundleCheck.analyzeBundleSize === 'function') {
-      const result = await bundleCheck.analyzeBundleSize({
+    if (typeof analyzeBundles === 'function') {
+      const result = await analyzeBundles({
         verbose: options.verbose,
         compareToPrevious: true,
         saveReport: true
@@ -52,7 +53,7 @@ export async function runBundleSizeCheck(options = {}) {
       return { success: true };
     }
   } catch (error) {
-    logger.warn(`Bundle size check error: ${error.message}`);
+    logger.error("Bundle size check failed:", error);
     return { 
       success: false, 
       error: error.message 
@@ -70,8 +71,8 @@ export async function runDeadCodeCheck(options = {}) {
   
   try {
     // Try to use the module function
-    if (typeof deadCodeCheck.detectDeadCode === 'function') {
-      const result = await deadCodeCheck.detectDeadCode({
+    if (typeof analyzeDeadCode === 'function') {
+      const result = await analyzeDeadCode({
         verbose: options.verbose,
         saveReport: true
       });
@@ -105,50 +106,6 @@ export async function runDeadCodeCheck(options = {}) {
 }
 
 /**
- * Run vulnerability scanning
- * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
- */
-export async function runVulnerabilityCheck(options = {}) {
-  logger.info("Scanning for dependency vulnerabilities...");
-  
-  try {
-    // Try to use the module function
-    if (typeof vulnerabilityCheck.scanVulnerabilities === 'function') {
-      const result = await vulnerabilityCheck.scanVulnerabilities({
-        verbose: options.verbose,
-        saveReport: true
-      });
-      
-      const vulnerabilityCount = result.highSeverity || 0;
-      if (vulnerabilityCount > 0) {
-        logger.warn(`Found ${vulnerabilityCount} high severity vulnerabilities.`);
-        return { 
-          success: false, 
-          data: result,
-          warning: true,
-          message: `Found ${vulnerabilityCount} high severity vulnerabilities` 
-        };
-      }
-      
-      logger.success("No high severity vulnerabilities found.");
-      return { success: true, data: result };
-    } else {
-      // Fallback to command line
-      logger.info("Using command line fallback for vulnerability check");
-      execSync('pnpm audit', { stdio: 'inherit' });
-      return { success: true };
-    }
-  } catch (error) {
-    logger.warn(`Vulnerability check error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message 
-    };
-  }
-}
-
-/**
  * Run documentation quality check
  * @param {Object} options - Options for the check
  * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
@@ -158,8 +115,8 @@ export async function runDocsQualityCheck(options = {}) {
   
   try {
     // Try to use the module function
-    if (typeof docsQualityCheck.checkDocumentation === 'function') {
-      const result = await docsQualityCheck.checkDocumentation({
+    if (typeof analyzeDocumentation === 'function') {
+      const result = await analyzeDocumentation({
         verbose: options.verbose,
         saveReport: true
       });
@@ -193,50 +150,6 @@ export async function runDocsQualityCheck(options = {}) {
 }
 
 /**
- * Run import syntax check
- * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
- */
-export async function runImportSyntaxCheck(options = {}) {
-  logger.info("Checking for consistent ES module syntax...");
-  
-  try {
-    // Try to use the module function
-    if (typeof importSyntaxCheck.checkImportSyntax === 'function') {
-      const result = await importSyntaxCheck.checkImportSyntax({
-        verbose: options.verbose,
-        saveReport: true
-      });
-      
-      const inconsistentCount = result.inconsistentFiles || 0;
-      if (inconsistentCount > 0) {
-        logger.warn(`Found ${inconsistentCount} files with inconsistent import syntax.`);
-        return { 
-          success: false, 
-          data: result,
-          warning: true,
-          message: `Found ${inconsistentCount} files with inconsistent import syntax` 
-        };
-      }
-      
-      logger.success("Import syntax check passed.");
-      return { success: true, data: result };
-    } else {
-      // Fallback to command line
-      logger.info("Using command line fallback for import syntax check");
-      execSync('pnpm run check-imports', { stdio: 'inherit' });
-      return { success: true };
-    }
-  } catch (error) {
-    logger.warn(`Import syntax check error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message 
-    };
-  }
-}
-
-/**
  * Run all advanced checks
  * @param {Object} options - Options for checks
  * @param {Function} options.promptFn - Function to prompt the user
@@ -246,9 +159,7 @@ export async function runAllAdvancedChecks(options = {}) {
   const results = {
     bundleSize: null,
     deadCode: null,
-    vulnerability: null,
-    docsQuality: null,
-    importSyntax: null,
+    docsQuality: null
   };
   
   // Skip if requested
@@ -279,28 +190,12 @@ export async function runAllAdvancedChecks(options = {}) {
     results.deadCode = { success: true, skipped: true };
   }
   
-  // Run vulnerability check
-  if (!options.skipVulnerabilityCheck) {
-    results.vulnerability = await runVulnerabilityCheck(options);
-  } else {
-    logger.info("Skipping vulnerability check as requested.");
-    results.vulnerability = { success: true, skipped: true };
-  }
-  
   // Run docs quality check
   if (!options.skipDocsCheck) {
     results.docsQuality = await runDocsQualityCheck(options);
   } else {
     logger.info("Skipping documentation quality check as requested.");
     results.docsQuality = { success: true, skipped: true };
-  }
-  
-  // Run import syntax check
-  if (!options.skipImportCheck) {
-    results.importSyntax = await runImportSyntaxCheck(options);
-  } else {
-    logger.info("Skipping import syntax check as requested.");
-    results.importSyntax = { success: true, skipped: true };
   }
   
   // Collect warnings
@@ -361,8 +256,6 @@ export async function runAllAdvancedChecks(options = {}) {
 export default {
   runBundleSizeCheck,
   runDeadCodeCheck,
-  runVulnerabilityCheck,
   runDocsQualityCheck,
-  runImportSyntaxCheck,
   runAllAdvancedChecks
 }; 

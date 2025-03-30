@@ -43,12 +43,14 @@
 
 import { exec, execSync } from 'child_process';
 import { promisify } from 'util';
-import * as logger from './logger.js';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import { logger } from './logger.js';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { join, dirname, basename } from 'path';
+import { homedir, platform } from 'os';
 import { fileURLToPath } from 'url';
 import * as child_process from 'child_process';
+import { errorTracker } from './error-handler.js';
+import { performanceMonitor } from './performance-monitor.js';
 
 /* global process, global, Buffer, setTimeout, clearTimeout */
 
@@ -56,8 +58,8 @@ import * as child_process from 'child_process';
 const execAsync = promisify(exec);
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, '../..');
+const __dirname = dirname(__filename);
+const rootDir = join(__dirname, '../..');
 
 // Global cache for command outputs
 // This allows access to command outputs from anywhere in the codebase
@@ -69,13 +71,13 @@ if (!global.__commandOutputs) {
 const MAX_CACHE_SIZE = 100;
 
 // Directory for storing command logs
-const COMMAND_LOGS_DIR = path.join(rootDir, 'temp', 'command-logs');
+const COMMAND_LOGS_DIR = join(rootDir, 'temp', 'command-logs');
 
 // Ensure command logs directory exists
 function ensureCommandLogsDir() {
   try {
-    if (!fs.existsSync(COMMAND_LOGS_DIR)) {
-      fs.mkdirSync(COMMAND_LOGS_DIR, { recursive: true });
+    if (!existsSync(COMMAND_LOGS_DIR)) {
+      writeFileSync(COMMAND_LOGS_DIR, '', { recursive: true });
     }
   } catch (error) {
     logger.warn(`Failed to create command logs directory: ${error.message}`);
@@ -107,9 +109,9 @@ function saveCommandOutput(command, output, error, success, startTime, endTime) 
       ensureCommandLogsDir();
       const timestamp = new Date().toISOString().replace(/:/g, '-');
       const sanitizedCommand = command.replace(/[^a-zA-Z0-9]/g, '-').substring(0, 50);
-      const logFile = path.join(COMMAND_LOGS_DIR, `${timestamp}-${sanitizedCommand}.log`);
+      const logFile = join(COMMAND_LOGS_DIR, `${timestamp}-${sanitizedCommand}.log`);
       
-      fs.writeFileSync(logFile, `COMMAND: ${command}\n` +
+      writeFileSync(logFile, `COMMAND: ${command}\n` +
         `TIMESTAMP: ${commandRecord.timestamp}\n` +
         `DURATION: ${commandRecord.duration}ms\n` +
         `SUCCESS: ${success}\n\n` +
@@ -148,10 +150,13 @@ export function findDeploymentLogs() {
   ensureCommandLogsDir();
   
   try {
-    const files = fs.readdirSync(COMMAND_LOGS_DIR)
-      .filter(file => file.includes('firebase') || file.includes('deploy') || file.includes('channel'))
-      .map(file => path.join(COMMAND_LOGS_DIR, file))
-      .sort((a, b) => fs.statSync(b).mtime.getTime() - fs.statSync(a).mtime.getTime());
+    const files = existsSync(COMMAND_LOGS_DIR)
+      ? readFileSync(COMMAND_LOGS_DIR, 'utf8')
+        .split('\n')
+        .filter(file => file.includes('firebase') || file.includes('deploy') || file.includes('channel'))
+        .map(file => join(COMMAND_LOGS_DIR, file))
+        .sort((a, b) => readFileSync(b, 'utf8').split('\n')[0].localeCompare(readFileSync(a, 'utf8').split('\n')[0]))
+      : [];
     
     return files;
   } catch (error) {
@@ -175,69 +180,23 @@ export function findDeploymentLogs() {
  *   - error {string}: Error message if command failed
  */
 export function runCommand(command, options = {}) {
-  const {
-    cwd = process.cwd(),
-    env = process.env,
-    ignoreError = false,
-    stdio = 'inherit',
-    captureOutput = false
-  } = options;
-  
-  const startTime = Date.now();
-  let output = '';
-  let error = '';
-  let success = false;
-  
   try {
-    const captureStdio = stdio === 'pipe' || captureOutput;
-    
-    if (captureStdio) {
-      const result = execSync(command, {
-        cwd,
-        env,
-        stdio: 'pipe',
-        encoding: 'utf8'
-      });
-      output = result || '';
-      success = true;
-    } else {
-      execSync(command, {
-        cwd,
-        env,
-        stdio
-      });
-      success = true;
-    }
-    
-    const endTime = Date.now();
-    const result = {
-      success: true,
-      output
+    // Default to suppressing output unless explicitly requested
+    const defaultOptions = {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...options
     };
-    
-    // Save command output to cache and file
-    saveCommandOutput(command, output, error, success, startTime, endTime);
-    
-    return result;
-  } catch (err) {
-    const endTime = Date.now();
-    error = err.message || 'Unknown error';
-    output = err.stdout ? err.stdout.toString() : '';
-    const stderr = err.stderr ? err.stderr.toString() : '';
-    
-    // Save command output to cache and file
-    saveCommandOutput(command, output, stderr || error, false, startTime, endTime);
-    
-    if (ignoreError) {
-      return {
-        success: false,
-        output,
-        error: stderr || error,
-        errorCode: err.status || 1
-      };
-    } else {
-      throw err;
-    }
+
+    const result = execSync(command, defaultOptions);
+    return {
+      success: true,
+      output: result.toString().trim()
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message.split('\n')[0] // Just the main error message
+    };
   }
 }
 
@@ -456,10 +415,270 @@ export function extractFromCommand(command, extractPattern, options = {}) {
   return null;
 }
 
-export default {
+export class CommandRunner {
+  constructor() {
+    this.defaultTimeout = 30000; // 30 seconds
+    this.maxRetries = 3;
+    this.retryDelay = 1000; // 1 second
+    this.commandHistory = new Map();
+  }
+
+  /**
+   * Execute a command with timeout and retry logic
+   * @param {string} command - Command to execute
+   * @param {Object} options - Command options
+   * @param {number} [options.timeout] - Command timeout in ms
+   * @param {number} [options.retries] - Number of retry attempts
+   * @param {boolean} [options.requireSuccess=true] - Whether to throw on failure
+   * @returns {Promise<{stdout: string, stderr: string}>} Command output
+   */
+  async run(command, options = {}) {
+    const {
+      timeout = this.defaultTimeout,
+      retries = this.maxRetries,
+      requireSuccess = true
+    } = options;
+
+    let lastError;
+    let attempt = 0;
+
+    while (attempt <= retries) {
+      try {
+        // Track command start
+        const startTime = Date.now();
+        this.commandHistory.set(command, {
+          startTime,
+          attempts: attempt + 1
+        });
+
+        // Execute command with timeout
+        const result = await Promise.race([
+          execAsync(command, { timeout }),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Command timed out')), timeout)
+          )
+        ]);
+
+        // Track command completion
+        const duration = Date.now() - startTime;
+        performanceMonitor.trackStepPerformance(`command-${command}`, duration);
+
+        // Log success
+        logger.debug(`Command executed successfully: ${command}`);
+        return result;
+
+      } catch (error) {
+        lastError = error;
+        attempt++;
+
+        // Log retry attempt
+        if (attempt <= retries) {
+          logger.warn(`Command failed (attempt ${attempt}/${retries}): ${command}`);
+          logger.debug(`Error: ${error.message}`);
+          await new Promise(resolve => setTimeout(resolve, this.retryDelay));
+        }
+      }
+    }
+
+    // Handle final failure
+    const error = new Error(`Command failed after ${retries} attempts: ${command}`);
+    error.cause = lastError;
+    
+    // Track error
+    errorTracker.addError(error);
+
+    if (requireSuccess) {
+      throw error;
+    }
+
+    return { stdout: '', stderr: error.message };
+  }
+
+  /**
+   * Prompt user for input
+   * @param {string} message - Message to display to user
+   * @param {Object} [options] - Prompt options
+   * @param {Array<string>} [options.choices] - List of choices for user
+   * @param {boolean} [options.isConfirm=false] - Whether this is a yes/no confirmation
+   * @returns {Promise<string|boolean>} User's response
+   */
+  async prompt(message, options = {}) {
+    const { choices = [], isConfirm = false } = options;
+
+    // Display message and choices
+    logger.info(message);
+    if (choices.length > 0) {
+      choices.forEach((choice, index) => {
+        logger.info(`${index + 1}. ${choice}`);
+      });
+    }
+
+    // Create readline interface
+    const readline = (await import('readline')).createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    try {
+      const answer = await new Promise(resolve => {
+        readline.question('> ', resolve);
+      });
+
+      // Handle yes/no confirmation
+      if (isConfirm) {
+        const normalizedAnswer = answer.toLowerCase().trim();
+        return normalizedAnswer === 'y' || normalizedAnswer === 'yes';
+      }
+
+      // Handle choices
+      if (choices.length > 0) {
+        const choiceIndex = parseInt(answer, 10) - 1;
+        if (choiceIndex >= 0 && choiceIndex < choices.length) {
+          return choices[choiceIndex];
+        }
+        throw new Error('Invalid choice');
+      }
+
+      return answer;
+    } finally {
+      readline.close();
+    }
+  }
+
+  /**
+   * Validate command before execution
+   * @private
+   * @param {string} command - Command to validate
+   * @returns {boolean} Whether command is valid
+   */
+  validateCommand(command) {
+    if (!command || typeof command !== 'string') {
+      throw new Error('Invalid command: Command must be a non-empty string');
+    }
+
+    // Basic security check
+    if (command.includes('&&') || command.includes('||') || command.includes(';')) {
+      throw new Error('Invalid command: Command contains potentially dangerous operators');
+    }
+
+    return true;
+  }
+
+  /**
+   * Get command history
+   * @returns {Map} Command execution history
+   */
+  getHistory() {
+    return this.commandHistory;
+  }
+
+  /**
+   * Clear command history
+   */
+  clearHistory() {
+    this.commandHistory.clear();
+  }
+
+  /**
+   * Get command statistics
+   * @returns {Object} Command execution statistics
+   */
+  getStats() {
+    const stats = {
+      totalCommands: this.commandHistory.size,
+      commandsByStatus: {
+        success: 0,
+        failed: 0,
+        retried: 0
+      },
+      averageDuration: 0
+    };
+
+    let totalDuration = 0;
+
+    for (const [command, data] of this.commandHistory) {
+      const duration = Date.now() - data.startTime;
+      totalDuration += duration;
+
+      if (data.attempts > 1) {
+        stats.commandsByStatus.retried++;
+      } else {
+        stats.commandsByStatus.success++;
+      }
+    }
+
+    if (stats.totalCommands > 0) {
+      stats.averageDuration = totalDuration / stats.totalCommands;
+    }
+
+    return stats;
+  }
+
+  /**
+   * Prompt user for workflow options
+   * @param {string} message - Main message to display
+   * @param {Array<string>} options - List of options to present
+   * @returns {Promise<string>} User's choice
+   */
+  async promptWorkflowOptions(message, options) {
+    // Display message and options
+    logger.info(message);
+    options.forEach((option, index) => {
+      logger.info(`${index + 1}. ${option}`);
+    });
+
+    // Create readline interface
+    const readline = (await import('readline')).createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    try {
+      const answer = await new Promise(resolve => {
+        readline.question('Choose an option (1-' + options.length + '): ', resolve);
+      });
+
+      const choice = parseInt(answer.trim(), 10);
+      if (choice >= 1 && choice <= options.length) {
+        return choice.toString();
+      }
+      throw new Error('Invalid choice');
+    } finally {
+      readline.close();
+    }
+  }
+
+  /**
+   * Prompt user for text input
+   * @param {string} message - Message to display
+   * @returns {Promise<string>} User's input
+   */
+  async promptText(message) {
+    const readline = (await import('readline')).createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    try {
+      return await new Promise(resolve => {
+        readline.question(message, resolve);
+      });
+    } finally {
+      readline.close();
+    }
+  }
+}
+
+// Create and export a singleton instance
+export const commandRunner = {
   runCommand,
   runCommandAsync,
-  extractFromCommand,
   getRecentCommandOutputs,
-  findDeploymentLogs
-}; 
+  findDeploymentLogs,
+  saveCommandOutput,
+  prompt: new CommandRunner().prompt.bind(new CommandRunner()),
+  promptWorkflowOptions: new CommandRunner().promptWorkflowOptions.bind(new CommandRunner()),
+  promptText: new CommandRunner().promptText.bind(new CommandRunner())
+};
+
+export default commandRunner; 

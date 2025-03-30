@@ -36,7 +36,7 @@
  * }
  */
 
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
 import { DeploymentError, ErrorAggregator } from '../core/error-handler.js';
 
 /* global URL */

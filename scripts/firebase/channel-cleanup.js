@@ -15,11 +15,10 @@
  * @module firebase/channel-cleanup
  */
 
-import * as commandRunner from '../core/command-runner.js';
-import * as logger from '../core/logger.js';
-import * as channelManager from './channel-manager.js';
-import * as config from '../core/config.js';
-import { execSync } from 'child_process';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
+import { progressTracker } from '../core/progress-tracker.js';
+import { cleanupChannels as channelCleanup } from './channel-manager.js';
 import { fileURLToPath } from 'url';
 
 /* global process, setTimeout */
@@ -32,20 +31,20 @@ const MAX_CHANNELS = 5;
  * @param {Object} options - Cleanup options
  * @param {string} options.projectId - Firebase project ID
  * @param {string} options.site - Firebase hosting site name
- * @param {string} [options.prefix] - Only clean channels with this prefix (null means all channels)
  * @param {number} [options.keepCount=5] - Number of recent channels to keep
- * @param {boolean} [options.dryRun=false] - Whether to simulate cleanup without deleting
- * @param {boolean} [options.quiet=false] - Whether to suppress detailed channel output
- * @param {number} [options.batchSize=5] - Number of channels to delete in each batch
- * @param {number} [options.delayBetweenBatches=2000] - Delay in ms between batches
  * @returns {Promise<Object>} - Cleanup result
  */
-export async function cleanupChannels(options) {
-  logger.info('Starting aggressive channel cleanup...');
+export async function cleanupChannels({ projectId, site, keepCount = 5 }) {
+  logger.info('Starting channel cleanup...');
 
   try {
     // Get all channels for both sites
     const sites = ['admin-autonomyhero-2024', 'hours-autonomyhero-2024'];
+    const results = {
+      success: true,
+      cleaned: 0,
+      errors: []
+    };
     
     for (const site of sites) {
       try {
@@ -62,34 +61,55 @@ export async function cleanupChannels(options) {
           for (const channel of channelsToDelete) {
             logger.info(`Deleting old channel: ${channel.channelId}`);
             await deleteChannel(site, channel.channelId);
+            results.cleaned++;
           }
         }
       } catch (error) {
-        logger.error(`Failed to cleanup channels for site ${site}: ${error.message}`);
-        // Continue with next site even if one fails
+        results.errors.push(`Failed to cleanup channels for site ${site}: ${error.message}`);
+        logger.error(results.errors[results.errors.length - 1]);
       }
     }
     
-    logger.success('Channel cleanup completed successfully!');
+    if (results.errors.length > 0) {
+      results.success = false;
+      logger.warn('Channel cleanup completed with errors');
+    } else {
+      logger.success('Channel cleanup completed successfully!');
+    }
+    
+    return results;
   } catch (error) {
     logger.error(`Channel cleanup failed: ${error.message}`);
-    process.exit(1);
+    return {
+      success: false,
+      cleaned: 0,
+      errors: [error.message]
+    };
   }
 }
 
 async function listChannels(site) {
-  const output = execSync(
+  const result = await commandRunner.runCommandAsync(
     `firebase hosting:channel:list --site=${site} --json`,
     { encoding: 'utf8' }
   );
-  return JSON.parse(output);
+  
+  if (!result.success) {
+    throw new Error(result.error);
+  }
+  
+  return JSON.parse(result.output);
 }
 
 async function deleteChannel(site, channelId) {
-  execSync(
+  const result = await commandRunner.runCommandAsync(
     `firebase hosting:channel:delete ${channelId} --site=${site} --force`,
     { stdio: 'inherit' }
   );
+  
+  if (!result.success) {
+    throw new Error(result.error);
+  }
 }
 
 /**
@@ -108,7 +128,7 @@ export async function isCleanupNeeded(options) {
   logger.info(`Checking if site ${site} needs channel cleanup (threshold: ${threshold})`);
   
   // List all channels
-  const listResult = await channelManager.listChannels({ 
+  const listResult = await channelCleanup.listChannels({ 
     projectId, 
     site,
     quiet
@@ -183,29 +203,24 @@ export async function checkAndCleanupIfNeeded(options) {
     
     if (checkResult.needed) {
       anyCleanupNeeded = true;
-      logger.warn(`Site ${currentSite} has ${checkResult.channelCount} channels (threshold: ${threshold})`);
       
       if (autoCleanup) {
-        logger.info(`Auto-cleanup enabled, cleaning up site: ${currentSite}`);
-        
-        const cleanupResult = await cleanupChannels({
+        logger.info(`Auto-cleanup enabled, cleaning up channels for site: ${currentSite}`);
+        const cleanupResult = await channelCleanup({
           projectId,
           site: currentSite,
-          prefix,  // This can be null, meaning all channels
-          keepCount,
-          quiet
+          dryRun: false
         });
-        
         results[currentSite].cleanup = cleanupResult;
+      } else {
+        logger.warn(`Cleanup needed for site ${currentSite} but auto-cleanup is disabled`);
       }
-    } else {
-      logger.info(`Site ${currentSite} has ${checkResult.channelCount} channels, below threshold (${threshold})`);
     }
   }
   
   return {
-    needsCleanup: anyCleanupNeeded,
-    sites: results
+    needed: anyCleanupNeeded,
+    results
   };
 }
 
@@ -214,8 +229,4 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   cleanupChannels();
 }
 
-export default {
-  cleanupChannels,
-  isCleanupNeeded,
-  checkAndCleanupIfNeeded
-}; 
+export { cleanupChannels }; 

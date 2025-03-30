@@ -16,9 +16,7 @@
  */
 
 import fs from 'fs';
-import path from 'path';
-import * as commandRunner from './command-runner.js';
-import * as logger from './logger.js';
+import { logger } from './logger.js';
 
 /* global process */
 
@@ -326,6 +324,32 @@ export function writeEnvFile(env, options = {}) {
     logger.error(`Failed to write environment file: ${error.message}`);
     throw error;
   }
+}
+
+/**
+ * Check if running in CI environment
+ * @returns {boolean} Whether running in CI
+ */
+export function isCI() {
+  const ciEnvironmentVars = [
+    'CI',
+    'GITHUB_ACTIONS',
+    'TRAVIS',
+    'CIRCLECI',
+    'JENKINS_URL',
+    'GITLAB_CI',
+    'BITBUCKET_BUILD_NUMBER'
+  ];
+  
+  return ciEnvironmentVars.some(envVar => process.env[envVar]);
+}
+
+/**
+ * Get the current environment type
+ * @returns {string} Current environment type
+ */
+export function getEnvironmentType() {
+  return getCurrentEnvironment();
 }
 
 export default {

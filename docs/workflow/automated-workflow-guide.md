@@ -1,313 +1,701 @@
 # Automated Development Workflow Guide
 
-This guide explains how to use the automated workflow tool that simplifies the development process from branch creation to PR creation.
+This guide provides a comprehensive overview of our automated development workflow, including branch management, change management, preview deployment, PR creation, and post-PR guidance.
+
+> **Related Documentation**
+> - [Preview Deployment Guide](./preview-deployment-guide.md) - For preview deployment details
+> - [Firebase Configuration Guide](../firebase/firebase-config-guide.md) - For Firebase setup
+> - [GitHub Workflow Guide](../github/github-workflow-guide.md) - For PR management
+> - [Security Implementation Guide](../main_readme/security-implementation-guide.md) - For security details
 
 ## Overview
 
-The automated workflow tool combines several steps into a single interactive process:
+The automated workflow streamlines the development process by providing a unified interface for:
+1. Branch management and synchronization
+2. Change tracking and commits
+3. Preview deployment and testing
+4. Pull request creation and management
+5. Post-PR workflow guidance
+6. Health checks and monitoring
+7. Performance tracking and optimization
+8. Quality assurance and validation
 
-1. **Branch Management**: Creates a new feature branch or continues work on an existing branch
-2. **Change Management**: Helps you commit changes with meaningful messages
-3. **Preview Deployment**: Runs the preview deployment to test your changes
-4. **PR Creation**: Suggests PR title and description based on your changes
-5. **Post-PR Guidance**: Explains how to keep your local repo in sync after PRs are merged and deploy to production
+## Core Components
 
-This automation helps enforce the "1 Branch, 1 PR" workflow best practice while making it more user-friendly.
+### 1. Workflow Orchestration
+- **Main Orchestrator** (`improved-workflow.js`)
+  - Coordinates all workflow steps
+  - Manages state and progress tracking
+  - Handles error recovery and reporting
+  - Integrates with package coordinator
+
+- **Workflow Engine** (`workflow-engine.js`)
+  - Executes workflow steps in sequence
+  - Manages package dependencies
+  - Handles monorepo coordination
+  - Tracks performance metrics
+  - Provides error recovery
+  - Manages workflow state
+
+- **Step Runner** (`step-runner.js`)
+  - Manages individual step execution
+  - Handles step dependencies
+  - Provides step context and state
+  - Tracks step performance
+  - Manages error handling
+  - Supports step retries
+
+### 2. State Management
+- **Workflow State** (`workflow-state.js`)
+  - Manages state persistence
+  - Handles state recovery
+  - Provides state validation
+  - Manages state backups
+  - Tracks error history
+  - Supports state cleanup
+
+### 3. Quality Assurance
+- **Health Checks** (`health-checker.js`)
+  - Security vulnerability scanning
+  - Environment validation
+  - Git configuration checks
+  - Dependency validation
+
+- **Quality Checker** (`quality-checker.js`)
+  - Linting
+  - TypeScript validation
+  - Documentation checks
+  - Test execution
+  - Bundle analysis
+  - Dead code detection
+
+### 4. Build & Preview
+- **Package Coordinator** (`package-coordinator.js`)
+  - Manages package dependencies
+  - Determines build order
+  - Handles shared resources
+  - Tracks package metrics
+  - Analyzes dependencies
+  - Manages build order
+
+- **Deployment Manager** (`deployment-manager.js`)
+  - Creates preview channels
+  - Deploys preview builds
+  - Manages preview URLs
+  - Handles preview cleanup
+  - Verifies authentication
+  - Tracks deployment metrics
+
+### 5. Reporting & Analytics
+- **Dashboard Generator** (`dashboard-generator.js`)
+  - Real-time progress tracking
+  - Visual metrics display
+  - Performance analytics
+  - Error visualization
+  - Package metrics display
+
+- **Consolidated Report** (`consolidated-report.js`)
+  - Quality metrics
+  - Build statistics
+  - Test results
+  - Documentation coverage
+  - Bundle analysis
+  - Dead code detection
+  - Performance metrics
+
+### 6. Core Services
+- **Logger** (`core/logger.js`)
+  - Centralized logging
+  - Log rotation
+  - Multiple log levels
+  - File and console output
+
+- **Command Runner** (`core/command-runner.js`)
+  - Shell command execution
+  - Output capturing
+  - Error handling
+  - Timeout support
+  - Command history
+
+- **Progress Tracker** (`core/progress-tracker.js`)
+  - Step-by-step tracking
+  - Timing information
+  - Visual formatting
+  - Success/failure indicators
+
+- **Performance Monitor** (`core/performance-monitor.js`)
+  - Step timing
+  - Resource usage
+  - Build metrics
+  - Test metrics
+
+## Workflow Steps
+
+The workflow executes the following steps in sequence:
+
+1. **Health Checks**
+   - Security vulnerability scanning
+   - Environment validation
+   - Git configuration checks
+   - Dependency validation
+   - Critical step
+
+2. **Workflow Engine Initialization**
+   - Initialize package coordinator
+   - Initialize step runner
+   - Initialize quality checker
+   - Initialize deployment manager
+   - Initialize dashboard generator
+   - Initialize consolidated report
+   - Initialize branch manager
+   - Critical step
+
+3. **Workflow Execution**
+   - Execute steps in sequence
+   - Track progress
+   - Handle errors
+   - Generate reports
+   - Critical step
+
+4. **Results & Cleanup**
+   - Log results
+   - Generate summary
+   - Clean up resources
+   - Exit with appropriate code
+   - Non-critical step
+
+## Error Handling & Recovery
+
+The workflow includes comprehensive error handling:
+
+### Error Categories
+- Authentication errors
+- Validation errors
+- Resource errors
+- Performance errors
+
+### Recovery Options
+- Maximum retries: 3
+- Retry delay: 5 seconds
+- Backoff factor: 2
+- Maximum backoff: 30 seconds
+
+### Critical Steps
+- Authentication & Branch Management
+- Build Process
+
+### Retryable Steps
+- Authentication & Branch Management
+- Quality Checks
+- Build Process
+- Deployment
+
+## Performance Monitoring
+
+The workflow tracks comprehensive performance metrics:
+
+### Step Metrics
+- Step durations
+- Package build times
+- Test execution times
+- Deployment times
+
+### Resource Metrics
+- Memory usage
+- CPU usage
+- Disk usage
+- Network usage
+
+### Package Metrics
+- Build times
+- Test times
+- Bundle sizes
+- Dependencies
 
 ## Quick Start
 
-To start a new development session with the automated workflow:
-
 ```bash
-pnpm run workflow
-```
+# Run complete workflow
+node scripts/improved-workflow.js
 
-Or use the shorthand:
-
-```bash
-pnpm run dev
+# Run with options
+node scripts/improved-workflow.js --skip-tests --skip-build --skip-deploy --skip-pr --verbose
 ```
 
 ## Available Commands
 
-| Command | Description |
-|---------|-------------|
-| `pnpm run workflow` | Start the automated workflow |
-| `pnpm run workflow:start` | Same as above |
-| `pnpm run workflow:new` | Switch to main, pull latest changes, and start workflow |
-| `pnpm run dev` | Shorthand for workflow |
-| `pnpm run sync-main` | Sync local main branch with remote repository |
-| `pnpm run fix-gitignore` | Fix gitignore settings to properly ignore temporary files |
+| Command | Description | Options |
+|---------|-------------|---------|
+| `node scripts/improved-workflow.js` | Run the complete workflow | None |
+| `node scripts/improved-workflow.js --help` | Show help information | None |
+| `node scripts/improved-workflow.js --skip-tests` | Skip running tests | None |
+| `node scripts/improved-workflow.js --skip-build` | Skip build process | None |
+| `node scripts/improved-workflow.js --skip-deploy` | Skip deployment | None |
+| `node scripts/improved-workflow.js --skip-pr` | Skip creating pull request | None |
+| `node scripts/improved-workflow.js --verbose` | Enable verbose logging | None |
+
+## Health Checks
+
+The workflow includes comprehensive health checks to ensure a stable development environment:
+
+### Environment Checks
+- Node.js version (>=14.0.0)
+- Git installation
+- Firebase tools installation
+- Disk space (minimum 1GB)
+- Network connectivity
+- Firebase rules validation
+
+### Dependency Checks
+- PNPM version (>=6.0.0)
+- Workspace dependencies
+- Duplicate dependencies
+- Missing dependencies
+
+### Module and Build Checks
+- Workspace setup validation
+- Build configuration
+- TypeScript configuration
+- Test setup verification
+
+### Test Setup Checks
+- Test dependencies (Vitest, React Testing Library)
+- Test coverage configuration
+- Test scripts availability
+
+## Performance Monitoring
+
+The workflow includes built-in performance monitoring:
+
+### Metrics Tracked
+- Total workflow duration
+- Individual step durations
+- Build times
+- Test execution times
+- Deployment times
+- Resource usage
+- Package metrics
+
+### Performance Reports
+- JSON format metrics
+- Step-by-step breakdown
+- Historical data tracking
+- Performance trends
+- Resource usage patterns
+- Package performance analysis
 
 ## Step-by-Step Workflow
 
-### 1. Branch Creation/Selection
-
-When you run the workflow:
-
-- If you're on the **main branch**, it will:
-  - Ask what you're working on
-  - Create a new feature branch with a sanitized name
-  - Pull latest changes from main first
-  
-- If you're on a **feature branch**, it will:
-  - Detect your current branch
-  - Ask if you want to switch to a different branch
-  - Show available branches if you choose to switch
-  - **Handle uncommitted changes safely** if you're switching branches:
-    - Offer to commit changes before switching
-    - Offer to stash changes temporarily (with option to apply later)
-    - Let you stay on the current branch instead
-  - Ask if you want to sync your local main branch with remote
-
-### 2. Change Management
-
-After branch selection:
-
-- If you have **uncommitted changes**, it will:
-  - Show modified files
-  - Ask if you want to commit them
-  - Suggest a default commit message based on your branch name
-  - Allow you to provide a custom commit message
-  
-- If you have **no changes**, it will:
-  - Inform you that there are no changes to commit
-  - Continue to the next step
-
-### 3. Fix Gitignore Issues
-
-The workflow now automatically:
-- Checks if your `.gitignore` file has the proper entries for temporary files
-- Updates `.gitignore` to ignore preview-specific files that shouldn't be committed
-- Helps prevent issues with uncommitted changes during PR creation
-- **Automatically commits changes** made to Git tracking of temporary files
-- Prevents PR creation failures due to temporary file tracking changes
-
-When the gitignore fixer removes temporary files from Git tracking, the workflow will automatically commit these changes for you with a standardized commit message. This ensures a smooth transition from preview deployment to PR creation without any manual intervention required.
-
-#### Intelligent Handling of Mixed Changes
-
-The workflow tool is smart about handling changes:
-
-- **Temporary Files Only**: If all uncommitted changes are from temporary files being removed from Git tracking, they'll be automatically committed with a standardized message.
-
-- **Mixed Changes**: If you have both temporary file changes and other meaningful changes:
-  - The tool will automatically commit *only* the temporary file removals
-  - Your other changes will remain uncommitted
-  - You'll be prompted to commit your remaining changes or use `--auto-commit`
-  
-This prevents temporary files from blocking your workflow while still giving you control over your meaningful changes.
-
-### 4. Preview Deployment
-
-The workflow automatically runs the preview deployment:
-
-- Executes `pnpm run preview`
-- Shows deployment progress and results
-- Opens the preview dashboard if available
-- Asks if you want to create a PR after the preview
-
-### 5. PR Creation
-
-If you choose to create a PR:
-
-- The tool **suggests a PR title** based on:
-  - Your commit messages
-  - The directories/files you modified most
-  
-- The tool **generates a PR description** including:
-  - List of modified files grouped by directory
-  - Commit history
-  
-- Now with **improved error handling**:
-  - If you have uncommitted changes, it offers to auto-commit them
-  - If a PR already exists, it shows you the link and offers to update it
-  - Provides clear guidance when things go wrong
-  
-- You can:
-  - Accept the suggestions
-  - Provide your own title/description
-  - Review the final PR before creation
-
-### 6. Post-PR Workflow
-
-After your PR is created and merged on GitHub:
-
-- The tool provides clear guidance on next steps:
-  - How to update your local main branch with the merged changes:
-    ```bash
-    git checkout main
-    git pull origin main
-    ```
-  - How to deploy to production after merging:
-    ```bash
-    node scripts/deploy.js "Your deployment message"
-    ```
-  - How to start working on a new feature
-  - How to keep your repository in sync
-
-Following this guidance ensures a smooth transition from development to production and helps maintain a consistent workflow across the team.
-
-## Syncing Your Main Branch
-
-You can sync your local main branch with remote at any time:
-
+### 1. Health Checks
 ```bash
-pnpm run sync-main
+# Run with health checks (default)
+node scripts/improved-workflow.js
+
+# Skip health checks
+node scripts/improved-workflow.js --skip-health-checks
 ```
 
-This command:
-1. Checks your current branch
-2. Handles uncommitted changes safely (offers to commit or stash)
-3. Switches to main branch
-4. Pulls latest changes from remote
-5. Offers to switch back to your original branch
+### 2. Branch Management
+```bash
+# Create feature branch
+node scripts/improved-workflow.js
+
+# Skip branch management
+node scripts/improved-workflow.js --skip-branch
+```
+
+### 3. Authentication
+```bash
+# Run with authentication (default)
+node scripts/improved-workflow.js
+
+# Skip authentication
+node scripts/improved-workflow.js --skip-auth
+```
+
+### 4. Quality Checks
+```bash
+# Run quality checks (default)
+node scripts/improved-workflow.js
+
+# Skip quality checks
+node scripts/improved-workflow.js --skip-tests
+```
+
+### 5. Build Process
+```bash
+# Run build (default)
+node scripts/improved-workflow.js
+
+# Skip build
+node scripts/improved-workflow.js --skip-build
+```
+
+### 6. Deployment
+```bash
+# Deploy to preview (default)
+node scripts/improved-workflow.js
+
+# Skip deployment
+node scripts/improved-workflow.js --skip-deploy
+```
+
+### 7. Pull Request Creation
+```bash
+# Create PR (default)
+node scripts/improved-workflow.js
+```
+
+## State Management
+
+The workflow maintains state for:
+- Current step
+- Completed steps
+- Last error
+- Start time
+- Branch information
+- Preview URLs
+- Performance metrics
+
+### Recovery
+```bash
+# Resume from last successful step
+node scripts/improved-workflow.js --recover
+```
+
+## Output and Reports
+
+### Preview URLs
+- Saved to `temp/preview-urls.json`
+- Included in PR description
+- Accessible via dashboard
+
+### Performance Reports
+- Saved to `temp/metrics/workflow-metrics-{timestamp}.json`
+- Includes step durations
+- Tracks total workflow time
+
+### Summary Reports
+- Saved to `temp/reports/workflow-summary-{timestamp}.json`
+- Includes branch info
+- Contains preview URLs
+- Lists step durations
+
+## Error Handling
+
+The workflow provides:
+- Detailed error messages
+- Error state persistence
+- Recovery mechanisms
+- Performance impact tracking
 
 ## Recent Improvements
 
-The automated workflow has recently received several enhancements:
+### 1. Enhanced Quality Checks
+- TypeScript quality improvements
+  - Query type validation
+  - Import optimization
+  - Module syntax validation
+- Dead code detection
+- Bundle size analysis
+- Documentation freshness checks
 
-1. **Optimized Build Process**: The preview deployment now avoids rebuilding the application during deployment if it was already built, significantly reducing deployment time.
+### 2. Health Check System
+- Comprehensive environment validation
+- Dependency verification
+- Build configuration checks
+- Test setup validation
 
-2. **Enhanced Post-PR Guidance**: Clear instructions for deploying to production after a PR is merged, ensuring changes reach production quickly and consistently.
+### 3. Performance Monitoring
+- Step duration tracking
+- Build time optimization
+- Test execution metrics
+- Deployment timing
+- Bundle size tracking
 
-3. **Improved Logging**: Standardized logger usage for better readability and error reporting.
+### 4. State Management
+- Workflow state persistence
+- Recovery mechanisms
+- Progress tracking
+- Error state handling
 
-4. **Fixed Linter Issues**: Removed unused variables and console statements, improving code quality.
+### 5. Enhanced Reporting
+- Performance metrics
+- Health check results
+- Error summaries
+- Step completion status
+- Bundle analysis reports
+- Dead code reports
+- Documentation quality metrics
 
-## Example Workflow
+## Related Documentation
 
-Here's an example session:
-
-```
-=====================
-AUTOMATED DEVELOPMENT WORKFLOW
-=====================
-
-INFO: Current branch: feature/existing-branch
-INFO: Continuing work on existing branch: feature/existing-branch
-
-Would you like to sync your local main branch with remote first? (y/N): y
-
-=====================
-SYNCING MAIN BRANCH
-=====================
-
-INFO: Switching to main branch...
-SUCCESS: Main branch updated successfully!
-Would you like to switch back to 'feature/existing-branch'? (Y/n): 
-SUCCESS: Switched back to branch: feature/existing-branch
-
-INFO: You have uncommitted changes.
-INFO: Modified files:
-M docs/workflow/automated-workflow-guide.md
-
-Would you like to commit these changes? (Y/n): y
-Enter commit message [Update automated workflow guide]: Add sync-main explanation
-SUCCESS: Changes committed successfully.
-
-INFO: Checking .gitignore configuration...
-SUCCESS: All required patterns are already in .gitignore
-
-=====================
-RUNNING PREVIEW DEPLOYMENT
-=====================
-
-INFO: Starting preview deployment. This may take a few minutes...
-[Preview deployment output...]
-SUCCESS: Preview deployment completed!
-INFO: Opening preview dashboard...
-
-Would you like to create a pull request? (Y/n): y
-INFO: Generating PR title and description suggestions based on your changes...
-Enter PR title [Add sync-main explanation]: 
-Suggested PR description:
-------------------------
-## Changes
-
-### Modified Files
-- docs/workflow: automated-workflow-guide.md
-
-### Commit History
-- Add sync-main explanation
-------------------------
-Use this description? (Y/n): y
-
-=====================
-CREATING PULL REQUEST
-=====================
-
-INFO: Creating PR with title: Add sync-main explanation
-SUCCESS: PR created successfully!
-
-=====================
-AFTER PR IS MERGED
-=====================
-
-INFO: After your PR is merged on GitHub, follow these steps:
-INFO: 1. Switch to main branch: git checkout main
-INFO: 2. Pull latest changes: git pull origin main
-INFO: 3. Start a new feature with: pnpm run workflow:new
-
-INFO: You can run 'pnpm run sync-main' at any time to update your local main branch.
-
-=====================
-NEXT STEPS
-=====================
-
-INFO: You are on branch: feature/existing-branch
-INFO: What would you like to do next?
-1. Continue working on this branch
-2. Run preview deployment again: pnpm run preview
-3. Create/update PR: pnpm run pr:create
-4. Switch to main branch: git checkout main
-5. Sync main with remote: pnpm run sync-main
-
-Press Enter to exit...
-```
-
-## Tips for Best Results
-
-1. **Start fresh from main**: Use `pnpm run workflow:new` to ensure you're starting from a clean state
-2. **Keep main in sync**: Use `pnpm run sync-main` regularly to avoid divergence
-3. **Use descriptive feature names**: This helps generate better branch names and commit messages
-4. **Commit logically**: Make smaller, focused commits with clear messages
-5. **Review suggestions**: The tool makes intelligent suggestions, but review them before accepting
-6. **After PR merges**: Follow the deployment guidance to ensure changes are properly deployed to production
+- [Preview Deployment Guide](./preview-deployment-guide.md)
+- [Firebase Configuration Guide](../firebase/firebase-config-guide.md)
+- [GitHub Workflow Guide](../github/github-workflow-guide.md)
+- [Health Check Guide](./health-check-guide.md)
+- [Performance Monitoring Guide](./performance-monitoring-guide.md)
 
 ## Troubleshooting
 
-- **Script fails to run**: Make sure you have executable permissions on the script
-- **Branch creation fails**: Check if you have permission to create branches
-- **Commit errors**: Make sure your Git user name and email are configured
-- **Branch switching issues**: 
-  - If you have uncommitted changes, the tool will offer options to commit, stash, or stay on current branch
-  - If you receive a Git error even after handling uncommitted changes, try using Git commands directly
-- **Preview deployment issues**: Check the error message and fix any issues before trying again
-- **PR creation problems**: 
-  - If you see "You have uncommitted changes", use the auto-commit option
-  - If you see "PR already exists", update the existing PR instead of creating a new one
-- **Main branch out of sync**: Run `pnpm run sync-main` to update your local main branch
+### Common Issues
 
-## Advanced Usage
+1. **Health Check Failures**
+   - Check Node.js version
+   - Verify PNPM installation
+   - Ensure Firebase tools are installed
+   - Check disk space
+   - Verify network connectivity
 
-If you prefer to run individual steps manually:
+2. **Performance Issues**
+   - Review step durations
+   - Check build times
+   - Monitor test execution
+   - Analyze deployment timing
 
-1. Create a branch: `git checkout -b feature/your-feature-name`
-2. Make changes and commit: `git add .` and `git commit -m "Your message"`
-3. Run preview: `pnpm run preview`
-4. Create PR: `pnpm run pr:create-with-title "Your PR title" "Your description"`
-5. Sync main: `pnpm run sync-main`
+3. **State Recovery**
+   - Use `--recover` option
+   - Check state file
+   - Review error logs
+   - Verify step completion
 
-The automated workflow simply combines these steps into a single interactive process.
+4. **Build Failures**
+   - Check TypeScript errors
+   - Verify dependencies
+   - Review build logs
+   - Check disk space
 
-## Technical Details
+5. **Deployment Issues**
+   - Verify Firebase auth
+   - Check environment variables
+   - Review channel limits
+   - Check network connectivity
 
-The workflow automation script (`scripts/workflow-automation.js`) uses:
+## Enhanced Dashboard
 
-- Git commands to manage branches and commits
-- The existing preview deployment system
-- The PR creation script
-- Intelligent analysis of changes to suggest PR content
+The workflow now includes a comprehensive dashboard that provides:
 
-For developers who want to modify the workflow, check the script code for detailed comments. 
+### 1. Workflow Status
+- Visual timeline of all steps
+- Current step highlighting
+- Progress tracking
+- Step completion status
+
+### 2. Quick Actions
+- Open Admin Portal
+- Open Hours Portal
+- Create Pull Request
+- View CI Status
+- View Documentation
+- Run Tests
+
+### 3. Branch Information
+- Current branch
+- Base branch
+- Last commit
+- Changes
+
+### 4. Preview URLs
+- Admin portal URL
+- Hours portal URL
+- Expiration information
+
+### 5. Deployment Information
+- Build status
+- Duration metrics
+- Environment details
+
+### 6. Environment Comparison
+- Development vs Production metrics
+- Change indicators
+- Performance comparisons
+
+### 7. Error Summary
+- Severity-based categorization
+- Visual indicators
+- Detailed messages
+
+### 8. Next Steps
+- Context-aware recommendations
+- Quality check reminders
+- PR creation guidance
+
+### 9. Quality Metrics
+- Bundle analysis
+- Documentation quality
+- Dead code detection
+- Vulnerability reports
+- Performance metrics
+
+### 10. Detailed Reports
+- Tabbed interface for different report types
+- Interactive navigation
+- Comprehensive data views
+
+## Recent Improvements
+
+### 1. Optimized Build Process
+- Faster builds with caching
+- Parallel package building
+- Skip build optimization for previews
+
+### 2. Enhanced Logging
+- Structured log output
+- Progress indicators
+- Error highlighting
+
+### 3. Better Error Handling
+- Detailed error messages
+- Recovery suggestions
+- Error categorization
+
+### 4. Improved Dashboard
+- Modern, responsive design
+- Interactive elements
+- Real-time updates
+- Comprehensive metrics
+
+### 5. Workflow Integration
+- Seamless step transitions
+- State persistence
+- Progress tracking
+
+## Documentation Structure
+
+The documentation is organized to provide a clear path through the development workflow:
+
+1. **Automated Workflow Guide** (this document)
+   - High-level overview
+   - Step-by-step instructions
+   - Command reference
+   - Recent improvements
+
+2. **Preview Deployment Guide**
+   - Technical architecture
+   - Preview channel management
+   - Environment configuration
+   - Troubleshooting
+
+3. **Firebase Configuration Guide**
+   - Project setup
+   - Authentication
+   - Environment variables
+   - Security rules
+
+4. **GitHub Workflow Guide**
+   - PR creation
+   - Branch protection
+   - Review process
+   - CI/CD integration
+
+### How the Guides Work Together
+
+The documentation is designed to work together:
+
+1. **Start Here**: Begin with this guide to understand the overall workflow
+2. **Deep Dive**: Use the specialized guides for detailed technical information
+3. **Cross-Reference**: Follow the links between guides to find related information
+4. **Troubleshoot**: Use the troubleshooting sections in each guide as needed
+
+For example, when you reach the preview deployment step:
+1. This guide tells you what happens and why
+2. The Preview Deployment Guide provides technical details
+3. The Firebase Guide explains the configuration
+4. The GitHub Guide covers PR creation
+
+## Troubleshooting
+
+If you encounter issues:
+
+1. **Check the Dashboard**
+   - Open the dashboard with `pnpm run dashboard:open`
+   - Review error summaries
+   - Follow suggested next steps
+
+2. **Common Issues**
+   - Authentication problems: Run `firebase login`
+   - Build failures: Check TypeScript errors
+   - Preview issues: Verify environment variables
+   - PR creation: Ensure GitHub CLI is installed
+
+3. **Get Help**
+   - Review the troubleshooting sections in each guide
+   - Check the error messages in the dashboard
+   - Consult the team documentation 
+
+## Performance Optimization
+
+The workflow includes several performance optimizations:
+
+### 1. Build Caching
+- **Caches build outputs** - Stores build artifacts for faster subsequent builds
+- **Skips unnecessary rebuilds** - Only rebuilds changed packages
+- **Configurable cache duration** - Adjustable cache lifetime settings
+- **Cache invalidation** - Smart cache invalidation based on dependencies
+
+### 2. Parallel Execution
+- **Parallel quality checks** - Runs linting, type checking, and tests concurrently
+- **Concurrent package building** - Builds independent packages in parallel
+- **Parallel test execution** - Runs test suites concurrently
+- **Resource-aware scheduling** - Adjusts parallelism based on system resources
+
+### 3. Resource Management
+- **Memory optimization** - Efficient memory usage during builds
+- **CPU utilization** - Balanced CPU usage across processes
+- **Disk space management** - Automatic cleanup of temporary files
+- **Network optimization** - Efficient dependency downloads
+
+## Security Features
+
+The workflow includes comprehensive security measures:
+
+### 1. Authentication
+- **Firebase authentication** - Secure Firebase service access
+- **Git authentication** - Secure repository access
+- **Environment validation** - Secure environment configuration
+- **Token management** - Secure handling of access tokens
+
+### 2. Dependency Security
+- **Vulnerability scanning** - Regular security audits of dependencies
+- **License compliance** - Checks for compatible licenses
+- **Security updates** - Automated security patch management
+- **Dependency validation** - Verification of package integrity
+
+### 3. Access Control
+- **Role-based access** - Environment-specific permissions
+- **Environment isolation** - Secure separation of environments
+- **Secure configuration** - Protected sensitive data
+- **Audit logging** - Security event tracking
+
+## Command Reference
+
+| Command | Description | Options |
+|---------|-------------|---------|
+| `pnpm run workflow` | Run complete workflow | `--skip-auth`, `--quick`, `--skip-health-checks` |
+| `pnpm run preview` | Create preview deployment | `--skip-bundle-analysis`, `--skip-dead-code` |
+| `pnpm run deploy` | Deploy to production | `--env=prod`, `--skip-tests` |
+| `pnpm run quality` | Run quality checks | `--skip-doc-quality`, `--skip-typescript` |
+| `pnpm run health` | Run health checks | `--skip-deps`, `--skip-env` |
+| `pnpm run test` | Run tests | `--coverage`, `--watch` |
+| `pnpm run build` | Build packages | `--clean`, `--skip-cache` |
+| `pnpm run lint` | Run linting | `--fix`, `--quiet` |
+| `pnpm run type-check` | Run type checking | `--strict`, `--watch` |
+
+### Common Options
+
+| Option | Description |
+|--------|-------------|
+| `--skip-auth` | Skip authentication checks |
+| `--quick` | Run in quick mode (skip some checks) |
+| `--skip-health-checks` | Skip health checks |
+| `--skip-bundle-analysis` | Skip bundle size analysis |
+| `--skip-dead-code` | Skip dead code detection |
+| `--skip-doc-quality` | Skip documentation quality checks |
+| `--skip-typescript` | Skip TypeScript checks |
+| `--env=<env>` | Set environment (dev, test, prod) |
+| `--clean` | Clean build directory before building |
+| `--skip-cache` | Skip build cache |
+| `--fix` | Automatically fix issues where possible |
+| `--watch` | Run in watch mode |
+| `--coverage` | Generate coverage report |
+| `--strict` | Run in strict mode | 

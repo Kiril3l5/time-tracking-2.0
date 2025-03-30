@@ -17,8 +17,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import * as commandRunner from '../core/command-runner.js';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
 
 /* global process */
 

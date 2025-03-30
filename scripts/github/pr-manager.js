@@ -1,142 +1,259 @@
 /**
- * PR Manager Module
+ * GitHub PR Manager Module
  * 
- * Handles creation and management of GitHub pull requests.
- * Provides a consistent interface for PR operations.
+ * Handles GitHub Pull Request operations including creation, updates, and status checks.
  */
 
-import { execSync } from 'child_process';
-import * as logger from '../core/logger.js';
-import { promises as fs } from 'fs';
-import { fileURLToPath, URLSearchParams } from 'url';
-import * as path from 'path';
-
-// Try to import optional dependencies
-let open;
-try {
-  // Dynamic import of optional dependency
-  const openModule = await import('open');
-  open = openModule.default;
-} catch (error) {
-  // Will use fallback if open is not available
-}
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
+import { workflowState } from '../workflow/workflow-state.js';
+import { setTimeout } from 'timers/promises';
 
 /**
- * Get the repository URL from Git configuration
- * @returns {Promise<string|null>} Repository URL or null if not found
+ * Check GitHub authentication
+ * @private
+ * @returns {Promise<boolean>} Whether authenticated
  */
-export async function getRepoUrl() {
+async function checkGitHubAuth() {
   try {
-    // Get the remote URL
-    const remoteUrl = execSync('git remote get-url origin', { encoding: 'utf8' }).trim();
-    
-    // Handle different URL formats (HTTPS vs SSH)
-    if (remoteUrl.startsWith('https://')) {
-      // https://github.com/username/repo.git → https://github.com/username/repo
-      return remoteUrl.replace(/\.git$/, '');
-    } else if (remoteUrl.startsWith('git@')) {
-      // git@github.com:username/repo.git → https://github.com/username/repo
-      return remoteUrl
-        .replace(/^git@([^:]+):/, 'https://$1/')
-        .replace(/\.git$/, '');
-    }
-    
-    return null;
+    const result = await commandRunner.runCommand('gh auth status', { stdio: 'pipe' });
+    return result.success;
   } catch (error) {
-    logger.error(`Failed to get repository URL: ${error.message}`);
-    return null;
+    return false;
   }
 }
 
 /**
- * Create a pull request for the current branch
- * @param {Object} options - Options for creating the PR
- * @param {string} options.branch - Branch name
+ * Create a new Pull Request with auth check
+ * @param {Object} options - PR options
  * @param {string} options.title - PR title
- * @param {boolean} options.draft - Whether to create a draft PR
- * @param {Object} options.previewUrls - Preview URLs to include in the PR description
- * @param {boolean} options.verbose - Whether to show verbose output
- * @returns {Promise<{success: boolean, prUrl?: string, error?: string}>} Result
+ * @param {string} options.body - PR description
+ * @param {string} options.baseBranch - Base branch name
+ * @param {string} options.headBranch - Head branch name
+ * @returns {Promise<Object>} PR creation result
  */
-export async function createPullRequest(options) {
-  const { branch, title = null, draft = false, previewUrls = null, verbose = false } = options;
-  
-  logger.info(`Preparing pull request for branch: ${branch}`);
+export async function createPR(options) {
+  const { title, body, baseBranch, headBranch } = options;
   
   try {
-    // Get main branch name
-    const mainBranch = 'main'; // Could be configurable
-    
-    // Skip if we're on the main branch
-    const currentBranch = execSync('git branch --show-current', { encoding: 'utf8' }).trim();
-    if (currentBranch === mainBranch) {
-      logger.warn(`You are on the ${mainBranch} branch. Pull request creation skipped.`);
-      return { success: true, skipped: true };
+    // Check GitHub authentication first
+    if (!await checkGitHubAuth()) {
+      throw new Error('GitHub authentication required. Please run "gh auth login" first.');
     }
+
+    // Validate required fields
+    if (!title || !baseBranch || !headBranch) {
+      throw new Error('Missing required PR fields');
+    }
+
+    // Create PR using GitHub CLI with retries
+    const maxRetries = 2;
+    const retryDelay = 1000;
     
-    // Generate PR title if not provided
-    const prTitle = title || `Update from branch ${branch}`;
-    
-    // Generate PR description with preview URLs
-    let prDescription = '';
-    
-    if (previewUrls) {
-      prDescription += `## Preview URLs\n\n`;
-      
-      if (previewUrls.admin) {
-        prDescription += `- **Admin Dashboard**: ${previewUrls.admin}\n`;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const result = await commandRunner.runCommand(
+          `gh pr create --title "${title}" --body "${body || ''}" --base ${baseBranch} --head ${headBranch}`,
+          { stdio: 'pipe' }
+        );
+
+        if (!result.success) {
+          throw new Error(`Failed to create PR: ${result.error}`);
+        }
+
+        // Extract PR URL from output
+        const prUrl = result.stdout.trim();
+        
+        // Update workflow state
+        workflowState.updateState({
+          prUrl,
+          prStatus: 'created'
+        });
+
+        return {
+          success: true,
+          prUrl,
+          prNumber: prUrl.split('/').pop()
+        };
+      } catch (error) {
+        if (attempt === maxRetries - 1) {
+          throw error;
+        }
+        logger.warn(`PR creation attempt ${attempt + 1} failed, retrying in ${retryDelay}ms...`);
+        await setTimeout(retryDelay);
       }
-      
-      if (previewUrls.hours) {
-        prDescription += `- **Hours App**: ${previewUrls.hours}\n`;
-      }
-      
-      prDescription += `\n`;
     }
-    
-    prDescription += `## Changes\n\nUpdates from branch \`${branch}\`\n`;
-    
-    // Get repo URL
-    const repoUrl = await getRepoUrl();
-    if (!repoUrl) {
-      logger.error("Could not determine repository URL for PR creation.");
-      return { success: false, error: "Could not determine repository URL" };
-    }
-    
-    // Create the PR URL
-    const prUrlParams = new URLSearchParams({
-      quick_pull: '1',
-      title: prTitle,
-      body: prDescription
-    });
-    
-    if (draft) {
-      prUrlParams.append('draft', '1');
-    }
-    
-    const prUrl = `${repoUrl}/compare/${mainBranch}...${branch}?${prUrlParams.toString()}`;
-    
-    // Try to open the URL in the browser
-    if (open) {
-      logger.info("Opening browser to create a new pull request...");
-      await open(prUrl);
-      logger.success("Browser opened for PR creation!");
-    } else {
-      logger.info("The 'open' package is not available. Please manually open this URL:");
-      logger.info(prUrl);
-    }
-    
-    return { success: true, prUrl };
   } catch (error) {
-    logger.error(`Failed to create pull request: ${error.message}`);
-    if (verbose) {
-      logger.debug(error.stack || error);
+    logger.error('Failed to create PR:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Update an existing Pull Request
+ * @param {Object} options - PR update options
+ * @param {string} options.prNumber - PR number
+ * @param {string} [options.title] - New PR title
+ * @param {string} [options.body] - New PR description
+ * @param {string} [options.baseBranch] - New base branch
+ * @returns {Promise<Object>} PR update result
+ */
+export async function updatePR(options) {
+  const { prNumber, title, body, baseBranch } = options;
+  
+  try {
+    if (!prNumber) {
+      throw new Error('PR number is required');
     }
-    return { success: false, error: error.message };
+
+    // Build update command
+    const updateArgs = [];
+    if (title) updateArgs.push(`--title "${title}"`);
+    if (body) updateArgs.push(`--body "${body}"`);
+    if (baseBranch) updateArgs.push(`--base ${baseBranch}`);
+
+    if (updateArgs.length === 0) {
+      throw new Error('No update fields provided');
+    }
+
+    // Update PR using GitHub CLI
+    const result = await commandRunner.runCommand(
+      `gh pr edit ${prNumber} ${updateArgs.join(' ')}`,
+      { stdio: 'pipe' }
+    );
+
+    if (!result.success) {
+      throw new Error(`Failed to update PR: ${result.error}`);
+    }
+
+    // Update workflow state
+    workflowState.updateState({
+      prStatus: 'updated'
+    });
+
+    return {
+      success: true,
+      prNumber
+    };
+  } catch (error) {
+    logger.error('Failed to update PR:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Check PR status
+ * @param {string} prNumber - PR number
+ * @returns {Promise<Object>} PR status
+ */
+export async function checkPRStatus(prNumber) {
+  try {
+    if (!prNumber) {
+      throw new Error('PR number is required');
+    }
+
+    // Get PR status using GitHub CLI
+    const result = await commandRunner.runCommand(
+      `gh pr view ${prNumber} --json state,mergeable,reviewDecision,checks`,
+      { stdio: 'pipe' }
+    );
+
+    if (!result.success) {
+      throw new Error(`Failed to check PR status: ${result.error}`);
+    }
+
+    const status = JSON.parse(result.stdout);
+
+    // Update workflow state
+    workflowState.updateState({
+      prStatus: status.state,
+      prMergeable: status.mergeable,
+      prReviewDecision: status.reviewDecision
+    });
+
+    return {
+      success: true,
+      status
+    };
+  } catch (error) {
+    logger.error('Failed to check PR status:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Merge a Pull Request
+ * @param {Object} options - Merge options
+ * @param {string} options.prNumber - PR number
+ * @param {boolean} [options.deleteBranch=true] - Whether to delete the branch after merge
+ * @returns {Promise<Object>} Merge result
+ */
+export async function mergePR(options) {
+  const { prNumber, deleteBranch = true } = options;
+  
+  try {
+    if (!prNumber) {
+      throw new Error('PR number is required');
+    }
+
+    // Check PR status first
+    const statusResult = await checkPRStatus(prNumber);
+    if (!statusResult.success) {
+      throw new Error('Failed to check PR status before merge');
+    }
+
+    const { status } = statusResult;
+    if (status.state !== 'OPEN') {
+      throw new Error(`PR is not open (current state: ${status.state})`);
+    }
+
+    if (!status.mergeable) {
+      throw new Error('PR is not mergeable');
+    }
+
+    // Merge PR using GitHub CLI
+    const mergeArgs = ['--merge'];
+    if (deleteBranch) mergeArgs.push('--delete-branch=false');
+
+    const result = await commandRunner.runCommand(
+      `gh pr merge ${prNumber} ${mergeArgs.join(' ')}`,
+      { stdio: 'pipe' }
+    );
+
+    if (!result.success) {
+      throw new Error(`Failed to merge PR: ${result.error}`);
+    }
+
+    // Update workflow state
+    workflowState.updateState({
+      prStatus: 'merged'
+    });
+
+    return {
+      success: true,
+      prNumber
+    };
+  } catch (error) {
+    logger.error('Failed to merge PR:', error);
+    return {
+      success: false,
+      error: error.message
+    };
   }
 }
 
 export default {
-  createPullRequest,
-  getRepoUrl
+  createPR,
+  updatePR,
+  checkPRStatus,
+  mergePR
 }; 

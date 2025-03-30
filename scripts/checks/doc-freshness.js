@@ -19,9 +19,11 @@ import fs from 'fs/promises';
 import path from 'path';
 import * as glob from 'glob';
 import { promisify } from 'util';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
+import { progressTracker } from '../core/progress-tracker.js';
 import { ErrorAggregator, ValidationError } from '../core/error-handler.js';
-import { isCI, getEnvironmentType } from './env-validator.js';
+import { isCI, getEnvironmentType } from '../core/environment.js';
 import { fileURLToPath } from 'url';
 
 /* global process, URL */

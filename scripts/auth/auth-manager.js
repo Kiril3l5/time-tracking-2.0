@@ -36,24 +36,30 @@
  * }
  */
 
-import * as firebaseAuth from './firebase-auth.js';
-import * as gitAuth from './git-auth.js';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
+import { progressTracker } from '../core/progress-tracker.js';
+import { checkFirebaseAuth } from './firebase-auth.js';
+import gitAuth from './git-auth.js';
+import { join, dirname, resolve } from 'path';
 import { AuthenticationError } from '../core/error-handler.js';
-import fs from 'node:fs';
-import path from 'node:path';
 import { fileURLToPath } from 'url';
+import { utils } from '../core/utils.js';
+import { performanceMonitor } from '../core/performance-monitor.js';
 
 /* global process */
 
 // Get directory paths
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, '../..');
+const __dirname = dirname(__filename);
+const rootDir = resolve(__dirname, '../..');
 
 // Constants for auth token management
 const AUTH_CACHE_TTL = 30 * 60 * 1000; // 30 minutes in milliseconds
-const AUTH_TOKEN_FILE = path.join(rootDir, '.auth-tokens.json');
+const AUTH_TOKEN_FILE = join(rootDir, '.auth-tokens.json');
+const TOKEN_REFRESH_THRESHOLD = 5 * 60 * 1000; // 5 minutes before expiry
+const MAX_REFRESH_ATTEMPTS = 3;
+const REFRESH_COOLDOWN = 60 * 1000; // 1 minute
 
 /**
  * Authentication result object with detailed status information
@@ -135,8 +141,8 @@ export function resetAuthCache() {
   
   // Also remove any cached tokens
   try {
-    if (fs.existsSync(AUTH_TOKEN_FILE)) {
-      fs.unlinkSync(AUTH_TOKEN_FILE);
+    if (utils.fileExists(AUTH_TOKEN_FILE)) {
+      utils.writeJsonFile(AUTH_TOKEN_FILE, {});
       logger.debug('Removed cached authentication tokens');
     }
   } catch (error) {
@@ -154,6 +160,8 @@ export function resetAuthCache() {
  * @param {boolean} [options.requireFirebase=true] - Whether Firebase authentication is required
  * @param {boolean} [options.requireGit=true] - Whether Git authentication is required
  * @param {Object} [options.errorTracker] - Error tracker instance for recording auth errors
+ * @param {Object} [options.progressTracker] - Progress tracker instance for step tracking
+ * @param {boolean} [options.isCI=false] - Whether running in CI environment
  * @returns {Promise<AuthResult>} - The authentication result with detailed status information
  * @description Performs comprehensive authentication checks for all required services
  * (Firebase and Git by default). This is the main entry point for authentication in the
@@ -188,8 +196,15 @@ export async function verifyAllAuth(options = {}) {
     useCache = true,
     requireFirebase = true,
     requireGit = true,
-    errorTracker = null
+    errorTracker = null,
+    progressTracker = null,
+    isCI = false
   } = options;
+  
+  // Start progress tracking if available
+  if (progressTracker) {
+    progressTracker.startStep('Verifying Authentication');
+  }
   
   // Check if we can use cached results
   if (useCache && _isCacheValid()) {
@@ -200,188 +215,99 @@ export async function verifyAllAuth(options = {}) {
     const cachedGit = _authCache.verifiedServices.gitAuth || false;
     
     if ((!requireFirebase || cachedFirebase) && (!requireGit || cachedGit)) {
-      return {
-        success: true,
-        services: {
-          firebase: _authCache.firebase,
-          gitAuth: _authCache.gitAuth
-        },
-        errors: [],
-        warnings: [],
-        timestamp: _authCache.timestamp,
-        fromCache: true
-      };
+      if (progressTracker) {
+        progressTracker.completeStep(true, 'Using cached authentication');
+      }
+      return _authCache;
     }
   }
-  
-  logger.debug('Verifying authentication services');
   
   const result = {
     success: true,
     services: {},
     errors: [],
     warnings: [],
-    timestamp: new Date().toISOString(),
-    fromCache: false
+    timestamp: new Date().toISOString()
   };
   
-  let firebaseDone = false;
-  let gitDone = false;
-  
-  // Determine if we're running in a CI environment
-  const isCI = isRunningInCI();
-  if (isCI) {
-    logger.debug('Running in CI environment');
-    result.warnings.push('Running in CI environment, modified authentication will be used');
-  }
-  
-  // Check Firebase authentication if required
-  if (requireFirebase) {
-    try {
-      // Check for CI-specific Firebase auth first
-      let firebaseResult;
-      
-      if (isCI && process.env.FIREBASE_TOKEN) {
-        logger.debug('Using CI Firebase token authentication');
-        firebaseResult = await firebaseAuth.verifyTokenAuth(process.env.FIREBASE_TOKEN);
-      } else {
-        // This is now an async function call that will handle the reauthentication process
-        firebaseResult = await firebaseAuth.checkFirebaseAuth();
-      }
-      
+  try {
+    // Verify Firebase authentication if required
+    if (requireFirebase) {
+      const firebaseResult = await _verifyFirebaseAuth(isCI);
       result.services.firebase = firebaseResult;
-      _authCache.firebase = firebaseResult;
-      _authCache.verifiedServices.firebase = firebaseResult.authenticated;
       
       if (!firebaseResult.authenticated) {
         result.success = false;
+        result.errors.push(`Firebase: ${firebaseResult.error || 'Not authenticated'}`);
         
-        // Create a detailed error message with recovery suggestions
-        const errorMsg = firebaseResult.error || 'Not authenticated with Firebase';
-        const suggestion = isCI
-          ? 'Ensure FIREBASE_TOKEN environment variable is set correctly in CI'
-          : 'Run "firebase login" to authenticate with Firebase';
-        
-        const authError = new AuthenticationError(
-          errorMsg,
-          'firebase',
-          null,
-          suggestion
-        );
-        
-        if (errorTracker) {
-          errorTracker.addError(authError);
+        // Add helpful recovery message
+        if (!isCI) {
+          result.warnings.push('To authenticate with Firebase, run: firebase login');
         }
-        
-        result.errors.push(`Firebase: ${errorMsg} - ${suggestion}`);
       }
-      
-      firebaseDone = true;
-    } catch (error) {
-      result.success = false;
-      
-      const authError = new AuthenticationError(
-        `Firebase authentication check failed: ${error.message}`,
-        'firebase',
-        error,
-        'Check Firebase CLI installation and network connectivity'
-      );
-      
-      if (errorTracker) {
-        errorTracker.addError(authError);
-      }
-      
-      result.errors.push(`Firebase: ${error.message}`);
-      
-      result.services.firebase = {
-        authenticated: false,
-        error: error.message
-      };
-    }
-  } else {
-    logger.debug('Firebase authentication not required, skipping');
-    result.services.firebase = { authenticated: true, skipped: true };
-    firebaseDone = true;
-  }
-  
-  // Check Git authentication if required
-  if (requireGit) {
-    try {
-      const gitResult = await gitAuth.checkGitConfig();
-      
-      result.services.gitAuth = gitResult;
-      _authCache.gitAuth = gitResult;
-      _authCache.verifiedServices.gitAuth = gitResult.configured;
-      
-      if (!gitResult.configured) {
-        result.success = false;
-        
-        // Create a detailed error message with recovery suggestions
-        const errorMsg = 'Git not properly configured';
-        const suggestion = 'Configure Git with: git config --global user.name "Your Name" && git config --global user.email "your.email@example.com"';
-        
-        const authError = new AuthenticationError(
-          errorMsg,
-          'git',
-          null,
-          suggestion
-        );
-        
-        if (errorTracker) {
-          errorTracker.addError(authError);
-        }
-        
-        result.errors.push(`Git: ${errorMsg} - ${suggestion}`);
-      }
-      
-      gitDone = true;
-    } catch (error) {
-      result.success = false;
-      
-      const authError = new AuthenticationError(
-        `Git authentication check failed: ${error.message}`,
-        'git',
-        error,
-        'Ensure Git is installed and properly configured'
-      );
-      
-      if (errorTracker) {
-        errorTracker.addError(authError);
-      }
-      
-      result.errors.push(`Git: ${error.message}`);
-      
-      result.services.gitAuth = {
-        authenticated: false,
-        error: error.message
-      };
-    }
-  } else {
-    logger.debug('Git authentication not required, skipping');
-    result.services.gitAuth = { authenticated: true, skipped: true };
-    gitDone = true;
-  }
-  
-  // Update the cache if all checks are done
-  if (firebaseDone && gitDone) {
-    _authCache.timestamp = result.timestamp;
-  }
-  
-  // Log appropriate messages based on the result
-  if (result.success) {
-    logger.debug('All authentication checks passed');
-  } else {
-    logger.error('Some authentication checks failed:');
-    for (const error of result.errors) {
-      logger.error(`- ${error}`);
     }
     
-    for (const warning of result.warnings) {
-      logger.warning(`- ${warning}`);
+    // Verify Git authentication if required
+    if (requireGit) {
+      const gitResult = await _verifyGitAuth(isCI);
+      result.services.gitAuth = gitResult;
+      
+      if (!gitResult.authenticated) {
+        result.success = false;
+        result.errors.push(`Git: ${gitResult.error || 'Not authenticated'}`);
+        
+        // Add helpful recovery message
+        if (!isCI) {
+          result.warnings.push('To configure Git, ensure your name and email are set:');
+          result.warnings.push('  git config --global user.name "Your Name"');
+          result.warnings.push('  git config --global user.email "your.email@example.com"');
+        }
+      }
     }
+    
+    // Update cache if successful
+    if (result.success) {
+      _authCache.firebase = result.services.firebase;
+      _authCache.gitAuth = result.services.gitAuth;
+      _authCache.timestamp = result.timestamp;
+      _authCache.verifiedServices = {
+        firebase: result.services.firebase?.authenticated || false,
+        gitAuth: result.services.gitAuth?.authenticated || false
+      };
+    }
+    
+    // Update progress tracker
+    if (progressTracker) {
+      if (result.success) {
+        progressTracker.completeStep(true, 'Authentication verified successfully');
+      } else {
+        progressTracker.completeStep(false, 'Authentication checks failed');
+      }
+    }
+    
+    // Track errors if error tracker is provided
+    if (errorTracker && !result.success) {
+      result.errors.forEach(error => {
+        errorTracker.addError(new AuthenticationError(error));
+      });
+    }
+    
+    return result;
+    
+  } catch (error) {
+    const errorMessage = `Authentication verification failed: ${error.message}`;
+    logger.error(errorMessage);
+    
+    if (progressTracker) {
+      progressTracker.completeStep(false, 'Authentication verification failed');
+    }
+    
+    if (errorTracker) {
+      errorTracker.addError(new AuthenticationError(errorMessage));
+    }
+    
+    throw error;
   }
-  
-  return result;
 }
 
 /**
@@ -425,41 +351,36 @@ export function isRunningInCI() {
 }
 
 /**
- * Saves authentication tokens to a secure file
+ * Loads authentication tokens from the cache file
  * 
+ * @private
+ * @function _loadAuthTokens
+ * @returns {Object|null} The cached authentication tokens or null if not found
+ */
+function _loadAuthTokens() {
+  try {
+    if (utils.fileExists(AUTH_TOKEN_FILE)) {
+      const tokens = utils.readJsonFile(AUTH_TOKEN_FILE);
+      return tokens;
+    }
+  } catch (error) {
+    logger.debug(`Failed to load auth tokens: ${error.message}`);
+  }
+  return null;
+}
+
+/**
+ * Saves authentication tokens to the cache file
+ * 
+ * @private
  * @function _saveAuthTokens
  * @param {Object} tokens - The authentication tokens to save
- * @returns {boolean} True if tokens were successfully saved
- * @description Securely saves authentication tokens to a file with restricted
- * permissions. The file is readable only by the owner to protect sensitive
- * token information. This is primarily used internally for token persistence.
- * @example
- * // Internal usage example
- * const tokens = {
- *   firebase: 'firebase-token-value',
- *   git: 'git-token-value',
- *   expiry: new Date(Date.now() + 3600000).toISOString() // 1 hour from now
- * };
- * 
- * if (_saveAuthTokens(tokens)) {
- *   console.log('Tokens saved successfully');
- * }
  */
-export function _saveAuthTokens(tokens) {
+function _saveAuthTokens(tokens) {
   try {
-    const tokenData = JSON.stringify(tokens, null, 2);
-    
-    // Create a file with restricted permissions (only owner can read/write)
-    fs.writeFileSync(AUTH_TOKEN_FILE, tokenData, {
-      encoding: 'utf8',
-      mode: 0o600 // Only owner can read/write
-    });
-    
-    logger.debug('Authentication tokens saved successfully');
-    return true;
+    utils.writeJsonFile(AUTH_TOKEN_FILE, tokens);
   } catch (error) {
-    logger.debug(`Failed to save authentication tokens: ${error.message}`);
-    return false;
+    logger.debug(`Failed to save auth tokens: ${error.message}`);
   }
 }
 
@@ -485,27 +406,26 @@ export function _saveAuthTokens(tokens) {
  */
 export function _getAuthTokens() {
   try {
-    if (!fs.existsSync(AUTH_TOKEN_FILE)) {
+    if (!utils.fileExists(AUTH_TOKEN_FILE)) {
       return null;
     }
     
-    const tokenData = fs.readFileSync(AUTH_TOKEN_FILE, 'utf8');
-    const tokens = JSON.parse(tokenData);
+    const tokenData = utils.readJsonFile(AUTH_TOKEN_FILE);
     
     // Validate token structure
-    if (!tokens || typeof tokens !== 'object') {
+    if (!tokenData || typeof tokenData !== 'object') {
       logger.debug('Invalid token format in saved file');
       return null;
     }
     
     // Check token expiration if available
-    if (tokens.expiry && new Date(tokens.expiry) < new Date()) {
+    if (tokenData.expiry && new Date(tokenData.expiry) < new Date()) {
       logger.debug('Saved tokens have expired');
       return null;
     }
     
     logger.debug('Authentication tokens loaded successfully');
-    return tokens;
+    return tokenData;
   } catch (error) {
     logger.debug(`Failed to load authentication tokens: ${error.message}`);
     return null;
@@ -630,19 +550,450 @@ export async function refreshAuth(options = {}) {
 }
 
 /**
- * Default export with all authentication management functions
- * 
- * @export {Object} default
- * @property {Function} verifyAllAuth - Verifies all required authentication services
- * @property {Function} isRunningInCI - Determines if running in a CI environment
- * @property {Function} resetAuthCache - Resets the authentication cache
- * @property {Function} getRequiredAuth - Determines which authentication services are required
- * @property {Function} refreshAuth - Refreshes an existing authentication
+ * Verify Firebase authentication
+ * @private
+ * @async
+ * @function _verifyFirebaseAuth
+ * @param {boolean} isCI - Whether running in CI environment
+ * @returns {Promise<Object>} Firebase authentication result
  */
-export default {
-  verifyAllAuth,
-  isRunningInCI,
-  resetAuthCache,
-  getRequiredAuth,
-  refreshAuth
-}; 
+async function _verifyFirebaseAuth(isCI) {
+  try {
+    // Check for CI-specific Firebase auth first
+    if (isCI && process.env.FIREBASE_TOKEN) {
+      logger.debug('Using CI Firebase token authentication');
+      return await checkFirebaseAuth();
+    }
+    
+    // Regular Firebase auth check
+    return await checkFirebaseAuth();
+  } catch (error) {
+    return {
+      authenticated: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Verify Git authentication
+ * @private
+ * @async
+ * @function _verifyGitAuth
+ * @param {boolean} isCI - Whether running in CI environment
+ * @returns {Promise<Object>} Git authentication result
+ */
+async function _verifyGitAuth(isCI) {
+  try {
+    const gitResult = await gitAuth.checkGitConfig();
+    
+    if (!gitResult.configured) {
+      if (isCI) {
+        // In CI, try to use environment variables
+        const gitToken = process.env.GIT_TOKEN;
+        if (!gitToken) {
+          return {
+            authenticated: false,
+            error: 'Git token not found in CI environment'
+          };
+        }
+        return {
+          authenticated: true,
+          configured: true,
+          usingCI: true
+        };
+      }
+      
+      return {
+        authenticated: false,
+        error: 'Git not properly configured'
+      };
+    }
+    
+    return {
+      authenticated: true,
+      ...gitResult
+    };
+  } catch (error) {
+    return {
+      authenticated: false,
+      error: error.message
+    };
+  }
+}
+
+export class AuthManager {
+  constructor() {
+    // Token management
+    this.tokenRefreshTimes = new Map();
+    this.tokenExpiryTimes = new Map();
+    this.refreshAttempts = new Map();
+    this.lastRefreshAttempt = new Map();
+    
+    // Service state
+    this.verifiedServices = new Map();
+    this.authCache = new Map();
+    this.cacheTimestamp = null;
+    
+    // Environment
+    this.isCI = this.detectCIEnvironment();
+    
+    // Initialize
+    this.initialize();
+  }
+
+  /**
+   * Initialize the auth manager
+   * @private
+   */
+  async initialize() {
+    try {
+      // Load cached tokens if available
+      const tokens = this.loadAuthTokens();
+      if (tokens) {
+        this.restoreFromTokens(tokens);
+      }
+      
+      // Verify initial state
+      await this.verifyInitialState();
+    } catch (error) {
+      logger.warn(`Auth manager initialization warning: ${error.message}`);
+    }
+  }
+
+  /**
+   * Detect if running in CI environment
+   * @private
+   * @returns {boolean} Whether running in CI
+   */
+  detectCIEnvironment() {
+    const ciEnvironmentVars = [
+      'CI',
+      'GITHUB_ACTIONS',
+      'TRAVIS',
+      'CIRCLECI',
+      'JENKINS_URL',
+      'GITLAB_CI',
+      'BITBUCKET_BUILD_NUMBER'
+    ];
+    
+    return ciEnvironmentVars.some(envVar => process.env[envVar]);
+  }
+
+  /**
+   * Verify initial authentication state
+   * @private
+   * @returns {Promise<void>}
+   */
+  async verifyInitialState() {
+    if (this.isCI) {
+      await this.handleCIAuth();
+    } else {
+      // Check for existing Firebase and Git auth
+      await this.verifyAuth({ service: 'firebase', requireAuth: false });
+      await this.verifyAuth({ service: 'git', requireAuth: false });
+    }
+  }
+
+  /**
+   * Check if token needs refresh
+   * @param {string} service - Service name
+   * @returns {boolean} Whether token needs refresh
+   */
+  needsTokenRefresh(service) {
+    const expiryTime = this.tokenExpiryTimes.get(service);
+    if (!expiryTime) return true;
+    
+    // Check if we're within the refresh threshold
+    const needsRefresh = Date.now() > (expiryTime - TOKEN_REFRESH_THRESHOLD);
+    
+    // Check if we've exceeded max refresh attempts
+    const attempts = this.refreshAttempts.get(service) || 0;
+    if (attempts >= MAX_REFRESH_ATTEMPTS) {
+      const lastAttempt = this.lastRefreshAttempt.get(service) || 0;
+      if (Date.now() - lastAttempt < REFRESH_COOLDOWN) {
+        return false;
+      }
+    }
+    
+    return needsRefresh;
+  }
+
+  /**
+   * Refresh authentication token
+   * @param {string} service - Service name
+   * @returns {Promise<boolean>} Success status
+   */
+  async refreshToken(service) {
+    const startTime = Date.now();
+    
+    try {
+      // Track refresh attempt
+      const attempts = (this.refreshAttempts.get(service) || 0) + 1;
+      this.refreshAttempts.set(service, attempts);
+      this.lastRefreshAttempt.set(service, startTime);
+
+      if (this.isCI) {
+        return await this.handleCITokenRefresh(service);
+      }
+
+      // For local development, use CLI refresh
+      const success = await this.handleLocalTokenRefresh(service);
+      
+      // Track performance
+      const duration = Date.now() - startTime;
+      performanceMonitor.trackStepPerformance(`auth-refresh-${service}`, duration);
+      
+      return success;
+    } catch (error) {
+      logger.error(`Failed to refresh ${service} token:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle CI environment token refresh
+   * @private
+   * @param {string} service - Service name
+   * @returns {Promise<boolean>} Success status
+   */
+  async handleCITokenRefresh(service) {
+    const token = process.env[`${service.toUpperCase()}_TOKEN`];
+    if (!token) {
+      throw new Error(`No ${service} token found in CI environment`);
+    }
+    
+    // Validate token format
+    if (!this.validateTokenFormat(token, service)) {
+      throw new Error(`Invalid ${service} token format`);
+    }
+    
+    this.tokenRefreshTimes.set(service, Date.now());
+    this.tokenExpiryTimes.set(service, Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    return true;
+  }
+
+  /**
+   * Handle local development token refresh
+   * @private
+   * @param {string} service - Service name
+   * @returns {Promise<boolean>} Success status
+   */
+  async handleLocalTokenRefresh(service) {
+    if (service === 'firebase') {
+      await commandRunner.runCommand('firebase login:reauth');
+    } else if (service === 'git') {
+      await commandRunner.runCommand('git config --global credential.helper store');
+    }
+
+    this.tokenRefreshTimes.set(service, Date.now());
+    this.tokenExpiryTimes.set(service, Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    return true;
+  }
+
+  /**
+   * Validate token format
+   * @private
+   * @param {string} token - Token to validate
+   * @param {string} service - Service name
+   * @returns {boolean} Whether token format is valid
+   */
+  validateTokenFormat(token, service) {
+    if (!token || typeof token !== 'string') return false;
+    
+    switch (service) {
+      case 'firebase':
+        // Firebase tokens are typically JWT format
+        return /^[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*$/.test(token);
+      case 'git':
+        // Git tokens are typically alphanumeric with possible hyphens
+        return /^[A-Za-z0-9-]+$/.test(token);
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Verify authentication with automatic refresh
+   * @param {Object} options - Verification options
+   * @param {string} options.service - Service to verify
+   * @param {boolean} [options.requireAuth=true] - Whether to throw on failure
+   * @returns {Promise<boolean>} Success status
+   */
+  async verifyAuth(options = {}) {
+    const { service, requireAuth = true } = options;
+    const startTime = Date.now();
+    
+    try {
+      // Check if token needs refresh
+      if (this.needsTokenRefresh(service)) {
+        logger.info(`Refreshing ${service} authentication...`);
+        const refreshSuccess = await this.refreshToken(service);
+        if (!refreshSuccess) {
+          throw new Error(`Failed to refresh ${service} token`);
+        }
+      }
+
+      // Verify authentication
+      const result = await this.verifyServiceAuth(service);
+      
+      // Track performance
+      const duration = Date.now() - startTime;
+      performanceMonitor.trackStepPerformance(`auth-verify-${service}`, duration);
+      
+      return result;
+    } catch (error) {
+      if (requireAuth) {
+        throw new AuthenticationError(`Authentication failed for ${service}`, error);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Verify service-specific authentication
+   * @private
+   * @param {string} service - Service name
+   * @returns {Promise<boolean>} Success status
+   */
+  async verifyServiceAuth(service) {
+    switch (service) {
+      case 'firebase':
+        return await this.verifyFirebaseAuth();
+      case 'git':
+        return await this.verifyGitAuth();
+      default:
+        throw new Error(`Unsupported service: ${service}`);
+    }
+  }
+
+  /**
+   * Handle CI environment authentication
+   * @returns {Promise<boolean>} Success status
+   */
+  async handleCIAuth() {
+    if (!this.isCI) return true;
+
+    const requiredTokens = ['FIREBASE_TOKEN', 'GITHUB_TOKEN'];
+    const missingTokens = requiredTokens.filter(token => !process.env[token]);
+
+    if (missingTokens.length > 0) {
+      throw new AuthenticationError(
+        `Missing required tokens in CI environment: ${missingTokens.join(', ')}`
+      );
+    }
+
+    // Validate all required tokens
+    for (const token of requiredTokens) {
+      const service = token.split('_')[0].toLowerCase();
+      if (!this.validateTokenFormat(process.env[token], service)) {
+        throw new AuthenticationError(`Invalid ${service} token format in CI environment`);
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Save authentication tokens
+   * @private
+   * @returns {boolean} Success status
+   */
+  saveAuthTokens() {
+    try {
+      const tokens = {
+        refreshTimes: Object.fromEntries(this.tokenRefreshTimes),
+        expiryTimes: Object.fromEntries(this.tokenExpiryTimes),
+        verifiedServices: Object.fromEntries(this.verifiedServices),
+        timestamp: Date.now()
+      };
+      
+      utils.writeJsonFile(AUTH_TOKEN_FILE, tokens);
+      return true;
+    } catch (error) {
+      logger.error(`Failed to save auth tokens: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Load authentication tokens
+   * @private
+   * @returns {Object|null} Saved tokens or null
+   */
+  loadAuthTokens() {
+    try {
+      if (!utils.fileExists(AUTH_TOKEN_FILE)) {
+        return null;
+      }
+      
+      return utils.readJsonFile(AUTH_TOKEN_FILE);
+    } catch (error) {
+      logger.warn(`Failed to load auth tokens: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Restore state from saved tokens
+   * @private
+   * @param {Object} tokens - Saved tokens
+   */
+  restoreFromTokens(tokens) {
+    if (!tokens || !tokens.timestamp) return;
+    
+    // Check if tokens are expired
+    if (Date.now() - tokens.timestamp > AUTH_CACHE_TTL) {
+      return;
+    }
+    
+    // Restore state
+    this.tokenRefreshTimes = new Map(Object.entries(tokens.refreshTimes || {}));
+    this.tokenExpiryTimes = new Map(Object.entries(tokens.expiryTimes || {}));
+    this.verifiedServices = new Map(Object.entries(tokens.verifiedServices || {}));
+    this.cacheTimestamp = tokens.timestamp;
+  }
+
+  /**
+   * Clear authentication state
+   */
+  clearAuth() {
+    this.tokenRefreshTimes.clear();
+    this.tokenExpiryTimes.clear();
+    this.refreshAttempts.clear();
+    this.lastRefreshAttempt.clear();
+    this.verifiedServices.clear();
+    this.authCache.clear();
+    this.cacheTimestamp = null;
+    
+    // Remove token file if it exists
+    if (utils.fileExists(AUTH_TOKEN_FILE)) {
+      utils.writeJsonFile(AUTH_TOKEN_FILE, {});
+    }
+  }
+
+  /**
+   * Get authentication status
+   * @returns {Object} Authentication status
+   */
+  getStatus() {
+    return {
+      isCI: this.isCI,
+      verifiedServices: Object.fromEntries(this.verifiedServices),
+      tokenStatus: {
+        firebase: {
+          needsRefresh: this.needsTokenRefresh('firebase'),
+          lastRefresh: this.tokenRefreshTimes.get('firebase'),
+          expiry: this.tokenExpiryTimes.get('firebase')
+        },
+        git: {
+          needsRefresh: this.needsTokenRefresh('git'),
+          lastRefresh: this.tokenRefreshTimes.get('git'),
+          expiry: this.tokenExpiryTimes.get('git')
+        }
+      }
+    };
+  }
+}
+
+export const authManager = new AuthManager(); 

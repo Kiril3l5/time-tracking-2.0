@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+/* global process */
+
 /**
  * Test Runner Module
  * 
@@ -16,11 +18,16 @@
  * @module checks/test-runner
  */
 
-import * as commandRunner from '../core/command-runner.js';
-import * as logger from '../core/logger.js';
-import * as progressTracker from '../core/progress-tracker.js';
-import * as lintCheck from './lint-check.js';
-import * as typescriptCheck from './typescript-check.js';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
+import { progressTracker } from '../core/progress-tracker.js';
+import { runLintCheck } from './lint-check.js';
+import { runTypeScriptCheck } from './typescript-check.js';
+import { fixTestDependencies } from '../test-types/test-deps-fixer.js';
+import { fixQueryTypes } from '../typescript/query-types-fixer.js';
+import { fixTypeScriptIssues } from '../typescript/typescript-fixer.js';
+import fs from 'fs';
+import path from 'path';
 
 /**
  * Run a test with proper output formatting and error handling
@@ -184,39 +191,176 @@ export async function runTests(tests, options = {}) {
  * @param {Object} [options] - Options
  * @param {boolean} [options.verbose=false] - Whether to show detailed output
  * @param {boolean} [options.stopOnFailure=true] - Whether to stop on first failure
+ * @param {boolean} [options.skipLint=false] - Whether to skip linting
+ * @param {boolean} [options.skipTypecheck=false] - Whether to skip type checking
+ * @param {boolean} [options.skipTests=false] - Whether to skip unit tests
+ * @param {boolean} [options.autoFixTypescript=false] - Whether to auto-fix TypeScript errors
+ * @param {boolean} [options.fixTestDeps=false] - Whether to fix test dependencies
+ * @param {boolean} [options.fixQueryTypes=false] - Whether to fix React Query types
  * @returns {Object} - Test results
  */
 export async function runStandardTests(options = {}) {
-  const tests = [
-    {
+  const {
+    verbose = false,
+    stopOnFailure = true,
+    skipLint = false,
+    skipTypecheck = false,
+    skipTests = false,
+    autoFixTypescript = false,
+    fixTestDeps = false,
+    fixQueryTypes = false
+  } = options;
+  
+  // If all tests are skipped, return early
+  if (skipLint && skipTypecheck && skipTests) {
+    logger.info('All quality checks skipped');
+    return {
+      success: true,
+      totalTests: 0,
+      passedTests: 0,
+      failedTests: 0,
+      duration: 0,
+      results: []
+    };
+  }
+  
+  // Fix test dependencies if requested
+  if (fixTestDeps) {
+    logger.info('Attempting to fix test dependencies...');
+    const fixResult = await fixTestDependencies();
+    if (!fixResult.success) {
+      logger.warn('Test dependency fixing failed, continuing with checks');
+    }
+  }
+  
+  // Fix React Query types if requested
+  if (fixQueryTypes) {
+    logger.info('Attempting to fix React Query types...');
+    const fixResult = await fixQueryTypes();
+    if (!fixResult.success) {
+      logger.warn('React Query type fixing failed, continuing with checks');
+    }
+  }
+  
+  const tests = [];
+  
+  if (!skipLint) {
+    tests.push({
       name: 'ESLint Check',
       command: 'pnpm run lint',
-      validator: lintCheck.validateLintOutput
-    },
-    {
+      validator: runLintCheck.validateLintOutput
+    });
+  }
+  
+  if (!skipTypecheck) {
+    tests.push({
       name: 'TypeScript Type Check',
       command: 'pnpm run typecheck',
-      validator: typescriptCheck.validateTypeCheckOutput
-    },
-    {
+      validator: runTypeScriptCheck.validateTypeCheckOutput,
+      onFailure: async (_output) => {
+        // If TypeScript check fails and auto-fix is enabled, try to fix
+        if (autoFixTypescript) {
+          logger.info('TypeScript check failed, attempting to automatically fix errors...');
+          const fixResult = await fixTypeScriptIssues({
+            targetDirs: ['packages/admin/src', 'packages/common/src', 'packages/hours/src'],
+            fix: true,
+            verbose: true
+          });
+          
+          if (fixResult.success) {
+            logger.success('TypeScript issues fixed automatically!');
+            return true;
+          } else {
+            logger.warn('Automatic TypeScript fixes were only partially successful or unsuccessful');
+            logger.info('Consider manually reviewing and fixing remaining TypeScript errors');
+          }
+        }
+        return false;
+      }
+    });
+  }
+  
+  if (!skipTests) {
+    tests.push({
       name: 'Unit Tests',
       command: 'pnpm run test',
-      validator: (output) => {
+      validator: (_output) => {
         // Basic validator for test output - look for failure indicators
-        const hasFailures = /failed|failure|error/i.test(output);
+        const hasFailures = /failed|failure|error/i.test(_output);
         return {
           valid: !hasFailures,
           error: hasFailures ? 'Test failures detected' : null
         };
       }
-    }
-  ];
+    });
+  }
   
-  return runTests(tests, options);
+  if (tests.length === 0) {
+    logger.info('No quality checks to run');
+    return {
+      success: true,
+      totalTests: 0,
+      passedTests: 0,
+      failedTests: 0,
+      duration: 0,
+      results: []
+    };
+  }
+  
+  return runTests(tests, {
+    stopOnFailure,
+    verbose
+  });
+}
+
+/**
+ * Check test setup across packages
+ * @returns {Object} Check result
+ */
+export async function checkTestSetup() {
+  try {
+    const packages = ['hours', 'admin', 'common'];
+    const issues = [];
+
+    for (const pkg of packages) {
+      const pkgJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'packages', pkg, 'package.json'), 'utf8'));
+      
+      // Check for test dependencies
+      const hasVitest = pkgJson.devDependencies?.vitest;
+      const hasTestingLibrary = pkgJson.devDependencies?.['@testing-library/react'];
+      
+      if (!hasVitest) {
+        issues.push(`${pkg}: Missing Vitest`);
+      }
+      if (!hasTestingLibrary) {
+        issues.push(`${pkg}: Missing React Testing Library`);
+      }
+
+      // Check for test coverage script
+      if (!pkgJson.scripts?.['test:coverage']) {
+        issues.push(`${pkg}: Missing test coverage script`);
+      }
+    }
+
+    return {
+      name: 'Test Setup',
+      status: issues.length === 0 ? 'ok' : 'warning',
+      message: issues.length === 0 ? 'Test configuration valid' : issues.join('\n'),
+      required: true
+    };
+  } catch (error) {
+    return {
+      name: 'Test Setup',
+      status: 'error',
+      message: 'Failed to check test setup',
+      required: false
+    };
+  }
 }
 
 export default {
   runTest,
   runTests,
-  runStandardTests
+  runStandardTests,
+  checkTestSetup
 }; 

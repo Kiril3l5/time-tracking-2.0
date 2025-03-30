@@ -1,359 +1,246 @@
 /**
  * Quality Checker Module
  * 
- * Handles code quality checks including ESLint, TypeScript, and tests.
- * Properly integrates with existing check modules.
+ * Manages quality checks including linting, testing, and type checking.
  */
 
-import { execSync } from 'child_process';
-import * as logger from '../core/logger.js';
-import * as lintCheck from '../checks/lint-check.js';
-import * as typescriptCheck from '../checks/typescript-check.js';
-import * as testRunner from '../checks/test-runner.js';
-import * as typescriptFixer from '../typescript/typescript-fixer.js';
-import * as queryTypesFixer from '../typescript/query-types-fixer.js';
-import * as testDepsFixer from '../test-types/test-deps-fixer.js';
+// Core Dependencies
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
+import { performanceMonitor } from '../core/performance-monitor.js';
+import errorHandler from '../core/error-handler.js';
+
+// Workflow Components
+import getWorkflowState from './workflow-state.js';
 
 /**
- * Run ESLint checks with fallback to command line
- * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string}>} - Result
+ * Quality Checker Class
  */
-export async function runLintChecks(options = {}) {
-  logger.info("Running ESLint to check code quality...");
-  
-  try {
-    // Try to use the module function
-    if (typeof lintCheck.runLintCheck === 'function') {
-      const result = await lintCheck.runLintCheck({
-        verbose: options.verbose
+export class QualityChecker {
+  constructor() {
+    this.logger = logger;
+    this.commandRunner = commandRunner;
+    this.performanceMonitor = performanceMonitor;
+    this.errorHandler = errorHandler;
+    this.workflowState = getWorkflowState();
+  }
+
+  /**
+   * Run quality checks on packages
+   * @param {Object} context - Execution context
+   * @returns {Promise<Object>} Quality check results
+   */
+  async runQualityChecks(context) {
+    const { buildOrder, packages } = context;
+    this.logger.info('Running quality checks...');
+    const startTime = Date.now();
+    
+    try {
+      const results = {
+        success: true,
+        duration: 0,
+        packages: new Map(),
+        errors: [],
+        warnings: []
+      };
+      
+      // Run checks in build order
+      for (const packageName of buildOrder) {
+        const packageInfo = packages.get(packageName);
+        if (!packageInfo) {
+          throw new this.errorHandler.WorkflowError(`Package ${packageName} not found`);
+        }
+        
+        this.logger.info(`Running quality checks for ${packageName}...`);
+        const packageStartTime = Date.now();
+        
+        try {
+          // Run linting
+          const lintResult = await this.runLinting(packageInfo);
+          if (!lintResult.success) {
+            results.errors.push({
+              package: packageName,
+              type: 'linting',
+              errors: lintResult.errors
+            });
+          }
+          
+          // Run type checking
+          const typeResult = await this.runTypeChecking(packageInfo);
+          if (!typeResult.success) {
+            results.errors.push({
+              package: packageName,
+              type: 'type-checking',
+              errors: typeResult.errors
+            });
+          }
+          
+          // Run tests
+          const testResult = await this.runTests(packageInfo);
+          if (!testResult.success) {
+            results.errors.push({
+              package: packageName,
+              type: 'testing',
+              errors: testResult.errors
+            });
+          }
+          
+          // Add warnings
+          results.warnings.push(...lintResult.warnings, ...typeResult.warnings, ...testResult.warnings);
+          
+          // Store package results
+          results.packages.set(packageName, {
+            success: lintResult.success && typeResult.success && testResult.success,
+            duration: Date.now() - packageStartTime,
+            linting: lintResult,
+            typeChecking: typeResult,
+            testing: testResult
+          });
+          
+        } catch (error) {
+          this.logger.error(`Quality checks failed for ${packageName}: ${error.message}`);
+          results.errors.push({
+            package: packageName,
+            type: 'general',
+            error: error.message
+          });
+          
+          results.packages.set(packageName, {
+            success: false,
+            duration: Date.now() - packageStartTime,
+            error: error.message
+          });
+        }
+      }
+      
+      // Calculate overall success
+      results.success = results.errors.length === 0;
+      results.duration = Date.now() - startTime;
+      
+      // Add results to workflow state
+      this.workflowState.updateMetrics({
+        qualityChecks: {
+          totalPackages: buildOrder.length,
+          successfulPackages: Array.from(results.packages.values()).filter(p => p.success).length,
+          failedPackages: Array.from(results.packages.values()).filter(p => !p.success).length,
+          totalErrors: results.errors.length,
+          totalWarnings: results.warnings.length
+        }
       });
-      return { success: result.success };
-    } else {
-      // Fallback to command line
-      logger.info("Using command line fallback for ESLint");
-      execSync('pnpm run lint', { stdio: 'inherit' });
-      return { success: true };
-    }
-  } catch (error) {
-    logger.warn(`ESLint check error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message 
-    };
-  }
-}
-
-/**
- * Run TypeScript type checking with fallback to command line
- * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string}>} - Result
- */
-export async function runTypeScriptChecks(options = {}) {
-  logger.info("Running TypeScript type checking...");
-  
-  try {
-    // Try to use the module function
-    if (typeof typescriptCheck.runTypeCheck === 'function') {
-      const result = await typescriptCheck.runTypeCheck({
-        verbose: options.verbose
-      });
-      return { success: result.success };
-    } else {
-      // Fallback to command line
-      logger.info("Using command line fallback for TypeScript check");
-      execSync('pnpm run typecheck', { stdio: 'inherit' });
-      return { success: true };
-    }
-  } catch (error) {
-    logger.warn(`TypeScript check error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message 
-    };
-  }
-}
-
-/**
- * Run unit tests
- * @param {Object} options - Options for running tests
- * @returns {Promise<{success: boolean, error?: string}>} - Result
- */
-export async function runTests(options = {}) {
-  logger.info("Running unit tests...");
-  
-  try {
-    const result = await testRunner.runTests({
-      verbose: options.verbose
-    });
-    return { success: result.success };
-  } catch (error) {
-    logger.warn(`Test error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message 
-    };
-  }
-}
-
-/**
- * Fix TypeScript errors
- * @param {Object} options - Options for fixes
- * @returns {Promise<{success: boolean, error?: string}>} - Result
- */
-export async function fixTypeScriptErrors(options = {}) {
-  logger.info("Attempting to fix TypeScript errors...");
-  
-  try {
-    await typescriptFixer.fixTypeScriptErrors({
-      verbose: options.verbose
-    });
-    
-    // Re-run type check to see if fixes worked
-    const retryResult = await runTypeScriptChecks(options);
-    
-    if (retryResult.success) {
-      logger.success("TypeScript issues fixed successfully!");
-    } else {
-      logger.warn("Some TypeScript issues couldn't be fixed automatically.");
-    }
-    
-    return retryResult;
-  } catch (error) {
-    logger.warn(`TypeScript fix error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message 
-    };
-  }
-}
-
-/**
- * Fix React Query types
- * @param {Object} options - Options for fixes
- * @returns {Promise<{success: boolean, fixed: number, error?: string}>} - Result
- */
-export async function fixQueryTypes(options = {}) {
-  logger.info("Checking React Query types...");
-  
-  try {
-    const result = await queryTypesFixer.fixQueryTypes({
-      verbose: options.verbose
-    });
-    
-    const fixedCount = result.fixed || 0;
-    if (fixedCount > 0) {
-      logger.success(`Fixed React Query imports in ${fixedCount} files`);
-    } else {
-      logger.info("No React Query imports needed fixing");
-    }
-    
-    return { 
-      success: true, 
-      fixed: fixedCount 
-    };
-  } catch (error) {
-    logger.warn(`React Query types fix error: ${error.message}`);
-    return { 
-      success: false, 
-      fixed: 0,
-      error: error.message 
-    };
-  }
-}
-
-/**
- * Fix test dependencies
- * @param {Object} options - Options for fixes
- * @returns {Promise<{success: boolean, error?: string}>} - Result
- */
-export async function fixTestDependencies(options = {}) {
-  logger.info("Checking for test dependencies issues...");
-  
-  try {
-    await testDepsFixer.fixTestDependencies({
-      verbose: options.verbose
-    });
-    
-    // Re-run tests to see if fixes worked
-    const retryResult = await runTests(options);
-    
-    if (retryResult.success) {
-      logger.success("Test dependencies fixed successfully!");
-    } else {
-      logger.warn("Some test issues couldn't be fixed automatically.");
-    }
-    
-    return { 
-      success: true
-    };
-  } catch (error) {
-    logger.warn(`Test dependencies fix error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message 
-    };
-  }
-}
-
-/**
- * Run all quality checks
- * @param {Object} options - Options for checks
- * @param {Function} options.promptFn - Function to prompt the user
- * @returns {Promise<{success: boolean, results: Object}>} - Overall result and individual results
- */
-export async function runAllQualityChecks(options = {}) {
-  const results = {
-    lint: null,
-    typescript: null,
-    tests: null
-  };
-  
-  // Run ESLint
-  results.lint = await runLintChecks(options);
-  
-  if (!results.lint.success && options.promptFn) {
-    logger.warn("ESLint found code quality issues. Please review them before continuing.");
-    const shouldContinue = await options.promptFn("Would you like to continue despite the lint issues? (y/N)", "N");
-    if (shouldContinue.toLowerCase() !== 'y') {
-      logger.info("Exiting workflow. Please fix the linting issues and try again.");
-      return { 
-        success: false, 
-        results
+      
+      if (results.success) {
+        this.logger.success(`Quality checks completed successfully (Duration: ${results.duration}ms)`);
+      } else {
+        this.logger.warn(`Quality checks completed with errors (Duration: ${results.duration}ms)`);
+      }
+      
+      return results;
+      
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      this.logger.error(`Quality checks failed: ${error.message}`);
+      
+      return {
+        success: false,
+        duration,
+        error: error.message
       };
     }
   }
-  
-  // Run TypeScript
-  results.typescript = await runTypeScriptChecks(options);
-  
-  if (!results.typescript.success) {
-    logger.error("TypeScript found type errors.");
+
+  /**
+   * Run linting checks
+   * @private
+   * @param {Object} packageInfo - Package information
+   * @returns {Promise<Object>} Linting results
+   */
+  async runLinting(packageInfo) {
+    const startTime = Date.now();
     
-    if (options.promptFn) {
-      const shouldFix = await options.promptFn("Would you like to attempt auto-fixing TypeScript issues? (Y/n)", "Y");
+    try {
+      const result = await this.commandRunner.runCommand(
+        `cd ${packageInfo.path} && pnpm lint`
+      );
       
-      if (shouldFix.toLowerCase() !== 'n') {
-        const fixResult = await fixTypeScriptErrors(options);
-        results.typescriptFix = fixResult;
-        
-        if (!fixResult.success) {
-          const continueAnyway = await options.promptFn("Continue despite TypeScript errors? (y/N)", "N");
-          if (continueAnyway.toLowerCase() !== 'y') {
-            logger.info("Exiting workflow. Please fix the TypeScript errors manually and try again.");
-            return { 
-              success: false, 
-              results
-            };
-          }
-        }
-      } else {
-        const continueAnyway = await options.promptFn("Continue despite TypeScript errors? (y/N)", "N");
-        if (continueAnyway.toLowerCase() !== 'y') {
-          logger.info("Exiting workflow. Please fix the TypeScript errors and try again.");
-          return { 
-            success: false, 
-            results
-          };
-        }
-      }
+      return {
+        success: result.success,
+        duration: Date.now() - startTime,
+        errors: result.success ? [] : [result.error],
+        warnings: []
+      };
+    } catch (error) {
+      return {
+        success: false,
+        duration: Date.now() - startTime,
+        errors: [error.message],
+        warnings: []
+      };
     }
   }
-  
-  // Run Tests
-  results.tests = await runTests(options);
-  
-  if (!results.tests.success && options.promptFn) {
-    logger.error("Unit tests failed.");
+
+  /**
+   * Run type checking
+   * @private
+   * @param {Object} packageInfo - Package information
+   * @returns {Promise<Object>} Type checking results
+   */
+  async runTypeChecking(packageInfo) {
+    const startTime = Date.now();
     
-    const shouldFixDeps = await options.promptFn("Would you like to attempt fixing test dependencies? (Y/n)", "Y");
-    
-    if (shouldFixDeps.toLowerCase() !== 'n') {
-      const fixResult = await fixTestDependencies(options);
-      results.testsFix = fixResult;
+    try {
+      const result = await this.commandRunner.runCommand(
+        `cd ${packageInfo.path} && pnpm type-check`
+      );
       
-      if (!results.tests.success) {
-        const continueAnyway = await options.promptFn("Continue despite test failures? (y/N)", "N");
-        if (continueAnyway.toLowerCase() !== 'y') {
-          logger.info("Exiting workflow. Please fix the failing tests and try again.");
-          return { 
-            success: false, 
-            results
-          };
-        }
-      }
-    } else {
-      const continueAnyway = await options.promptFn("Continue despite test failures? (y/N)", "N");
-      if (continueAnyway.toLowerCase() !== 'y') {
-        logger.info("Exiting workflow. Please fix the failing tests and try again.");
-        return { 
-          success: false, 
-          results
-        };
-      }
+      return {
+        success: result.success,
+        duration: Date.now() - startTime,
+        errors: result.success ? [] : [result.error],
+        warnings: []
+      };
+    } catch (error) {
+      return {
+        success: false,
+        duration: Date.now() - startTime,
+        errors: [error.message],
+        warnings: []
+      };
     }
   }
-  
-  // Determine overall success
-  const overallSuccess = 
-    (results.lint.success || options.ignoreLintFailure) && 
-    (results.typescript.success || options.ignoreTypeScriptFailure) && 
-    (results.tests.success || options.ignoreTestFailure);
-  
-  if (overallSuccess) {
-    logger.success("All quality checks complete!");
+
+  /**
+   * Run tests
+   * @private
+   * @param {Object} packageInfo - Package information
+   * @returns {Promise<Object>} Test results
+   */
+  async runTests(packageInfo) {
+    const startTime = Date.now();
+    
+    try {
+      const result = await this.commandRunner.runCommand(
+        `cd ${packageInfo.path} && pnpm test`
+      );
+      
+      return {
+        success: result.success,
+        duration: Date.now() - startTime,
+        errors: result.success ? [] : [result.error],
+        warnings: []
+      };
+    } catch (error) {
+      return {
+        success: false,
+        duration: Date.now() - startTime,
+        errors: [error.message],
+        warnings: []
+      };
+    }
   }
-  
-  return {
-    success: overallSuccess,
-    results
-  };
 }
 
-/**
- * Run all auto-fixes
- * @param {Object} options - Options for fixes
- * @returns {Promise<{success: boolean, results: Object}>} - Overall result and individual results
- */
-export async function runAllFixes(options = {}) {
-  const results = {
-    testDeps: null,
-    queryTypes: null,
-    typescript: null
-  };
-  
-  // Fix test dependencies
-  results.testDeps = await fixTestDependencies(options);
-  
-  // Fix React Query types
-  results.queryTypes = await fixQueryTypes(options);
-  
-  // Fix TypeScript errors
-  results.typescript = await fixTypeScriptErrors(options);
-  
-  // Determine overall success
-  const overallSuccess = 
-    results.testDeps.success && 
-    results.queryTypes.success && 
-    results.typescript.success;
-  
-  if (overallSuccess) {
-    logger.success("All auto-fixes complete!");
-  }
-  
-  return {
-    success: overallSuccess,
-    results
-  };
-}
+// Export quality checker instance
+export const qualityChecker = new QualityChecker();
 
-export default {
-  runLintChecks,
-  runTypeScriptChecks,
-  runTests,
-  fixTypeScriptErrors,
-  fixQueryTypes,
-  fixTestDependencies,
-  runAllQualityChecks,
-  runAllFixes
-}; 
+// Export runQualityChecks function for direct use
+export const runQualityChecks = (context) => qualityChecker.runQualityChecks(context); 

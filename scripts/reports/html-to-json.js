@@ -11,7 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { JSDOM } from 'jsdom';
 import process from 'node:process';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
 
 const TEMP_DIR = path.join(process.cwd(), 'temp');
 

@@ -4,8 +4,7 @@
  * Consolidated Report Dashboard Generator
  * 
  * This module generates a unified HTML dashboard for the preview workflow that combines
- * multiple report types (build analysis, doc quality, bundle size, dead code, vulnerability)
- * into a single tabbed interface, reducing file clutter and providing a better user experience.
+ * multiple report types and provides a beautiful, interactive interface for the entire workflow.
  * 
  * @module reports/consolidated-report
  */
@@ -13,10 +12,43 @@
 import fs from 'fs';
 import _path from 'path';
 import process from 'node:process';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
+import { execSync } from 'child_process';
+import { getCurrentBranch } from '../workflow/branch-manager.js';
+import { QualityChecker } from '../workflow/quality-checker.js';
+import { deployPackage } from '../workflow/deployment-manager.js';
+import { WORKFLOW_STEPS } from '../workflow/step-runner.js';
 
 // Default report path
 const DEFAULT_REPORT_PATH = 'preview-dashboard.html';
+
+/**
+ * Open the dashboard in the default browser
+ * @param {string} dashboardPath - Path to the dashboard file
+ */
+async function openDashboard(dashboardPath) {
+  try {
+    // Try different commands based on the platform
+    const platform = process.platform;
+    let command;
+    
+    switch (platform) {
+      case 'darwin': // macOS
+        command = `open "${dashboardPath}"`;
+        break;
+      case 'win32': // Windows
+        command = `start "" "${dashboardPath}"`;
+        break;
+      default: // Linux and others
+        command = `xdg-open "${dashboardPath}"`;
+    }
+    
+    execSync(command, { stdio: 'pipe' });
+    logger.success('Dashboard opened in your default browser');
+  } catch (error) {
+    logger.warn('Could not open dashboard automatically. Please open preview-dashboard.html in your browser.');
+  }
+}
 
 /**
  * Main function to generate a consolidated dashboard
@@ -28,7 +60,9 @@ const DEFAULT_REPORT_PATH = 'preview-dashboard.html';
  * @param {Object} [options.deadCodeData] - Dead code analysis data
  * @param {Object} [options.vulnerabilityData] - Dependency vulnerability data
  * @param {Object} [options.performanceData] - Performance metrics data
+ * @param {Object} [options.previewUrls] - Preview URLs
  * @param {string} [options.title] - Dashboard title
+ * @param {boolean} [options.openInBrowser] - Whether to open the dashboard in browser
  * @returns {Promise<boolean>} - Whether the report was generated successfully
  */
 export async function generateConsolidatedReport(options = {}) {
@@ -41,10 +75,18 @@ export async function generateConsolidatedReport(options = {}) {
       vulnerabilityData = null,
       performanceData = null,
       previewUrls = null,
-      title = `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`
+      title = `Preview Workflow Dashboard (${new Date().toLocaleDateString()})`,
+      openInBrowser = true
     } = options;
     
-    logger.info(`Generating consolidated report at ${reportPath}...`);
+    logger.info(`Generating enhanced dashboard at ${reportPath}...`);
+    
+    // Collect additional data
+    const gitData = await getCurrentBranch();
+    const qualityChecker = new QualityChecker();
+    const qualityData = await qualityChecker.runQualityChecks();
+    const deploymentData = await deployPackage('preview');
+    const stepData = await WORKFLOW_STEPS;
     
     // Generate HTML content
     const html = generateHtml({
@@ -54,25 +96,31 @@ export async function generateConsolidatedReport(options = {}) {
       deadCodeData,
       vulnerabilityData,
       performanceData,
-      previewUrls
+      previewUrls,
+      gitData,
+      qualityData,
+      deploymentData,
+      stepData
     });
     
     // Write to file
     fs.writeFileSync(reportPath, html);
-    logger.success(`Consolidated report generated at ${reportPath}`);
+    logger.success(`Enhanced dashboard generated at ${reportPath}`);
+    
+    // Open in browser if requested
+    if (openInBrowser) {
+      await openDashboard(reportPath);
+    }
     
     return true;
   } catch (error) {
-    logger.error(`Failed to generate consolidated report: ${error.message}`);
+    logger.error(`Failed to generate dashboard: ${error.message}`);
     return false;
   }
 }
 
 /**
- * Generate HTML content for the dashboard
- * 
- * @param {Object} data - Data for the dashboard
- * @returns {string} - HTML content
+ * Generate the enhanced HTML content
  */
 function generateHtml(data) {
   const { 
@@ -82,7 +130,11 @@ function generateHtml(data) {
     deadCodeData, 
     vulnerabilityData,
     performanceData,
-    previewUrls 
+    previewUrls,
+    gitData,
+    qualityData,
+    deploymentData,
+    stepData
   } = data;
   
   return `<!DOCTYPE html>
@@ -331,66 +383,313 @@ function generateHtml(data) {
     .missing-urls li {
       margin-bottom: 5px;
     }
+
+    /* Add new styles for quick actions */
+    .quick-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin: 20px 0;
+    }
+    
+    .quick-action-card {
+      background: white;
+      border-radius: var(--border-radius);
+      padding: 15px;
+      box-shadow: var(--shadow);
+      border: 1px solid var(--color-border);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    .quick-action-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    
+    .quick-action-card h3 {
+      margin: 0 0 10px 0;
+      color: var(--color-primary);
+    }
+    
+    .quick-action-card p {
+      margin: 0;
+      font-size: 0.9em;
+      color: var(--color-text-light);
+    }
+    
+    /* Add styles for deployment info */
+    .deployment-info {
+      background: var(--color-primary-light);
+      border-radius: var(--border-radius);
+      padding: 15px;
+      margin: 20px 0;
+    }
+    
+    .deployment-info h2 {
+      margin-top: 0;
+      color: var(--color-primary);
+    }
+    
+    .deployment-info ul {
+      margin: 0;
+      padding-left: 20px;
+    }
+    
+    .deployment-info li {
+      margin-bottom: 5px;
+    }
+    
+    /* Add styles for next steps */
+    .next-steps {
+      background: var(--color-secondary-light);
+      border-radius: var(--border-radius);
+      padding: 15px;
+      margin: 20px 0;
+    }
+    
+    .next-steps h2 {
+      margin-top: 0;
+      color: var(--color-secondary);
+    }
+    
+    .next-steps ol {
+      margin: 0;
+      padding-left: 20px;
+    }
+    
+    .next-steps li {
+      margin-bottom: 10px;
+    }
+
+    /* New styles for workflow status */
+    .workflow-status {
+      background: white;
+      border-radius: var(--border-radius);
+      padding: 20px;
+      margin: 20px 0;
+      box-shadow: var(--shadow);
+    }
+    
+    .status-timeline {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 15px;
+      position: relative;
+    }
+    
+    .status-timeline::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--color-border);
+      z-index: 1;
+    }
+    
+    .status-step {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      position: relative;
+      z-index: 2;
+      background: white;
+      padding: 0 10px;
+    }
+    
+    .step-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--color-bg-light);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+    
+    .status-step.completed .step-icon {
+      background: var(--color-secondary);
+      color: white;
+    }
+    
+    .status-step.current .step-icon {
+      background: var(--color-primary);
+      color: white;
+    }
+    
+    .step-label {
+      font-size: 0.9em;
+      color: var(--color-text-light);
+    }
+    
+    /* Branch info styles */
+    .branch-info {
+      background: var(--color-bg-light);
+      border-radius: var(--border-radius);
+      padding: 15px;
+      margin: 20px 0;
+    }
+    
+    .branch-info ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+    }
+    
+    .branch-info li {
+      padding: 10px;
+      background: white;
+      border-radius: 4px;
+      box-shadow: var(--shadow);
+    }
+    
+    /* Environment comparison styles */
+    .environment-comparison {
+      margin: 20px 0;
+    }
+    
+    .environment-comparison table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+    
+    .environment-comparison th,
+    .environment-comparison td {
+      padding: 10px;
+      text-align: left;
+      border: 1px solid var(--color-border);
+    }
+    
+    .environment-comparison th {
+      background: var(--color-bg-light);
+    }
+    
+    /* Error summary styles */
+    .error-summary {
+      background: var(--color-warning-light);
+      border-radius: var(--border-radius);
+      padding: 15px;
+      margin: 20px 0;
+    }
+    
+    .error-summary h2 {
+      color: var(--color-warning);
+      margin-top: 0;
+    }
+    
+    .error-summary ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    
+    .error-summary li {
+      display: flex;
+      align-items: center;
+      margin-bottom: 10px;
+      padding: 8px;
+      background: white;
+      border-radius: 4px;
+    }
+    
+    .error-severity {
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.8em;
+      margin-right: 10px;
+    }
+    
+    .error-severity.critical { background: #ffebee; color: #c62828; }
+    .error-severity.high { background: #fff3e0; color: #e65100; }
+    .error-severity.medium { background: #fff8e1; color: #f57f17; }
+    .error-severity.low { background: #f1f8e9; color: #33691e; }
   </style>
 </head>
 <body>
   <h1>${title}</h1>
   <p>Generated on: ${new Date().toLocaleString()}</p>
   
-  ${previewUrls ? `
-  <div class="preview-urls-panel">
-    <h2>🚀 Preview URLs</h2>
-    <p>Use these URLs to test the current preview deployment:</p>
-    
-    ${previewUrls.admin ? `
-    <div class="preview-url-item">
-      <div class="preview-url-label">Admin Portal:</div>
-      <div class="preview-url-value">
-        <a href="${previewUrls.admin}" target="_blank">${previewUrls.admin}</a>
-      </div>
+  <!-- Workflow Status -->
+  <div class="workflow-status">
+    <h2>Workflow Status</h2>
+    <div class="status-timeline">
+      ${generateWorkflowStatus(stepData)}
     </div>
-    ` : ''}
-    
-    ${previewUrls.hours ? `
-    <div class="preview-url-item">
-      <div class="preview-url-label">Hours Portal:</div>
-      <div class="preview-url-value">
-        <a href="${previewUrls.hours}" target="_blank">${previewUrls.hours}</a>
-      </div>
-    </div>
-    ` : ''}
-    
-    <p style="margin-top: 15px;"><small>Note: These preview URLs will remain accessible until the preview environment is deleted or expires.</small></p>
   </div>
-  ` : `
-  <div class="preview-urls-panel missing-urls">
-    <h2>⚠️ Preview URLs Not Available</h2>
-    <p>No preview URLs were found for this deployment. This might happen if:</p>
+  
+  <!-- Quick Actions -->
+  <div class="quick-actions">
+    ${generateQuickActions(previewUrls, gitData)}
+  </div>
+  
+  <!-- Branch Information -->
+  <div class="branch-info">
+    <h2>Branch Information</h2>
     <ul>
-      <li>The deployment is still in progress</li>
-      <li>The deployment encountered issues</li>
-      <li>URL extraction failed</li>
+      <li><strong>Current Branch:</strong> ${gitData.currentBranch}</li>
+      <li><strong>Base Branch:</strong> ${gitData.baseBranch}</li>
+      <li><strong>Last Commit:</strong> ${gitData.lastCommit}</li>
+      <li><strong>Changes:</strong> ${gitData.changes}</li>
     </ul>
-    <p>Check the deployment logs for more information.</p>
   </div>
-  `}
   
+  <!-- Preview URLs -->
+  ${generatePreviewUrls(previewUrls)}
+  
+  <!-- Deployment Information -->
+  <div class="deployment-info">
+    <h2>📊 Deployment Information</h2>
+    <ul>
+      <li><strong>Build Status:</strong> ${deploymentData.buildStatus}</li>
+      <li><strong>Total Duration:</strong> ${deploymentData.totalDuration}</li>
+      <li><strong>Build Time:</strong> ${deploymentData.buildTime}</li>
+      <li><strong>Deployment Time:</strong> ${deploymentData.deploymentTime}</li>
+      <li><strong>Environment:</strong> ${deploymentData.environment}</li>
+    </ul>
+  </div>
+  
+  <!-- Environment Comparison -->
+  <div class="environment-comparison">
+    <h2>Environment Comparison</h2>
+    <table>
+      <tr>
+        <th>Metric</th>
+        <th>Development</th>
+        <th>Production</th>
+        <th>Change</th>
+      </tr>
+      ${generateEnvironmentComparison(qualityData)}
+    </table>
+  </div>
+  
+  <!-- Error Summary -->
+  ${generateErrorSummary(qualityData)}
+  
+  <!-- Next Steps -->
+  <div class="next-steps">
+    <h2>📝 Next Steps</h2>
+    <ol>
+      ${generateNextSteps(qualityData, deploymentData)}
+    </ol>
+  </div>
+  
+  <!-- Quality Metrics -->
   <div class="status-panel">
-    <h2>Workflow Summary</h2>
+    <h2>Quality Metrics</h2>
     <div class="status-items">
-      <div class="status-item">
-        <div class="status-label">Build Status:</div>
-        <div class="status-value success">✅ Completed</div>
-      </div>
-      ${performanceData ? `
-      <div class="status-item">
-        <div class="status-label">Total Duration:</div>
-        <div class="status-value">${performanceData.totalDuration || '(Not available)'}</div>
-      </div>
-      ` : ''}
+      ${generateQualityMetrics(bundleData, deadCodeData, vulnerabilityData, docQualityData)}
     </div>
   </div>
   
+  <!-- Detailed Reports -->
   <div class="tab-container">
     <div class="tabs">
       <div class="tab active" data-tab="overview">Overview</div>
@@ -401,101 +700,19 @@ function generateHtml(data) {
       ${performanceData ? '<div class="tab" data-tab="performance">Performance Metrics</div>' : ''}
     </div>
     
-    <!-- Overview Tab -->
-    <div class="tab-content active" id="overview">
-      <h2>Project Overview</h2>
-      
-      <div class="summary-cards">
-        ${bundleData ? `
-        <div class="summary-card">
-          <h3>Bundle Analysis</h3>
-          <p>Bundle Size: ${formatBytes(getBundleSize(bundleData))}</p>
-          <p>Issues: ${getBundleIssueCount(bundleData)}</p>
-        </div>
-        ` : ''}
-        
-        ${docQualityData ? `
-        <div class="summary-card">
-          <h3>Documentation Quality</h3>
-          <p>Coverage: ${getDocCoverage(docQualityData)}%</p>
-          <p>Issues: ${getDocIssueCount(docQualityData)}</p>
-        </div>
-        ` : ''}
-        
-        ${deadCodeData ? `
-        <div class="summary-card">
-          <h3>Dead Code</h3>
-          <p>Unused Exports: ${getUnusedExportCount(deadCodeData)}</p>
-          <p>Unused Dependencies: ${getUnusedDependencyCount(deadCodeData)}</p>
-        </div>
-        ` : ''}
-        
-        ${vulnerabilityData ? `
-        <div class="summary-card">
-          <h3>Vulnerabilities</h3>
-          <p>Critical: ${getVulnerabilityCount(vulnerabilityData, 'critical')}</p>
-          <p>High: ${getVulnerabilityCount(vulnerabilityData, 'high')}</p>
-          <p>Medium: ${getVulnerabilityCount(vulnerabilityData, 'medium')}</p>
-        </div>
-        ` : ''}
-      </div>
-    </div>
-    
-    <!-- Bundle Analysis Tab -->
-    ${bundleData ? `
-    <div class="tab-content" id="bundle">
-      <h2>Bundle Size Analysis</h2>
-      ${generateBundleContent(bundleData)}
-    </div>
-    ` : ''}
-    
-    <!-- Documentation Quality Tab -->
-    ${docQualityData ? `
-    <div class="tab-content" id="doc-quality">
-      <h2>Documentation Quality Report</h2>
-      ${generateDocQualityContent(docQualityData)}
-    </div>
-    ` : ''}
-    
-    <!-- Dead Code Tab -->
-    ${deadCodeData ? `
-    <div class="tab-content" id="dead-code">
-      <h2>Dead Code Analysis</h2>
-      ${generateDeadCodeContent(deadCodeData)}
-    </div>
-    ` : ''}
-    
-    <!-- Vulnerability Tab -->
-    ${vulnerabilityData ? `
-    <div class="tab-content" id="vulnerability">
-      <h2>Vulnerability Report</h2>
-      ${generateVulnerabilityContent(vulnerabilityData)}
-    </div>
-    ` : ''}
-    
-    <!-- Performance Tab -->
-    ${performanceData ? `
-    <div class="tab-content" id="performance">
-      <h2>Performance Metrics</h2>
-      ${generatePerformanceContent(performanceData)}
-    </div>
-    ` : ''}
+    <!-- Tab Contents -->
+    ${generateTabContents(data)}
   </div>
 
   <script>
-    // Simple tab switching functionality
+    // Tab switching functionality
     document.addEventListener('DOMContentLoaded', function() {
       const tabs = document.querySelectorAll('.tab');
       tabs.forEach(tab => {
         tab.addEventListener('click', () => {
-          // Remove active class from all tabs and content
           document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
           document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-          
-          // Add active class to clicked tab
           tab.classList.add('active');
-          
-          // Show corresponding content
           const tabId = tab.getAttribute('data-tab');
           document.getElementById(tabId).classList.add('active');
         });
@@ -504,6 +721,133 @@ function generateHtml(data) {
   </script>
 </body>
 </html>`;
+}
+
+/**
+ * Generate workflow status HTML
+ */
+function generateWorkflowStatus(stepData) {
+  const steps = [
+    { id: 'auth', label: 'Authentication', icon: '🔐' },
+    { id: 'quality', label: 'Quality Checks', icon: '✅' },
+    { id: 'build', label: 'Build', icon: '🏗️' },
+    { id: 'deploy', label: 'Deployment', icon: '🚀' },
+    { id: 'report', label: 'Reporting', icon: '📊' }
+  ];
+  
+  return steps.map(step => {
+    const status = stepData[step.id];
+    return `
+      <div class="status-step ${status?.completed ? 'completed' : status?.current ? 'current' : ''}">
+        <span class="step-icon">${step.icon}</span>
+        <span class="step-label">${step.label}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+/**
+ * Generate quick actions HTML
+ */
+function generateQuickActions(previewUrls, gitData) {
+  return `
+    <div class="quick-action-card" onclick="window.open('${previewUrls?.admin || '#'}', '_blank')">
+      <h3>🚀 Open Admin Portal</h3>
+      <p>Access the admin interface of your preview deployment</p>
+    </div>
+    <div class="quick-action-card" onclick="window.open('${previewUrls?.hours || '#'}', '_blank')">
+      <h3>⏰ Open Hours Portal</h3>
+      <p>Access the hours interface of your preview deployment</p>
+    </div>
+    <div class="quick-action-card" onclick="window.open('https://github.com/${gitData.owner}/${gitData.repo}/pulls', '_blank')">
+      <h3>📝 Create Pull Request</h3>
+      <p>Create a PR with your changes and preview URLs</p>
+    </div>
+    <div class="quick-action-card" onclick="window.open('https://github.com/${gitData.owner}/${gitData.repo}/actions', '_blank')">
+      <h3>🔄 View CI Status</h3>
+      <p>Check the status of your CI/CD pipeline</p>
+    </div>
+    <div class="quick-action-card" onclick="window.open('${gitData.docsUrl}', '_blank')">
+      <h3>📚 View Documentation</h3>
+      <p>Access relevant documentation for this feature</p>
+    </div>
+    <div class="quick-action-card" onclick="window.open('${gitData.testUrl}', '_blank')">
+      <h3>🧪 Run Tests</h3>
+      <p>Run tests for this feature</p>
+    </div>
+  `;
+}
+
+/**
+ * Generate environment comparison HTML
+ */
+function generateEnvironmentComparison(qualityData) {
+  if (!qualityData?.environments) {
+    return '<tr><td colspan="4">No environment comparison data available</td></tr>';
+  }
+  
+  return Object.entries(qualityData.environments).map(([metric, values]) => `
+    <tr>
+      <td>${metric}</td>
+      <td>${values.dev}</td>
+      <td>${values.prod}</td>
+      <td>
+        <span class="badge ${values.change > 0 ? 'success' : values.change < 0 ? 'error' : ''}">
+          ${values.change > 0 ? '+' : ''}${values.change}%
+        </span>
+      </td>
+    </tr>
+  `).join('');
+}
+
+/**
+ * Generate error summary HTML
+ */
+function generateErrorSummary(qualityData) {
+  if (!qualityData?.errors?.length) {
+    return '';
+  }
+  
+  return `
+    <div class="error-summary">
+      <h2>⚠️ Issues Found</h2>
+      <ul>
+        ${qualityData.errors.map(error => `
+          <li>
+            <span class="error-severity ${error.severity}">${error.severity}</span>
+            ${error.message}
+          </li>
+        `).join('')}
+      </ul>
+    </div>
+  `;
+}
+
+/**
+ * Generate next steps HTML
+ */
+function generateNextSteps(qualityData, deploymentData) {
+  const steps = [];
+  
+  // Add steps based on quality data
+  if (qualityData?.errors?.length) {
+    steps.push('<li>Review and fix the issues found in the quality checks</li>');
+  }
+  
+  // Add steps based on deployment data
+  if (deploymentData?.status === 'success') {
+    steps.push('<li>Review the preview deployment using the URLs above</li>');
+    steps.push('<li>Share the preview URLs with your team for review</li>');
+  }
+  
+  // Add common steps
+  steps.push(
+    '<li>Check the quality metrics in the tabs below</li>',
+    '<li>Create a Pull Request with your changes</li>',
+    '<li>Monitor the CI/CD pipeline for any issues</li>'
+  );
+  
+  return steps.join('');
 }
 
 /**
@@ -809,6 +1153,181 @@ function formatBytes(bytes, decimals = 2) {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+/**
+ * Generate quality metrics HTML
+ */
+function generateQualityMetrics(bundleData, deadCodeData, vulnerabilityData, docQualityData) {
+  return `
+    <div class="status-item">
+      <div class="status-label">Bundle Size:</div>
+      <div class="status-value ${bundleData?.sizeIncrease > 10 ? 'warning' : 'success'}">
+        ${bundleData?.totalSize ? `${bundleData.totalSize}KB` : 'N/A'}
+        ${bundleData?.sizeIncrease ? ` (${bundleData.sizeIncrease}% change)` : ''}
+      </div>
+    </div>
+    <div class="status-item">
+      <div class="status-label">Dead Code:</div>
+      <div class="status-value ${deadCodeData?.totalFiles > 0 ? 'warning' : 'success'}">
+        ${deadCodeData?.totalFiles || 0} files with unused code
+      </div>
+    </div>
+    <div class="status-item">
+      <div class="status-label">Vulnerabilities:</div>
+      <div class="status-value ${vulnerabilityData?.highSeverity > 0 ? 'error' : 'success'}">
+        ${vulnerabilityData?.highSeverity || 0} high, ${vulnerabilityData?.mediumSeverity || 0} medium
+      </div>
+    </div>
+    <div class="status-item">
+      <div class="status-label">Documentation:</div>
+      <div class="status-value ${docQualityData?.totalIssues > 0 ? 'warning' : 'success'}">
+        ${docQualityData?.totalIssues || 0} issues
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Generate preview URLs HTML
+ */
+function generatePreviewUrls(previewUrls) {
+  if (!previewUrls) {
+    return `
+    <div class="preview-urls-panel missing-urls">
+      <h2>⚠️ Preview URLs Not Available</h2>
+      <p>No preview URLs were found for this deployment. This might happen if:</p>
+      <ul>
+        <li>The deployment is still in progress</li>
+        <li>The deployment encountered issues</li>
+        <li>URL extraction failed</li>
+      </ul>
+      <p>Check the deployment logs for more information.</p>
+    </div>
+    `;
+  }
+  
+  return `
+  <div class="preview-urls-panel">
+    <h2>🚀 Preview URLs</h2>
+    <p>Use these URLs to test the current preview deployment:</p>
+    
+    ${previewUrls.admin ? `
+    <div class="preview-url-item">
+      <div class="preview-url-label">Admin Portal:</div>
+      <div class="preview-url-value">
+        <a href="${previewUrls.admin}" target="_blank">${previewUrls.admin}</a>
+      </div>
+    </div>
+    ` : ''}
+    
+    ${previewUrls.hours ? `
+    <div class="preview-url-item">
+      <div class="preview-url-label">Hours Portal:</div>
+      <div class="preview-url-value">
+        <a href="${previewUrls.hours}" target="_blank">${previewUrls.hours}</a>
+      </div>
+    </div>
+    ` : ''}
+    
+    <p style="margin-top: 15px;"><small>Note: These preview URLs will remain accessible until the preview environment is deleted or expires.</small></p>
+  </div>
+  `;
+}
+
+/**
+ * Generate tab contents HTML
+ */
+function generateTabContents(data) {
+  const {
+    bundleData,
+    docQualityData,
+    deadCodeData,
+    vulnerabilityData,
+    performanceData
+  } = data;
+  
+  return `
+    <!-- Overview Tab -->
+    <div class="tab-content active" id="overview">
+      <h2>Project Overview</h2>
+      
+      <div class="summary-cards">
+        ${bundleData ? `
+        <div class="summary-card">
+          <h3>Bundle Analysis</h3>
+          <p>Bundle Size: ${formatBytes(getBundleSize(bundleData))}</p>
+          <p>Issues: ${getBundleIssueCount(bundleData)}</p>
+        </div>
+        ` : ''}
+        
+        ${docQualityData ? `
+        <div class="summary-card">
+          <h3>Documentation Quality</h3>
+          <p>Coverage: ${getDocCoverage(docQualityData)}%</p>
+          <p>Issues: ${getDocIssueCount(docQualityData)}</p>
+        </div>
+        ` : ''}
+        
+        ${deadCodeData ? `
+        <div class="summary-card">
+          <h3>Dead Code</h3>
+          <p>Unused Exports: ${getUnusedExportCount(deadCodeData)}</p>
+          <p>Unused Dependencies: ${getUnusedDependencyCount(deadCodeData)}</p>
+        </div>
+        ` : ''}
+        
+        ${vulnerabilityData ? `
+        <div class="summary-card">
+          <h3>Vulnerabilities</h3>
+          <p>Critical: ${getVulnerabilityCount(vulnerabilityData, 'critical')}</p>
+          <p>High: ${getVulnerabilityCount(vulnerabilityData, 'high')}</p>
+          <p>Medium: ${getVulnerabilityCount(vulnerabilityData, 'medium')}</p>
+        </div>
+        ` : ''}
+      </div>
+    </div>
+    
+    <!-- Bundle Analysis Tab -->
+    ${bundleData ? `
+    <div class="tab-content" id="bundle">
+      <h2>Bundle Size Analysis</h2>
+      ${generateBundleContent(bundleData)}
+    </div>
+    ` : ''}
+    
+    <!-- Documentation Quality Tab -->
+    ${docQualityData ? `
+    <div class="tab-content" id="doc-quality">
+      <h2>Documentation Quality Report</h2>
+      ${generateDocQualityContent(docQualityData)}
+    </div>
+    ` : ''}
+    
+    <!-- Dead Code Tab -->
+    ${deadCodeData ? `
+    <div class="tab-content" id="dead-code">
+      <h2>Dead Code Analysis</h2>
+      ${generateDeadCodeContent(deadCodeData)}
+    </div>
+    ` : ''}
+    
+    <!-- Vulnerability Tab -->
+    ${vulnerabilityData ? `
+    <div class="tab-content" id="vulnerability">
+      <h2>Vulnerability Report</h2>
+      ${generateVulnerabilityContent(vulnerabilityData)}
+    </div>
+    ` : ''}
+    
+    <!-- Performance Tab -->
+    ${performanceData ? `
+    <div class="tab-content" id="performance">
+      <h2>Performance Metrics</h2>
+      ${generatePerformanceContent(performanceData)}
+    </div>
+    ` : ''}
+  `;
 }
 
 // If run directly

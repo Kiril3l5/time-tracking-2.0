@@ -5,7 +5,7 @@
  */
 
 import { execSync } from 'child_process';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
 
 /**
  * Check if a branch is a feature branch

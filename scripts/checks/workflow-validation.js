@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
 
 // Define a simple YAML parser fallback
 const simplifiedYamlParser = {

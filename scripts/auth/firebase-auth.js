@@ -38,8 +38,8 @@
  * }
  */
 
-import * as commandRunner from '../core/command-runner.js';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
 import { execSync } from 'child_process';
 import { spawn } from 'child_process';
 

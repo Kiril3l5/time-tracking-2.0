@@ -34,5 +34,5 @@ export const config = {
   featureBranchPrefix: 'feature/',
   
   // State file location
-  stateFile: '.workflow-state.json'
+  stateFile: 'temp/workflow-state.json'
 }; 

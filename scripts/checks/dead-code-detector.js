@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'url';
-import * as logger from '../core/logger.js';
+import { logger } from '../core/logger.js';
 import { parseArgs } from 'node:util';
 import { getReportPath, getHtmlReportPath, createJsonReport } from '../reports/report-collector.js';
 

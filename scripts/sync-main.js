@@ -14,7 +14,7 @@
 
 import { execSync } from 'child_process';
 import readline from 'readline';
-import * as logger from './core/logger.js';
+import { logger } from './core/logger.js';
 
 // Create readline interface for user input
 const rl = readline.createInterface({
