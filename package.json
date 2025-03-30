@@ -2,6 +2,9 @@
   "name": "time-tracking-system",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "firebase:emulators": "firebase emulators:start",
     "emulators:seed": "firebase emulators:start --import=./seed",
