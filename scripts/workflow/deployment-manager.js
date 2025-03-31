@@ -7,6 +7,10 @@
 import { commandRunner } from '../core/command-runner.js';
 import { logger } from '../core/logger.js';
 import { getCurrentBranch } from './branch-manager.js';
+import fs from 'fs';
+import path from 'path';
+
+/* global process */
 
 /**
  * Deploy a package to Firebase preview
@@ -31,6 +35,37 @@ export async function deployPackage(options) {
     if (!target || (target !== 'hours' && target !== 'admin')) {
       throw new Error(`Invalid target '${target}'. Must be 'hours' or 'admin'`);
     }
+    
+    // Verify that the build files exist
+    const distPath = path.resolve(process.cwd(), `packages/${target}/dist`);
+    const indexHtmlPath = path.join(distPath, 'index.html');
+    
+    if (!fs.existsSync(distPath) || !fs.existsSync(indexHtmlPath)) {
+      logger.warn(`Build artifacts for ${target} not found at ${distPath}`);
+      logger.info('Running build to ensure latest changes are included...');
+      
+      // Run build only for the needed package
+      const buildResult = await commandRunner.runCommandAsync(
+        `pnpm --filter ${target} run build`,
+        { 
+          stdio: 'inherit',
+          timeout: 120000 // 2 minute timeout
+        }
+      );
+      
+      if (!buildResult.success) {
+        throw new Error(`Build failed for ${target}. Cannot deploy.`);
+      }
+      
+      // Verify again
+      if (!fs.existsSync(distPath) || !fs.existsSync(indexHtmlPath)) {
+        throw new Error(`Build artifacts still not found after building ${target}.`);
+      }
+      
+      logger.success(`Build completed successfully for ${target}`);
+    }
+    
+    logger.info(`Deploying ${target} to preview channel: ${channelId}`);
     
     // Run Firebase deploy command
     const result = await commandRunner.runCommandAsync(

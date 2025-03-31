@@ -1,8 +1,8 @@
 {
-  "timestamp": "2025-03-31T03:10:42.610Z",
+  "timestamp": "2025-03-31T02:40:54.126Z",
   "metrics": {
-    "duration": 56407,
-    "totalDuration": 48469
+    "duration": 47115,
+    "totalDuration": 48331
   },
   "preview": {
     "hours": "https://hours-autonomyhero-2024--preview-feature-further-refi-klo507qt.web.app",
@@ -27,8 +27,8 @@
         "result": {
           "success": true
         },
-        "duration": 106,
-        "timestamp": "2025-03-31T03:09:46.313Z"
+        "duration": 90,
+        "timestamp": "2025-03-31T02:40:07.105Z"
       },
       {
         "name": "Firebase Authentication",
@@ -36,8 +36,8 @@
         "result": {
           "success": true
         },
-        "duration": 2334,
-        "timestamp": "2025-03-31T03:09:48.647Z"
+        "duration": 2177,
+        "timestamp": "2025-03-31T02:40:09.282Z"
       },
       {
         "name": "Dependency Check",
@@ -45,8 +45,8 @@
         "result": {
           "success": true
         },
-        "duration": 311,
-        "timestamp": "2025-03-31T03:09:48.958Z"
+        "duration": 294,
+        "timestamp": "2025-03-31T02:40:09.576Z"
       },
       {
         "name": "Setup Phase",
@@ -54,8 +54,8 @@
         "result": {
           "success": true
         },
-        "duration": 2751,
-        "timestamp": "2025-03-31T03:09:48.958Z"
+        "duration": 2562,
+        "timestamp": "2025-03-31T02:40:09.577Z"
       },
       {
         "name": "Package Analysis",
@@ -63,8 +63,8 @@
         "result": {
           "success": true
         },
-        "duration": 1,
-        "timestamp": "2025-03-31T03:09:48.961Z"
+        "duration": 2,
+        "timestamp": "2025-03-31T02:40:09.581Z"
       },
       {
         "name": "Documentation Check",
@@ -73,7 +73,7 @@
           "success": true
         },
         "duration": 1,
-        "timestamp": "2025-03-31T03:09:59.646Z"
+        "timestamp": "2025-03-31T02:40:19.284Z"
       },
       {
         "name": "Advanced Checks",
@@ -81,8 +81,8 @@
         "result": {
           "success": true
         },
-        "duration": 4030,
-        "timestamp": "2025-03-31T03:10:03.676Z"
+        "duration": 3585,
+        "timestamp": "2025-03-31T02:40:22.869Z"
       },
       {
         "name": "Health Checks",
@@ -90,8 +90,8 @@
         "result": {
           "success": true
         },
-        "duration": 1175,
-        "timestamp": "2025-03-31T03:10:04.851Z"
+        "duration": 853,
+        "timestamp": "2025-03-31T02:40:23.722Z"
       },
       {
         "name": "Quality Checks",
@@ -99,8 +99,8 @@
         "result": {
           "success": true
         },
-        "duration": 15890,
-        "timestamp": "2025-03-31T03:10:04.851Z"
+        "duration": 14141,
+        "timestamp": "2025-03-31T02:40:23.722Z"
       },
       {
         "name": "Validation Phase",
@@ -108,8 +108,8 @@
         "result": {
           "success": true
         },
-        "duration": 15892,
-        "timestamp": "2025-03-31T03:10:04.852Z"
+        "duration": 14144,
+        "timestamp": "2025-03-31T02:40:23.723Z"
       },
       {
         "name": "Package Build",
@@ -117,8 +117,8 @@
         "result": {
           "success": true
         },
-        "duration": 12579,
-        "timestamp": "2025-03-31T03:10:17.448Z"
+        "duration": 5354,
+        "timestamp": "2025-03-31T02:40:29.078Z"
       },
       {
         "name": "Build Phase",
@@ -126,8 +126,8 @@
         "result": {
           "success": true
         },
-        "duration": 12595,
-        "timestamp": "2025-03-31T03:10:17.448Z"
+        "duration": 5354,
+        "timestamp": "2025-03-31T02:40:29.078Z"
       },
       {
         "name": "Create Channel ID",
@@ -135,8 +135,8 @@
         "result": {
           "success": true
         },
-        "duration": 39,
-        "timestamp": "2025-03-31T03:10:17.489Z"
+        "duration": 40,
+        "timestamp": "2025-03-31T02:40:29.120Z"
       },
       {
         "name": "Deploy Hours App",
@@ -144,8 +144,8 @@
         "result": {
           "success": true
         },
-        "duration": 9124,
-        "timestamp": "2025-03-31T03:10:26.613Z"
+        "duration": 9245,
+        "timestamp": "2025-03-31T02:40:38.365Z"
       },
       {
         "name": "Deploy Admin App",
@@ -153,8 +153,8 @@
         "result": {
           "success": true
         },
-        "duration": 9197,
-        "timestamp": "2025-03-31T03:10:35.810Z"
+        "duration": 9174,
+        "timestamp": "2025-03-31T02:40:47.539Z"
       },
       {
         "name": "Deploy Phase",
@@ -162,8 +162,8 @@
         "result": {
           "success": true
         },
-        "duration": 18361,
-        "timestamp": "2025-03-31T03:10:35.811Z"
+        "duration": 18460,
+        "timestamp": "2025-03-31T02:40:47.540Z"
       },
       {
         "name": "Channel Cleanup",
@@ -171,8 +171,8 @@
         "result": {
           "success": true
         },
-        "duration": 6797,
-        "timestamp": "2025-03-31T03:10:42.610Z"
+        "duration": 6583,
+        "timestamp": "2025-03-31T02:40:54.126Z"
       }
     ]
   },
@@ -181,79 +181,91 @@
       "message": "Missing Prettier configuration file (.prettierrc)",
       "phase": "Validation",
       "step": "Quality Checks",
-      "timestamp": "2025-03-31T03:09:59.645Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "Missing documentation for key features in README.md",
       "phase": "Validation",
       "step": "Documentation",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "Installation instructions incomplete in setup docs",
       "phase": "Validation",
       "step": "Documentation",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "API documentation outdated for user management endpoints",
       "phase": "Validation",
       "step": "Documentation",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "Missing JSDoc comments in auth module files",
       "phase": "Validation",
       "step": "Documentation",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "Component API documentation missing for DataTable",
       "phase": "Validation",
       "step": "Documentation",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "NPM audit found 3 high severity vulnerabilities",
       "phase": "Validation",
       "step": "Security",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "Authentication token storage needs review",
       "phase": "Validation",
       "step": "Security",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "API rate limiting not implemented",
       "phase": "Validation",
       "step": "Security",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "Unused imports in src/components/Dashboard.tsx",
       "phase": "Validation",
       "step": "Code Quality",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "Duplicate code found in utility functions",
       "phase": "Validation",
       "step": "Code Quality",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "Console.log statements found in production code",
       "phase": "Validation",
       "step": "Code Quality",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
     },
     {
       "message": "Type 'any' used in 12 locations",
       "phase": "Validation",
       "step": "Code Quality",
-      "timestamp": "2025-03-31T03:09:59.646Z"
+      "timestamp": "2025-03-31T02:40:19.283Z"
+    },
+    {
+      "message": "packages/admin build: - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.\u001b[39m",
+      "phase": "Build",
+      "step": "Package Build",
+      "timestamp": "2025-03-31T02:40:29.077Z"
+    },
+    {
+      "message": "packages/hours build: - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.\u001b[39m",
+      "phase": "Build",
+      "step": "Package Build",
+      "timestamp": "2025-03-31T02:40:29.077Z"
     }
   ],
   "errors": []

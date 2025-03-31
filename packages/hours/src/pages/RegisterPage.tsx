@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import RegisterForm from '@common/components/auth/RegisterForm';
-import { useViewport } from '@common/hooks/useViewport';
-import logo from '../assets/logo.svg';
+import { useViewport } from '@common/hooks/ui/useViewport';
 
 /**
  * Hours portal registration page
@@ -46,7 +45,6 @@ const RegisterPage = () => {
           
           {/* Registration form from common package */}
           <RegisterForm
-            logo={<img src={logo} alt="Hours Portal" className="h-16 w-auto" />} 
             redirectUrl={from}
             defaultRole="user" // Default role for workers
             className={`${!isMobile && !isTablet ? 'shadow-lg' : ''}`}

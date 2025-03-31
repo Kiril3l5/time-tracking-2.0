@@ -610,48 +610,71 @@ class Workflow {
   async build() {
     this.progressTracker.startStep('Build Phase');
     this.logger.sectionHeader('Building Application');
+    
     const phaseStartTime = Date.now();
     
+    // Skip build if requested
+    if (this.options.skipBuild) {
+      this.logger.warn('Skipping build due to --skip-build flag');
+      this.progressTracker.completeStep(true, 'Build skipped');
+      this.recordWorkflowStep('Package Build', 'Build', true, 0, 'Skipped');
+      this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
+      return;
+    }
+    
     try {
-      // Skip build if requested
-      if (this.options.skipBuild) {
-        this.logger.warn('Skipping build due to --skip-build flag');
-        this.progressTracker.completeStep(true, 'Build skipped');
-        this.recordWorkflowStep('Package Build', 'Build', true, 0, 'Skipped');
-        this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
-        return;
-      }
+      // Clean dist directories first to ensure we have a fresh build
+      this.logger.info('Cleaning previous build artifacts...');
+      await this.commandRunner.runCommandAsync('rm -rf packages/admin/dist packages/hours/dist packages/common/dist', {
+        ignoreError: true, // Don't fail if directories don't exist
+        shell: true
+      });
       
       // Run build
       const buildStartTime = Date.now();
       this.logger.info('Building packages...');
-      const buildResult = await this.commandRunner.runCommandAsync('pnpm build', { 
-        stdio: 'pipe',
-        captureOutput: true
+      
+      // Use build:all instead of build to ensure proper sequential building
+      const buildResult = await this.commandRunner.runCommandAsync('pnpm run build:all', {
+        stdio: 'pipe', // Capture output for warning detection
+        timeout: 300000 // 5 minutes timeout for build
       });
       
       if (!buildResult.success) {
         const error = new Error('Build failed');
-        Object.assign(error, {
+        error.details = {
           output: buildResult.output,
           error: buildResult.error
-        });
+        };
         this.recordWorkflowStep('Package Build', 'Build', false, Date.now() - buildStartTime, 'Build command failed');
+        throw error;
+      }
+      
+      // Get root directory
+      const rootDir = process.cwd();
+      
+      // Verify that build artifacts exist
+      const adminDistPath = join(rootDir, 'packages/admin/dist');
+      const hoursDistPath = join(rootDir, 'packages/hours/dist');
+      
+      if (!fs.existsSync(adminDistPath) || !fs.existsSync(hoursDistPath)) {
+        this.logger.error('Build artifacts not found after build process');
+        const error = new Error('Build verification failed');
+        this.recordWorkflowStep('Package Build', 'Build', false, Date.now() - buildStartTime, 'Build verification failed');
         throw error;
       }
       
       // Check for warnings in the build output
       if (buildResult.output && buildResult.output.includes('warning')) {
-        // Extract warnings from output
+        // Extract meaningful warnings
         const lines = buildResult.output.split('\n');
-        const warningLines = lines.filter(line => 
-          line.toLowerCase().includes('warning') || 
-          line.toLowerCase().includes('warn')
-        );
-        
-        warningLines.forEach(warning => {
-          this.recordWarning(warning.trim(), 'Build', 'Package Build');
-        });
+        for (const line of lines) {
+          if (line.toLowerCase().includes('warning') && !line.includes('TypeScript which is not officially supported')) {
+            // Skip TypeScript version warnings
+            const warning = line.trim();
+            this.recordWarning(warning.trim(), 'Build', 'Package Build');
+          }
+        }
       }
       
       this.logger.success('✓ Build completed successfully');
@@ -663,16 +686,17 @@ class Workflow {
       
       // Enhanced error logging for build failures
       this.logger.error('\nBuild Phase Failed:');
-      this.logger.error(`➤ ${error.message}`);
+      this.logger.error(`${error.message}`);
       
-      if (error.output) {
+      // Show the output if available
+      if (error.details && error.details.output) {
         this.logger.error('\nBuild Output:');
-        this.logger.error(error.output.substring(0, 500) + (error.output.length > 500 ? '...(truncated)' : ''));
+        this.logger.error(error.details.output);
       }
       
-      if (error.error) {
+      if (error.details && error.details.error) {
         this.logger.error('\nBuild Errors:');
-        this.logger.error(error.error);
+        this.logger.error(error.details.error);
       }
       
       this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, error.message);

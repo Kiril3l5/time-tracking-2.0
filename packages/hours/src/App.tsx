@@ -1,13 +1,39 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useViewport } from '@common/hooks/ui/useViewport';
 import { Layout } from './components/Layout';
 
 // Import the pages we created
 import TimeEntryPage from './pages/TimeEntryPage';
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
 
 // Create a client
 const queryClient = new QueryClient();
+
+// Simple auth check - will be replaced with actual auth logic
+const isAuthenticated = () => {
+  return localStorage.getItem('auth_token') !== null;
+};
+
+// Auth redirect component
+const RequireAuth = ({ children }: { children: React.ReactElement }) => {
+  if (!isAuthenticated()) {
+    // Redirect to login if not authenticated
+    return <Navigate to="/login" replace />;
+  }
+  
+  return children;
+};
+
+// Home component to handle root path redirection
+const Home = () => {
+  if (isAuthenticated()) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <Navigate to="/login" replace />;
+};
 
 // Placeholder components - will be replaced with actual mobile-first pages
 const Dashboard = () => {
@@ -50,13 +76,36 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <Router>
         <Routes>
+          {/* Root path redirects to login or dashboard */}
+          <Route path="/" element={<Home />} />
+          
+          {/* Authentication pages */}
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+
           {/* New mobile-first page */}
-          <Route path="/time" element={<TimeEntryPage />} />
+          <Route path="/time" element={
+            <RequireAuth>
+              <TimeEntryPage />
+            </RequireAuth>
+          } />
           
           {/* Legacy pages - will eventually be converted to mobile-first */}
-          <Route path="/" element={<Layout><Dashboard /></Layout>} />
-          <Route path="/history" element={<Layout><TimeHistory /></Layout>} />
-          <Route path="/reports" element={<Layout><Reports /></Layout>} />
+          <Route path="/dashboard" element={
+            <RequireAuth>
+              <Layout><Dashboard /></Layout>
+            </RequireAuth>
+          } />
+          <Route path="/history" element={
+            <RequireAuth>
+              <Layout><TimeHistory /></Layout>
+            </RequireAuth>
+          } />
+          <Route path="/reports" element={
+            <RequireAuth>
+              <Layout><Reports /></Layout>
+            </RequireAuth>
+          } />
         </Routes>
       </Router>
     </QueryClientProvider>
