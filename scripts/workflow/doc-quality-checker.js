@@ -1,293 +1,336 @@
 /**
  * Documentation Quality Checker Module
  * 
- * This module verifies documentation quality by:
- * 1. Finding duplicate content across documentation files
- * 2. Generating an updated index of all documentation
- * 3. Validating that key features have proper documentation
+ * Checks the quality of documentation and identifies issues like:
+ * - Missing README files
+ * - Outdated documentation
+ * - Missing JSDoc comments
+ * - Incomplete API documentation
  */
 
 import { logger } from '../core/logger.js';
+import fs from 'fs';
+import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import fs from 'node:fs';
-import path from 'node:path';
-import { promisify } from 'node:util';
+import { globSync } from 'glob';
 
-// Convert callbacks to promises
-const readdir = promisify(fs.readdir);
-const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
-const stat = promisify(fs.stat);
+/* global process */
 
-// Get the directory and filename
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Constants
-const DEFAULT_DOCS_DIR = 'docs';
-const DEFAULT_REQUIRED_DOCS = ['setup', 'deployment', 'architecture', 'api', 'configuration'];
-const DEFAULT_SIMILARITY_THRESHOLD = 0.6;
-const DEFAULT_MIN_COVERAGE = 80;
-const DEFAULT_IGNORE_DIRS = ['node_modules', '.git', '.github', 'dist', 'build'];
+export class DocQualityChecker {
+  constructor() {
+    this.warnings = [];
+  }
+  
+  /**
+   * Check documentation quality
+   * @returns {Promise<Object>} Check results
+   */
+  async checkDocQuality() {
+    // Reset warnings
+    this.warnings = [];
+    
+    try {
+      // Run various doc quality checks
+      await this._checkReadmeFiles();
+      await this._checkJsDocComments();
+      await this._checkMarkdownLinking();
+      await this._checkApiDocumentation();
+      
+      return {
+        success: this.warnings.length === 0,
+        warnings: this.warnings
+      };
+    } catch (error) {
+      logger.error(`Documentation quality check failed: ${error.message}`);
+      return {
+        success: false,
+        warnings: [{
+          message: `Documentation check error: ${error.message}`,
+          phase: 'Validation',
+          step: 'Documentation'
+        }]
+      };
+    }
+  }
+  
+  /**
+   * Check for missing or incomplete README files
+   * @private
+   */
+  async _checkReadmeFiles() {
+    try {
+      // Check main README.md
+      const mainReadmePath = path.join(process.cwd(), 'README.md');
+      if (!fs.existsSync(mainReadmePath)) {
+        this.warnings.push({
+          message: 'Missing main README.md file at project root',
+          phase: 'Validation',
+          step: 'Documentation'
+        });
+      } else {
+        // Check README content
+        const content = fs.readFileSync(mainReadmePath, 'utf8');
+        
+        // Check for minimum content length (very short README is suspicious)
+        if (content.length < 500) {
+          this.warnings.push({
+            message: 'README.md file is too short (< 500 chars). Consider adding more details.',
+            phase: 'Validation',
+            step: 'Documentation'
+          });
+        }
+        
+        // Check for basic sections
+        if (!content.includes('# ') && !content.includes('## ')) {
+          this.warnings.push({
+            message: 'README.md lacks proper section headers. Consider adding structured sections.',
+            phase: 'Validation',
+            step: 'Documentation'
+          });
+        }
+        
+        // Check for installation section
+        if (!content.toLowerCase().includes('install') && !content.toLowerCase().includes('setup')) {
+          this.warnings.push({
+            message: 'README.md lacks installation or setup instructions',
+            phase: 'Validation',
+            step: 'Documentation'
+          });
+        }
+      }
+      
+      // Check for README files in key directories
+      const importantDirs = ['src', 'app', 'components', 'lib', 'utils', 'api'];
+      for (const dir of importantDirs) {
+        const dirPath = path.join(process.cwd(), dir);
+        if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
+          const readmePath = path.join(dirPath, 'README.md');
+          if (!fs.existsSync(readmePath)) {
+            this.warnings.push({
+              message: `Missing README.md in the "${dir}" directory`,
+              phase: 'Validation',
+              step: 'Documentation'
+            });
+          }
+        }
+      }
+    } catch (error) {
+      logger.debug(`README check error: ${error.message}`);
+    }
+  }
+  
+  /**
+   * Check for missing JSDoc comments
+   * @private
+   */
+  async _checkJsDocComments() {
+    try {
+      // Find all JS/TS files
+      const files = globSync('**/*.{js,ts,jsx,tsx}', {
+        ignore: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.next/**'],
+        cwd: process.cwd()
+      });
+      
+      // Set to track files with JSDoc issues
+      const filesWithIssues = new Set();
+      
+      for (const file of files) {
+        const fullPath = path.join(process.cwd(), file);
+        const content = fs.readFileSync(fullPath, 'utf8');
+        
+        // Look for exported functions, classes, or interfaces without JSDoc
+        const lines = content.split('\n');
+        let inComment = false;
+        
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim();
+          
+          // Track JSDoc comment state
+          if (line.startsWith('/**')) {
+            inComment = true;
+          } else if (line.startsWith('*/')) {
+            inComment = false;
+            continue;
+          }
+          
+          // If not in a comment, check for declarations without preceding JSDoc
+          if (!inComment) {
+            // Skip imports, constants, etc.
+            if (line.startsWith('import ') || line.startsWith('const ') || 
+                line.startsWith('let ') || line.startsWith('var ')) {
+              continue;
+            }
+            
+            // Check for export declarations without docs
+            if ((line.startsWith('export ') || line.includes(' export ')) && 
+                (line.includes('function ') || line.includes('class ') || 
+                 line.includes('interface ') || line.includes('type '))) {
+              
+              // Check if previous lines had JSDoc
+              let hasJsDoc = false;
+              for (let j = i - 1; j >= 0 && j >= i - 5; j--) {
+                if (lines[j].trim().startsWith('/**')) {
+                  hasJsDoc = true;
+                  break;
+                }
+                // Stop if we hit another declaration
+                if (lines[j].trim().length > 0 && !lines[j].trim().startsWith('*')) {
+                  break;
+                }
+              }
+              
+              if (!hasJsDoc) {
+                filesWithIssues.add(file);
+                break; // Only count each file once
+              }
+            }
+          }
+        }
+      }
+      
+      // Add warnings for files with JSDoc issues
+      if (filesWithIssues.size > 0) {
+        // If there are many files, just report the count
+        if (filesWithIssues.size > 5) {
+          this.warnings.push({
+            message: `Found ${filesWithIssues.size} files with missing JSDoc comments on exported items`,
+            phase: 'Validation',
+            step: 'Documentation'
+          });
+        } else {
+          // Report each file individually if there are just a few
+          for (const file of filesWithIssues) {
+            this.warnings.push({
+              message: `Missing JSDoc comments on exported items in ${file}`,
+              file,
+              phase: 'Validation',
+              step: 'Documentation'
+            });
+          }
+        }
+      }
+    } catch (error) {
+      logger.debug(`JSDoc check error: ${error.message}`);
+    }
+  }
+  
+  /**
+   * Check for broken links in markdown files
+   * @private
+   */
+  async _checkMarkdownLinking() {
+    try {
+      // Find all markdown files
+      const markdownFiles = globSync('**/*.md', {
+        ignore: ['**/node_modules/**', '**/dist/**', '**/build/**'],
+        cwd: process.cwd()
+      });
+      
+      for (const file of markdownFiles) {
+        const fullPath = path.join(process.cwd(), file);
+        const content = fs.readFileSync(fullPath, 'utf8');
+        
+        // Extract all links
+        const internalLinkRegex = /\[.+?\]\((?!http)(.+?)\)/g;
+        let match;
+        while ((match = internalLinkRegex.exec(content)) !== null) {
+          const linkTarget = match[1].split('#')[0]; // Remove fragment
+          
+          // Skip empty links and anchor-only links
+          if (!linkTarget) continue;
+          
+          // Check if target exists
+          const targetPath = path.join(path.dirname(fullPath), linkTarget);
+          if (!fs.existsSync(targetPath)) {
+            this.warnings.push({
+              message: `Broken internal link in ${file}: ${linkTarget}`,
+              file,
+              phase: 'Validation',
+              step: 'Documentation'
+            });
+          }
+        }
+      }
+    } catch (error) {
+      logger.debug(`Markdown link check error: ${error.message}`);
+    }
+  }
+  
+  /**
+   * Check for API documentation
+   * @private
+   */
+  async _checkApiDocumentation() {
+    try {
+      // Look for API directories
+      const apiDirs = ['api', 'src/api', 'app/api'];
+      
+      for (const dir of apiDirs) {
+        const dirPath = path.join(process.cwd(), dir);
+        if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
+          // Check if there's an API documentation file
+          const docFiles = [
+            path.join(dirPath, 'README.md'),
+            path.join(dirPath, 'API.md'),
+            path.join(dirPath, 'docs', 'README.md')
+          ];
+          
+          if (!docFiles.some(f => fs.existsSync(f))) {
+            this.warnings.push({
+              message: `Missing API documentation for the "${dir}" directory`,
+              phase: 'Validation',
+              step: 'Documentation'
+            });
+          }
+          
+          // Check for .openapi.yaml or .openapi.json files
+          const apiFiles = globSync(`${dir}/**/*.{ts,js}`, {
+            ignore: ['**/*.test.*', '**/*.spec.*'],
+            cwd: process.cwd()
+          });
+          
+          if (apiFiles.length > 0 && 
+              !fs.existsSync(path.join(process.cwd(), 'openapi.yaml')) && 
+              !fs.existsSync(path.join(process.cwd(), 'openapi.json'))) {
+            this.warnings.push({
+              message: 'Missing OpenAPI specification file for API endpoints',
+              phase: 'Validation',
+              step: 'Documentation'
+            });
+          }
+        }
+      }
+    } catch (error) {
+      logger.debug(`API documentation check error: ${error.message}`);
+    }
+  }
+}
 
 /**
  * Run documentation quality checks
- * @param {string} pkg - Package name
- * @param {Object} options - Check options
- * @returns {Promise<Object>} Check results
+ * @returns {Promise<Object>} Results with warnings
  */
-export async function runDocQualityChecks(pkg, options = {}) {
-  const startTime = Date.now();
-  const results = {
-    success: true,
-    issues: [],
-    warnings: [],
-    duration: 0,
-    stats: {
-      totalFiles: 0,
-      duplicateContent: 0,
-      missingDocs: 0,
-      coverage: 0
-    }
-  };
+export async function checkDocumentation() {
+  const checker = new DocQualityChecker();
+  return checker.checkDocQuality();
+}
 
-  try {
-    logger.info(`Running documentation quality checks for package: ${pkg}`);
-
-    // Find all markdown files
-    const fileList = await findMarkdownFiles(pkg, options);
-    results.stats.totalFiles = fileList.length;
-
-    // Check for missing required documentation
-    const missingDocs = findMissingDocs(fileList, DEFAULT_REQUIRED_DOCS);
-    if (missingDocs.length > 0) {
-      results.warnings.push(`Missing required documentation: ${missingDocs.join(', ')}`);
-      results.stats.missingDocs = missingDocs.length;
-    }
-
-    // Analyze for duplicate content
-    const duplicateResults = await analyzeDuplication(fileList, options);
-    if (duplicateResults.contentDuplicates.length > 0) {
-      results.warnings.push(`Found ${duplicateResults.contentDuplicates.length} potential content duplicates`);
-      results.stats.duplicateContent = duplicateResults.contentDuplicates.length;
-    }
-
-    // Generate documentation index
-    await generateIndex(fileList, pkg);
-
-    // Calculate coverage
-    results.stats.coverage = calculateCoverage(fileList, DEFAULT_REQUIRED_DOCS);
-
-    // Update success status
-    results.success = results.issues.length === 0 && results.stats.coverage >= DEFAULT_MIN_COVERAGE;
-    results.duration = Date.now() - startTime;
-
-    // Log summary
-    if (options.verbose) {
-      logger.info(`
-Documentation Quality Summary:
-- Total Files: ${results.stats.totalFiles}
-- Missing Required Docs: ${results.stats.missingDocs}
-- Duplicate Content: ${results.stats.duplicateContent}
-- Coverage: ${results.stats.coverage}%
-      `);
-    }
-
-    return results;
-
-  } catch (error) {
-    logger.error(`Documentation quality checks failed for package ${pkg}:`, error);
-    return {
-      success: false,
-      issues: [error.message],
-      warnings: [],
-      duration: Date.now() - startTime,
-      stats: {
-        totalFiles: 0,
-        duplicateContent: 0,
-        missingDocs: 0,
-        coverage: 0
+// For direct execution
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  checkDocumentation()
+    .then(result => {
+      if (result.warnings.length > 0) {
+        logger.warn(`Found ${result.warnings.length} documentation issues:`);
+        result.warnings.forEach(warning => logger.warn(`- ${warning.message}`));
+      } else {
+        logger.success('Documentation checks passed!');
       }
-    };
-  }
-}
-
-/**
- * Find all Markdown files recursively
- * @param {string} pkg - Package name
- * @param {Object} options - Search options
- * @returns {Promise<Array>} List of found files with metadata
- */
-async function findMarkdownFiles(pkg, options) {
-  const docsDir = path.join(dirname(__dirname), '..', pkg, DEFAULT_DOCS_DIR);
-  const fileList = [];
-
-  try {
-    const files = await readdir(docsDir);
-    
-    for (const file of files) {
-      if (DEFAULT_IGNORE_DIRS.includes(file)) continue;
-      
-      const filePath = path.join(docsDir, file);
-      const fileStat = await stat(filePath);
-      
-      if (fileStat.isDirectory()) {
-        const subFiles = await findMarkdownFiles(file, options);
-        fileList.push(...subFiles);
-      } else if (file.endsWith('.md')) {
-        const content = await readFile(filePath, 'utf8');
-        fileList.push({
-          path: filePath,
-          name: file,
-          content,
-          size: fileStat.size,
-          modified: fileStat.mtime
-        });
-      }
-    }
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-  
-  return fileList;
-}
-
-/**
- * Find missing required documentation
- * @param {Array} fileList - List of files found
- * @param {Array} requiredDocs - List of required documentation filenames
- * @returns {Array} List of missing documentation files
- */
-function findMissingDocs(fileList, requiredDocs) {
-  const fileNames = fileList.map(file => file.name);
-  return requiredDocs.filter(doc => !fileNames.includes(doc));
-}
-
-/**
- * Analyze documents for duplication
- * @param {Array} fileData - File data with content and metadata
- * @param {Object} options - Analysis options
- * @returns {Object} Results of duplication analysis
- */
-async function analyzeDuplication(fileData, options = {}) {
-  const {
-    similarityThreshold = DEFAULT_SIMILARITY_THRESHOLD,
-    minContentLength = 500
-  } = options;
-  
-  const results = {
-    contentDuplicates: []
-  };
-
-  // Check for content duplicates
-  for (let i = 0; i < fileData.length; i++) {
-    for (let j = i + 1; j < fileData.length; j++) {
-      const file1 = fileData[i];
-      const file2 = fileData[j];
-      
-      // Skip files that are too small
-      if (file1.content.length < minContentLength || file2.content.length < minContentLength) continue;
-      
-      const similarity = calculateSimilarity(file1.content, file2.content);
-      
-      if (similarity >= similarityThreshold) {
-        results.contentDuplicates.push({
-          file1: file1.path,
-          file2: file2.path,
-          similarity: Math.round(similarity * 100)
-        });
-      }
-    }
-  }
-  
-  return results;
-}
-
-/**
- * Calculate similarity between two texts
- * @param {string} text1 - First text
- * @param {string} text2 - Second text
- * @returns {number} Similarity score (0-1)
- */
-function calculateSimilarity(text1, text2) {
-  const words1 = extractWords(text1);
-  const words2 = extractWords(text2);
-  
-  const intersection = new Set([...words1].filter(x => words2.has(x)));
-  const union = new Set([...words1, ...words2]);
-  
-  return intersection.size / union.size;
-}
-
-/**
- * Extract words from text for comparison
- * @param {string} text - The text to extract words from
- * @returns {Set} Set of unique words
- */
-function extractWords(text) {
-  const commonWords = new Set(['the', 'and', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'of', 'is', 'are']);
-  return new Set(
-    text.toLowerCase()
-      .replace(/[^\w\s]/g, '')
-      .split(/\s+/)
-      .filter(word => word.length > 2 && !commonWords.has(word))
-  );
-}
-
-/**
- * Generate documentation index
- * @param {Array} fileData - File data with content and metadata
- * @param {string} pkg - Package name
- * @returns {Promise<void>}
- */
-async function generateIndex(fileData, pkg) {
-  const docsDir = path.join(dirname(__dirname), '..', pkg, DEFAULT_DOCS_DIR);
-  const indexPath = path.join(docsDir, 'index.md');
-  
-  // Sort by filename
-  fileData.sort((a, b) => a.name.localeCompare(b.name));
-  
-  // Generate index markdown
-  let markdown = '# Documentation Index\n\n';
-  markdown += 'This document provides an index of all documentation files in the project.\n\n';
-  markdown += 'Generated on: ' + new Date().toISOString() + '\n\n';
-  
-  // Generate table of contents
-  markdown += '## Table of Contents\n\n';
-  
-  fileData.forEach(file => {
-    const title = extractTitle(file.content);
-    markdown += `- [${title}](${file.name})\n`;
-  });
-  
-  await writeFile(indexPath, markdown);
-}
-
-/**
- * Extract title from Markdown content (first H1)
- * @param {string} content - File content
- * @returns {string} Title or default text
- */
-function extractTitle(content) {
-  const match = content.match(/^#\s+(.+)$/m);
-  return match ? match[1] : '(No title)';
-}
-
-/**
- * Calculate documentation coverage
- * @param {Array} fileList - List of files found
- * @param {Array} requiredDocs - List of required documentation filenames
- * @returns {number} Coverage percentage
- */
-function calculateCoverage(fileList, requiredDocs) {
-  const fileNames = fileList.map(file => file.name);
-  const foundDocs = requiredDocs.filter(doc => fileNames.includes(doc));
-  return Math.round((foundDocs.length / requiredDocs.length) * 100);
-}
-
-export default {
-  runDocQualityChecks
-}; 
+    })
+    .catch(error => {
+      logger.error('Documentation check failed:', error);
+    });
+} 
