@@ -13,9 +13,96 @@ import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { writeFile } from 'fs/promises';
 import process from 'node:process';
 import { exec } from 'child_process';
+import path from 'path';
+import { execSync } from 'child_process';
+import { getReportPath, REPORT_PATHS as reportPaths } from '../reports/report-collector.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Default report path
+const DEFAULT_DASHBOARD_PATH = join(process.cwd(), 'preview-dashboard.html');
+
+// Default template if the main template cannot be found
+const defaultTemplate = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{TITLE}}</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; margin: 0; padding: 20px; color: #333; }
+        h1, h2, h3 { color: #000; }
+        h1 { border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .section { margin-bottom: 30px; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 4px; overflow: auto; }
+        .step-success { color: green; }
+        .step-failure { color: red; }
+        .warning { background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 10px; margin: 10px 0; }
+        .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 20px; }
+        .tab { padding: 10px 15px; cursor: pointer; }
+        .tab.active { border-bottom: 2px solid #0066cc; color: #0066cc; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{TITLE}}</h1>
+        <p>Generated on: {{TIMESTAMP}}</p>
+        
+        <div class="section">
+            {{PREVIEW_URLS}}
+        </div>
+        
+        <div class="tabs">
+            {{TABS}}
+        </div>
+        
+        <div class="tab-contents">
+            {{TAB_CONTENT}}
+        </div>
+        
+        <div class="section">
+            <h2>Workflow Steps</h2>
+            {{WORKFLOW_STEPS}}
+        </div>
+        
+        <div class="section">
+            <h2>Warnings</h2>
+            {{WARNINGS}}
+        </div>
+        
+        <div class="section">
+            <h2>Workflow Options</h2>
+            {{WORKFLOW_OPTIONS}}
+        </div>
+        
+        <div class="section">
+            {{CHANNEL_CLEANUP}}
+        </div>
+        
+        <div class="section">
+            {{PERFORMANCE_METRICS}}
+        </div>
+    </div>
+    
+    <script>
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+                
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>
+`;
 
 /**
  * Generate a consolidated report for the workflow
@@ -24,6 +111,134 @@ const __dirname = dirname(__filename);
  */
 export async function generateReport(data) {
   try {
+    if (!data) {
+      return { reportPath: DEFAULT_DASHBOARD_PATH };
+    }
+    
+    // Load report template
+    const template = await loadTemplate();
+    
+    // Prepare workflow timeline data
+    const workflowSteps = data.workflow?.steps || [];
+    const workflowWarnings = data.workflow?.warnings || [];
+    const workflowOptions = data.workflow?.options || {};
+    
+    // Prepare advanced check data if available
+    const advancedChecks = {
+      bundleSize: data.advancedChecks?.bundleSize || null,
+      deadCode: data.advancedChecks?.deadCode || null,
+      docsQuality: data.advancedChecks?.docsQuality || null,
+      docsFreshness: data.advancedChecks?.docsFreshness || null,
+      typescript: data.advancedChecks?.typescript || null,
+      lint: data.advancedChecks?.lint || null,
+      workflowValidation: data.advancedChecks?.workflowValidation || null,
+      health: data.advancedChecks?.health || null
+    };
+    
+    // Check if any advanced checks have data
+    const hasAdvancedCheckData = Object.values(advancedChecks).some(check => check !== null);
+    
+    // Determine branch details
+    const branch = data.gitInfo?.branch || 'unknown';
+    const isMainBranch = branch === 'main' || branch === 'master';
+    
+    // Get preview info
+    const previewUrls = data.preview || null;
+    const channelId = data.channelId || null;
+    
+    // Get channel cleanup info
+    const channelCleanup = data.channelCleanup || null;
+    
+    // Format performance data
+    const performanceData = data.performance || null;
+    
+    // Load any additional check data
+    let bundleSizeData = null;
+    let deadCodeData = null;
+    let docQualityData = null;
+    let docFreshnessData = null;
+    let typescriptData = null;
+    let lintData = null;
+    let workflowValidationData = null;
+    let healthData = null;
+    
+    try {
+      // Bundle size analysis
+      if (reportPaths && reportPaths.BUNDLE && fs.existsSync(reportPaths.BUNDLE)) {
+        bundleSizeData = JSON.parse(fs.readFileSync(reportPaths.BUNDLE, 'utf8'));
+      }
+      
+      // Dead code analysis
+      if (reportPaths && reportPaths.DEAD_CODE && fs.existsSync(reportPaths.DEAD_CODE)) {
+        deadCodeData = JSON.parse(fs.readFileSync(reportPaths.DEAD_CODE, 'utf8'));
+      }
+      
+      // Documentation quality
+      if (reportPaths && reportPaths.DOC_QUALITY && fs.existsSync(reportPaths.DOC_QUALITY)) {
+        docQualityData = JSON.parse(fs.readFileSync(reportPaths.DOC_QUALITY, 'utf8'));
+      }
+      
+      // Documentation freshness
+      if (reportPaths && reportPaths.DOC_FRESHNESS && fs.existsSync(reportPaths.DOC_FRESHNESS)) {
+        docFreshnessData = JSON.parse(fs.readFileSync(reportPaths.DOC_FRESHNESS, 'utf8'));
+      }
+      
+      // TypeScript check
+      if (reportPaths && reportPaths.TYPESCRIPT_CHECK && fs.existsSync(reportPaths.TYPESCRIPT_CHECK)) {
+        typescriptData = JSON.parse(fs.readFileSync(reportPaths.TYPESCRIPT_CHECK, 'utf8'));
+      }
+      
+      // Lint check
+      if (reportPaths && reportPaths.LINT_CHECK && fs.existsSync(reportPaths.LINT_CHECK)) {
+        lintData = JSON.parse(fs.readFileSync(reportPaths.LINT_CHECK, 'utf8'));
+      }
+      
+      // Workflow validation
+      if (reportPaths && reportPaths.WORKFLOW_VALIDATION && fs.existsSync(reportPaths.WORKFLOW_VALIDATION)) {
+        workflowValidationData = JSON.parse(fs.readFileSync(reportPaths.WORKFLOW_VALIDATION, 'utf8'));
+      }
+      
+      // Health check
+      if (reportPaths && reportPaths.HEALTH_CHECK && fs.existsSync(reportPaths.HEALTH_CHECK)) {
+        healthData = JSON.parse(fs.readFileSync(reportPaths.HEALTH_CHECK, 'utf8'));
+      }
+
+      // Also try to load data directly from advancedChecks if available
+      if (!bundleSizeData && advancedChecks.bundleSize?.data) {
+        bundleSizeData = advancedChecks.bundleSize.data;
+      }
+      
+      if (!deadCodeData && advancedChecks.deadCode?.data) {
+        deadCodeData = advancedChecks.deadCode.data;
+      }
+      
+      if (!docQualityData && advancedChecks.docsQuality?.data) {
+        docQualityData = advancedChecks.docsQuality.data;
+      }
+      
+      if (!docFreshnessData && advancedChecks.docsFreshness?.data) {
+        docFreshnessData = advancedChecks.docsFreshness.data;
+      }
+      
+      if (!typescriptData && advancedChecks.typescript?.data) {
+        typescriptData = advancedChecks.typescript.data;
+      }
+      
+      if (!lintData && advancedChecks.lint?.data) {
+        lintData = advancedChecks.lint.data;
+      }
+      
+      if (!workflowValidationData && advancedChecks.workflowValidation?.data) {
+        workflowValidationData = advancedChecks.workflowValidation.data;
+      }
+      
+      if (!healthData && advancedChecks.health?.data) {
+        healthData = advancedChecks.health.data;
+      }
+    } catch (error) {
+      logger.warn(`Error loading additional check data: ${error.message}`);
+    }
+    
     // Debug the warnings data
     logger.debug(`Warning count: ${data.warnings ? data.warnings.length : 0}`);
     if (data.warnings && data.warnings.length > 0) {
@@ -997,6 +1212,16 @@ function formatDuration(ms) {
   }
   
   return `${seconds}s`;
+}
+
+/**
+ * Load the report template
+ * @returns {Promise<string>} The template HTML
+ */
+async function loadTemplate() {
+  // Use the defaultTemplate directly since we've already defined it
+  // and the external template path doesn't exist
+  return defaultTemplate;
 }
 
 export default {

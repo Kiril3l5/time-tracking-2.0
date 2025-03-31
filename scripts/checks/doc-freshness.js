@@ -18,7 +18,6 @@
 import fs from 'fs/promises';
 import path from 'path';
 import * as glob from 'glob';
-import { promisify } from 'util';
 import { logger } from '../core/logger.js';
 import { commandRunner } from '../core/command-runner.js';
 import { progressTracker } from '../core/progress-tracker.js';
@@ -28,7 +27,15 @@ import { fileURLToPath } from 'url';
 
 /* global process, URL */
 
-const globPromise = promisify(glob.glob);
+// Direct Promise-based glob function that doesn't use promisify
+const globPromise = (pattern, options) => {
+  return new Promise((resolve, reject) => {
+    glob.glob(pattern, options, (err, matches) => {
+      if (err) reject(err);
+      else resolve(matches);
+    });
+  });
+};
 
 // Configuration constants
 const MAX_DOC_AGE_DAYS = 90; // Docs older than this will trigger a warning
@@ -272,16 +279,17 @@ async function checkCodeDocSynchronization(pairs, errorTracker) {
 }
 
 /**
- * Run documentation freshness check
+ * Check the freshness of all documentation files
  * 
  * @async
  * @param {Object} options - Check options
  * @param {boolean} [options.verbose=false] - Enable verbose logging
- * @param {string[]} [options.include] - Patterns of files to include
- * @param {string[]} [options.exclude] - Patterns of files to exclude
+ * @param {Array<string>} [options.include] - Glob patterns for files to include
+ * @param {Array<string>} [options.exclude] - Glob patterns for files to exclude
  * @param {boolean} [options.strictMode=false] - Treat warnings as errors
+ * @param {boolean} [options.silent=false] - Suppress all logging
  * @param {ErrorAggregator} [options.errorTracker] - Error tracker for reporting issues
- * @returns {Promise<{success: boolean, issues: number, files: number}>} Check results
+ * @returns {Promise<{success: boolean, issues: number, files: number, staleDocuments: Array}>} Check results
  */
 export async function checkDocumentation(options = {}) {
   const {
@@ -289,77 +297,144 @@ export async function checkDocumentation(options = {}) {
     include = ['**/*.md'],
     exclude = ['**/node_modules/**'],
     strictMode = false,
+    silent = false,
     errorTracker = new ErrorAggregator()
   } = options;
   
-  // Find all markdown files
-  let docFiles = [];
-  for (const pattern of include) {
-    const matches = await globPromise(pattern, { ignore: exclude });
-    docFiles = docFiles.concat(matches);
-  }
-  
-  if (verbose) {
-    logger.info(`Found ${docFiles.length} documentation files to check`);
-  }
-  
+  // Initialize results with default values to ensure we always return something
   let issueCount = 0;
+  let docFiles = [];
+  let staleDocuments = [];
   
-  // Check each documentation file
-  for (const filePath of docFiles) {
-    if (verbose) {
-      logger.info(`Checking ${filePath}`);
+  try {
+    // Find all markdown files
+    for (const pattern of include) {
+      try {
+        const matches = await globPromise(pattern, { ignore: exclude });
+        docFiles = docFiles.concat(matches);
+      } catch (error) {
+        if (!silent) {
+          logger.error(`Error globbing pattern ${pattern}: ${error.message}`);
+        }
+        errorTracker.addError(new ValidationError(
+          `Failed to glob files with pattern ${pattern}`,
+          'doc-freshness',
+          error,
+          'Check your glob pattern syntax'
+        ));
+        issueCount++;
+      }
     }
     
-    try {
-      // Read file content
-      const content = await fs.readFile(filePath, 'utf8');
-      
-      // Validate links
-      const linkResults = await validateLinks(filePath, content, errorTracker);
-      if (!linkResults.valid) {
-        issueCount += linkResults.broken.length;
-        logger.warn(`Found ${linkResults.broken.length} broken links in ${filePath}`);
+    if (verbose && !silent) {
+      logger.info(`Found ${docFiles.length} documentation files to check`);
+    }
+    
+    // Check each documentation file
+    for (const filePath of docFiles) {
+      if (verbose && !silent) {
+        logger.info(`Checking ${filePath}`);
       }
       
-      // Check document freshness
-      const freshnessResults = await checkDocFreshness(filePath, errorTracker);
-      if (freshnessResults.outdated) {
+      try {
+        // Read file content
+        const content = await fs.readFile(filePath, 'utf8');
+        
+        // Validate links
+        const linkResults = await validateLinks(filePath, content, errorTracker);
+        if (!linkResults.valid) {
+          issueCount += linkResults.broken.length;
+          if (!silent) {
+            logger.warn(`Found ${linkResults.broken.length} broken links in ${filePath}`);
+          }
+        }
+        
+        // Check document freshness
+        const freshnessResults = await checkDocFreshness(filePath, errorTracker);
+        if (freshnessResults.outdated) {
+          issueCount++;
+          staleDocuments.push({
+            path: filePath,
+            daysSinceUpdate: freshnessResults.daysSinceUpdate
+          });
+          if (!silent) {
+            logger.warn(`Document ${filePath} may be outdated (${freshnessResults.daysSinceUpdate} days old)`);
+          }
+        }
+      } catch (error) {
+        errorTracker.addError(new ValidationError(
+          `Failed to check documentation file ${filePath}`,
+          'doc-freshness',
+          error,
+          'Ensure the file exists and is readable'
+        ));
         issueCount++;
-        logger.warn(`Document ${filePath} may be outdated (${freshnessResults.daysSinceUpdate} days old)`);
       }
+    }
+    
+    // Check code-doc synchronization
+    try {
+      const syncResults = await checkCodeDocSynchronization(CODE_DOC_PAIRS, errorTracker);
+      const outdatedDocs = syncResults.filter(result => result.outdated);
+      
+      // Add any docs that are outdated compared to their code files
+      for (const outdated of outdatedDocs) {
+        for (const docPath of outdated.docs) {
+          if (!staleDocuments.some(doc => doc.path === docPath)) {
+            staleDocuments.push({
+              path: docPath,
+              daysSinceUpdate: 0, // Not based on time but on code update
+              codeFile: outdated.code
+            });
+          }
+        }
+      }
+      
+      issueCount += outdatedDocs.length;
     } catch (error) {
+      if (!silent) {
+        logger.error(`Error checking code-doc synchronization: ${error.message}`);
+      }
       errorTracker.addError(new ValidationError(
-        `Failed to check documentation file ${filePath}`,
+        `Failed to check code-doc synchronization`,
         'doc-freshness',
         error,
-        'Ensure the file exists and is readable'
+        'Check the CODE_DOC_PAIRS configuration'
       ));
       issueCount++;
     }
-  }
-  
-  // Check code-doc synchronization
-  const syncResults = await checkCodeDocSynchronization(CODE_DOC_PAIRS, errorTracker);
-  const outdatedDocs = syncResults.filter(result => result.outdated);
-  issueCount += outdatedDocs.length;
-  
-  if (verbose) {
-    logger.info(`Documentation freshness check completed with ${issueCount} issues`);
-  }
-  
-  if (issueCount > 0) {
-    logger.warn(`Found ${issueCount} documentation issues`);
-    errorTracker.logSummary();
+    
+    if (verbose && !silent) {
+      logger.info(`Documentation freshness check completed with ${issueCount} issues`);
+    }
+    
+    if (issueCount > 0 && !silent) {
+      logger.warn(`Found ${issueCount} documentation issues`);
+      errorTracker.logSummary();
+    }
+  } catch (error) {
+    // Catch any unexpected errors at the top level
+    if (!silent) {
+      logger.error(`Documentation freshness check failed: ${error.message}`);
+    }
+    errorTracker.addError(new ValidationError(
+      `Documentation freshness check failed`,
+      'doc-freshness',
+      error,
+      'Review the error details and fix the underlying issue'
+    ));
+    issueCount++;
   }
   
   // In strict mode or in CI environment, fail if there are issues
   const shouldFail = (strictMode || isCI()) && issueCount > 0;
   
+  // Always return a valid result object
   return {
     success: !shouldFail,
     issues: issueCount,
-    files: docFiles.length
+    files: docFiles.length,
+    staleDocuments: staleDocuments
   };
 }
 

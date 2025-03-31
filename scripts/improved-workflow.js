@@ -17,7 +17,7 @@ import { performanceMonitor } from './core/performance-monitor.js';
 import { setTimeout } from 'timers/promises';
 import { cleanupChannels } from './firebase/channel-cleanup.js';
 import { runAllAdvancedChecks } from './workflow/advanced-checker.js';
-import { runChecks as runHealthChecks } from './checks/health-checker.js';
+import { verifyAllAuth } from './auth/auth-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -81,6 +81,14 @@ class Workflow {
       skipBuild: false,
       skipDeploy: false,
       skipPr: false,
+      // New options for advanced checks
+      skipBundleCheck: false,
+      skipDeadCodeCheck: false,
+      skipDocsCheck: false,
+      skipDocsFreshnessCheck: false,
+      skipWorkflowValidation: false,
+      skipHealthCheck: false,
+      skipAdvancedChecks: false,
       ...options
     };
     
@@ -92,6 +100,9 @@ class Workflow {
     
     // Initialize preview URLs
     this.previewUrls = null;
+    
+    // Initialize advanced check results
+    this.advancedCheckResults = null;
     
     // Set verbose mode
     if (this.logger && this.logger.setVerbose) {
@@ -254,7 +265,8 @@ class Workflow {
               steps: this.workflowSteps
             },
             warnings: this.workflowWarnings || [],
-            errors: [{ message: error.message, stack: error.stack }]
+            errors: [{ message: error.message, stack: error.stack }],
+            advancedChecks: this.advancedCheckResults
           });
           this.logger.info('Error dashboard generated - check your browser');
         }
@@ -285,46 +297,43 @@ class Workflow {
     const phaseStartTime = Date.now();
     
     try {
-      // Verify Git setup
-      const gitStartTime = Date.now();
-      this.logger.info('Checking Git configuration...');
-      const gitUserResult = await this.commandRunner.runCommandAsync('git config --get user.name', { stdio: 'pipe' });
-      const gitEmailResult = await this.commandRunner.runCommandAsync('git config --get user.email', { stdio: 'pipe' });
-      
-      if (!gitUserResult.success || !gitEmailResult.success) {
-        const error = 'Git user name or email not configured. Please run "git config --global user.name" and "git config --global user.email"';
-        this.recordWorkflowStep('Git Configuration Check', 'Setup', false, Date.now() - gitStartTime, error);
-        throw new Error(error);
+      // Verify Authentication
+      const authStartTime = Date.now();
+      this.logger.info('Verifying authentication status...');
+      try {
+        const authResult = await verifyAllAuth({
+          requireFirebase: true,
+          requireGit: true,
+          useCache: false // Force fresh check
+        });
+        
+        if (!authResult.success) {
+          const error = `Authentication failed: ${authResult.errors.join(', ')}`;
+          this.recordWorkflowStep('Authentication', 'Setup', false, Date.now() - authStartTime, error);
+          throw new Error(error);
+        }
+        
+        // Get authentication details from result
+        let authDetails = [];
+        
+        if (authResult.services.firebase?.authenticated) {
+          const firebaseEmail = authResult.services.firebase.email || 'Unknown';
+          authDetails.push(`Firebase: ${firebaseEmail}`);
+        }
+        
+        if (authResult.services.git?.authenticated) {
+          const gitUser = authResult.services.git.username || 'Unknown';
+          authDetails.push(`Git: ${gitUser}`);
+        }
+        
+        const authDetailsText = authDetails.length ? ` (${authDetails.join(', ')})` : '';
+        this.logger.success(`✓ Authentication verified${authDetailsText}`);
+        this.recordWorkflowStep('Authentication', 'Setup', true, Date.now() - authStartTime);
+      } catch (error) {
+        const errorMsg = `Authentication verification failed: ${error.message}`;
+        this.recordWorkflowStep('Authentication', 'Setup', false, Date.now() - authStartTime, errorMsg);
+        throw new Error(errorMsg);
       }
-      
-      const gitUserName = gitUserResult.output.trim();
-      const gitUserEmail = gitEmailResult.output.trim();
-      
-      this.logger.success(`✓ Git configuration verified`);
-      this.logger.info(`User: ${gitUserName} <${gitUserEmail}>`);
-      this.recordWorkflowStep('Git Configuration Check', 'Setup', true, Date.now() - gitStartTime);
-      
-      // Verify Firebase auth
-      const firebaseStartTime = Date.now();
-      this.logger.info('Checking Firebase CLI authentication...');
-      const firebaseResult = await this.commandRunner.runCommandAsync('firebase login:list', { stdio: 'pipe' });
-      
-      if (!firebaseResult.success) {
-        const error = 'Firebase CLI not authenticated. Please run "firebase login" first.';
-        this.recordWorkflowStep('Firebase Authentication', 'Setup', false, Date.now() - firebaseStartTime, error);
-        throw new Error(error);
-      }
-      
-      if (firebaseResult.output.includes('No users')) {
-        const warning = 'Firebase CLI authenticated but no user found in the output. This might cause issues.';
-        this.recordWarning(warning, 'Setup', 'Firebase Authentication');
-      }
-      
-      // Extract user email from the output
-      const emailMatch = firebaseResult.output.match(/\[(.*?)\]/);
-      const firebaseUserEmail = emailMatch ? emailMatch[1] : 'Unknown';
-      this.logger.success(`✓ Firebase authenticated as: ${firebaseUserEmail}`);
-      this.recordWorkflowStep('Firebase Authentication', 'Setup', true, Date.now() - firebaseStartTime);
       
       // Verify dependencies
       const depsStartTime = Date.now();
@@ -453,127 +462,122 @@ class Workflow {
           this.recordWorkflowStep('Documentation Check', 'Validation', false, Date.now() - docStartTime, 'Non-critical issue');
         }
         
-        // Run advanced checks for warnings
-        const advancedStartTime = Date.now();
-        this.logger.info('Running advanced checks...');
+        // Run advanced checks with more detailed analysis
+        this.logger.info("Running advanced checks...");
+        
         try {
-          const advancedResult = await runAllAdvancedChecks({ 
-            skipDeadCodeCheck: false,
-            skipBundleCheck: true,
-            skipDocsCheck: true, // Already done above
-            ignoreAdvancedFailures: true,
-            // Mock the prompt function to always continue
-            promptFn: async () => 'Y'
+          const advancedResult = await runAllAdvancedChecks({
+            // Use options passed from the command line, with reasonable defaults
+            skipAdvancedChecks: this.options.skipAdvancedChecks,
+            skipBundleCheck: this.options.skipBundleCheck || false, // Don't automatically skip
+            skipDocsCheck: this.options.skipDocsCheck || false,
+            skipDocsFreshnessCheck: this.options.skipDocsFreshnessCheck || false,
+            skipDeadCodeCheck: this.options.skipDeadCodeCheck || false, // Don't automatically skip
+            skipTypeCheck: this.options.skipTests, // Respect the skip-tests flag
+            skipLintCheck: this.options.skipTests, // Respect the skip-tests flag
+            skipWorkflowValidation: this.options.skipWorkflowValidation || false,
+            skipHealthCheck: this.options.skipHealthCheck || false,
+            ignoreAdvancedFailures: true, // Don't block on advanced failures
+            verbose: this.options.verbose,
+            treatLintAsWarning: true,
+            treatHealthAsWarning: true,
+            silentMode: true, // Avoid duplicate logging in improved-workflow.js
+            promptFn: null, // Don't prompt, we'll handle warnings in the workflow
+            timeout: {
+              docsFreshness: 30000,     // 30 seconds
+              docsQuality: 30000,       // 30 seconds
+              bundleSize: 60000,        // 1 minute
+              deadCode: 45000,          // 45 seconds
+              typeCheck: 45000,         // 45 seconds
+              lint: 45000,              // 45 seconds
+              workflowValidation: 30000, // 30 seconds
+              health: 60000             // 1 minute
+            }
           });
           
-          // Process warnings
+          // Store advanced check results for the dashboard
+          this.advancedCheckResults = advancedResult.results || {};
+          
+          // Record all warnings from advanced checks
           if (advancedResult.warnings && advancedResult.warnings.length > 0) {
             advancedResult.warnings.forEach(warning => {
               this.recordWarning(warning, 'Validation', 'Advanced Checks');
             });
           }
           
-          // Process results
-          if (advancedResult.results) {
-            // Dead code warnings
-            if (advancedResult.results.deadCode && 
-                advancedResult.results.deadCode.data && 
-                advancedResult.results.deadCode.data.files) {
-              const deadCodeFiles = advancedResult.results.deadCode.data.files;
-              if (deadCodeFiles.length > 0) {
-                this.recordWarning(
-                  `Found ${deadCodeFiles.length} files with potentially unused code`, 
-                  'Validation', 
-                  'Code Quality'
-                );
-                
-                // Add first 5 files as individual warnings
-                deadCodeFiles.slice(0, 5).forEach(file => {
+          // Get health check results from the advanced check results
+          const healthResult = (advancedResult.results || {}).health;
+          
+          // Record health check warnings
+          if (healthResult && healthResult.data) {
+            // Process environment warnings
+            if (healthResult.data.stats && healthResult.data.stats.environment) {
+              const { missingVars, invalidConfigs } = healthResult.data.stats.environment;
+              
+              if (missingVars && missingVars.length > 0) {
+                missingVars.forEach(varName => {
                   this.recordWarning(
-                    `Potentially unused code in ${file}`, 
+                    `Missing environment variable: ${varName}`, 
                     'Validation', 
-                    'Code Quality'
+                    'Environment'
+                  );
+                });
+              }
+              
+              if (invalidConfigs && invalidConfigs.length > 0) {
+                invalidConfigs.forEach(config => {
+                  this.recordWarning(
+                    `Invalid configuration: ${config}`, 
+                    'Validation', 
+                    'Environment'
                   );
                 });
               }
             }
-          }
-          
-          this.recordWorkflowStep('Advanced Checks', 'Validation', true, Date.now() - advancedStartTime);
-        } catch (error) {
-          // Just record as warning, don't fail the workflow
-          this.logger.warn(`Advanced checks issue: ${error.message}`);
-          this.recordWarning(`Advanced checks issue: ${error.message}`, 'Validation', 'Advanced Checks');
-          this.recordWorkflowStep('Advanced Checks', 'Validation', false, Date.now() - advancedStartTime, 'Non-critical issue');
-        }
-        
-        // Run health checks
-        const healthStartTime = Date.now();
-        this.logger.info('Running health checks...');
-        try {
-          const healthResult = await runHealthChecks({ quiet: true });
-          
-          // Record environment issues
-          if (healthResult.stats && healthResult.stats.environment) {
-            const { missingVars, invalidConfigs } = healthResult.stats.environment;
             
-            if (missingVars && missingVars.length > 0) {
-              missingVars.forEach(varName => {
+            // Process security warnings
+            if (healthResult.data.stats && healthResult.data.stats.security &&
+                healthResult.data.stats.security.vulnerabilities) {
+              const { vulnerabilities } = healthResult.data.stats.security;
+              
+              if (vulnerabilities.total > 0) {
                 this.recordWarning(
-                  `Missing environment variable: ${varName}`,
-                  'Validation',
-                  'Environment'
+                  `Found ${vulnerabilities.total} security vulnerabilities (${vulnerabilities.critical} critical, ${vulnerabilities.high} high)`, 
+                  'Validation', 
+                  'Security'
                 );
-              });
-            }
-            
-            if (invalidConfigs && invalidConfigs.length > 0) {
-              invalidConfigs.forEach(config => {
-                this.recordWarning(
-                  `Invalid configuration: ${config}`,
-                  'Validation',
-                  'Environment'
-                );
-              });
+              }
             }
           }
           
-          // Record security issues
-          if (healthResult.stats && healthResult.stats.security && 
-              healthResult.stats.security.vulnerabilities) {
-            const { vulnerabilities } = healthResult.stats.security;
-            if (vulnerabilities.total > 0) {
-              this.recordWarning(
-                `Found ${vulnerabilities.total} security vulnerabilities (${vulnerabilities.critical} critical, ${vulnerabilities.high} high)`,
-                'Validation',
-                'Security'
-              );
-            }
+          // Record advanced check step
+          this.recordWorkflowStep(
+            'Advanced Checks', 
+            'Validation', 
+            true, 
+            performanceMonitor.measure('advancedChecks')
+          );
+          
+          // Determine overall quality check status based on the primary checker (not the additional ones)
+          if (!checkResult.success) {
+            // If we get here, quality checks failed but aren't critical enough to stop the workflow
+            this.logger.warn('Quality checks finished with warnings or errors');
+            this.logger.warn(checkResult.error || 'See dashboard for details');
+            this.recordWorkflowStep('Quality Checks', 'Validation', false, Date.now() - qualityStartTime, checkResult.error || 'Quality checks had warnings or errors');
+          } else {
+            this.logger.success('✓ All quality checks passed');
+            this.recordWorkflowStep('Quality Checks', 'Validation', true, Date.now() - qualityStartTime);
           }
           
-          this.recordWorkflowStep('Health Checks', 'Validation', true, Date.now() - healthStartTime);
+          // Log warning count for the dashboard
+          const warningCount = this.workflowWarnings.length;
+          if (warningCount > 0) {
+            this.logger.info(`Collected ${warningCount} warnings - details will be shown in dashboard`);
+          }
         } catch (error) {
-          // Just record as warning, don't fail the workflow
-          this.logger.warn(`Health checks issue: ${error.message}`);
-          this.recordWarning(`Health check issue: ${error.message}`, 'Validation', 'Health');
-          this.recordWorkflowStep('Health Checks', 'Validation', false, Date.now() - healthStartTime, 'Non-critical issue');
-        }
-        
-        // Determine overall quality check status based on the primary checker (not the additional ones)
-        if (!checkResult.success) {
-          // If we get here, quality checks failed but aren't critical enough to stop the workflow
-          this.logger.warn('Quality checks finished with warnings or errors');
-          this.logger.warn(checkResult.error || 'See dashboard for details');
-          this.recordWorkflowStep('Quality Checks', 'Validation', false, Date.now() - qualityStartTime, checkResult.error || 'Quality checks had warnings or errors');
-        } else {
-          this.logger.success('✓ All quality checks passed');
-          this.recordWorkflowStep('Quality Checks', 'Validation', true, Date.now() - qualityStartTime);
-        }
-        
-        // Log warning count for the dashboard
-        const warningCount = this.workflowWarnings.length;
-        if (warningCount > 0) {
-          this.logger.info(`Collected ${warningCount} warnings - details will be shown in dashboard`);
+          this.logger.error(`Advanced checks failed: ${error.message}`);
+          this.recordWarning(`Advanced checks error: ${error.message}`, 'Validation', 'Advanced Checks');
+          this.recordWorkflowStep('Advanced Checks', 'Validation', false, performanceMonitor.measure('advancedChecks'), `Error: ${error.message}`);
         }
       } catch (error) {
         // Handle quality checker errors - don't fail the whole workflow
@@ -625,7 +629,14 @@ class Workflow {
     try {
       // Clean dist directories first to ensure we have a fresh build
       this.logger.info('Cleaning previous build artifacts...');
-      await this.commandRunner.runCommandAsync('rm -rf packages/admin/dist packages/hours/dist packages/common/dist', {
+      
+      // Use platform-specific command for cleaning
+      const isWindows = process.platform === 'win32';
+      const cleanCommand = isWindows 
+        ? 'if exist packages\\admin\\dist rmdir /s /q packages\\admin\\dist && if exist packages\\hours\\dist rmdir /s /q packages\\hours\\dist && if exist packages\\common\\dist rmdir /s /q packages\\common\\dist'
+        : 'rm -rf packages/admin/dist packages/hours/dist packages/common/dist';
+      
+      await this.commandRunner.runCommandAsync(cleanCommand, {
         ignoreError: true, // Don't fail if directories don't exist
         shell: true
       });
@@ -935,7 +946,9 @@ class Workflow {
           },
           steps: this.workflowSteps
         },
-        warnings: this.workflowWarnings
+        warnings: this.workflowWarnings,
+        // Include advanced check results in report data
+        advancedChecks: this.advancedCheckResults
       };
       
       // Generate consolidated report
@@ -1013,7 +1026,8 @@ class Workflow {
             steps: this.workflowSteps
           },
           warnings: this.workflowWarnings || [],
-          errors: [{ message: error.message, stack: error.stack }]
+          errors: [{ message: error.message, stack: error.stack }],
+          advancedChecks: this.advancedCheckResults
         });
         this.logger.info('Error dashboard generated - check your browser');
       } catch (e) {
@@ -1046,17 +1060,28 @@ Improved Workflow Tool
 Usage: node scripts/improved-workflow.js [options]
 
 Options:
-  --verbose       Enable verbose logging
-  --skip-tests    Skip running tests and linting
-  --skip-build    Skip build process
-  --skip-deploy   Skip deployment to preview environment
-  --skip-pr       Skip PR creation instructions
-  --help, -h      Show this help information
+  --verbose                 Enable verbose logging
+  --skip-tests              Skip running tests and linting
+  --skip-build              Skip build process
+  --skip-deploy             Skip deployment to preview environment
+  --skip-pr                 Skip PR creation instructions
+  
+Advanced Check Options:
+  --skip-bundle-check       Skip bundle size analysis
+  --skip-dead-code          Skip dead code detection
+  --skip-docs-check         Skip documentation quality check
+  --skip-docs-freshness     Skip documentation freshness check
+  --skip-workflow-validation Skip workflow validation
+  --skip-health-check       Skip health checks
+  --skip-advanced-checks    Skip all advanced checks
+  
+  --help, -h                Show this help information
 
 Examples:
   node scripts/improved-workflow.js
   node scripts/improved-workflow.js --skip-tests --skip-build
   node scripts/improved-workflow.js --verbose
+  node scripts/improved-workflow.js --skip-advanced-checks
   `);
 }
 
@@ -1068,7 +1093,15 @@ function parseArgs() {
     skipTests: false,
     skipBuild: false,
     skipDeploy: false,
-    skipPr: false
+    skipPr: false,
+    // New options for advanced checks
+    skipBundleCheck: false,
+    skipDeadCodeCheck: false,
+    skipDocsCheck: false,
+    skipDocsFreshnessCheck: false,
+    skipWorkflowValidation: false,
+    skipHealthCheck: false,
+    skipAdvancedChecks: false
   };
   
   for (const arg of args) {
@@ -1077,6 +1110,14 @@ function parseArgs() {
     if (arg === '--skip-build') options.skipBuild = true;
     if (arg === '--skip-deploy') options.skipDeploy = true;
     if (arg === '--skip-pr') options.skipPr = true;
+    // Parse new options
+    if (arg === '--skip-bundle-check') options.skipBundleCheck = true;
+    if (arg === '--skip-dead-code') options.skipDeadCodeCheck = true;
+    if (arg === '--skip-docs-check') options.skipDocsCheck = true;
+    if (arg === '--skip-docs-freshness') options.skipDocsFreshnessCheck = true;
+    if (arg === '--skip-workflow-validation') options.skipWorkflowValidation = true;
+    if (arg === '--skip-health-check') options.skipHealthCheck = true;
+    if (arg === '--skip-advanced-checks') options.skipAdvancedChecks = true;
     if (arg === '--help' || arg === '-h') {
       showHelp();
       process.exit(0);

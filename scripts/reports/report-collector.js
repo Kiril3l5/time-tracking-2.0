@@ -43,14 +43,19 @@ function ensureTempDirExists() {
   }
 }
 
-// Define paths to various reports
+// Define paths for storing reports
 const REPORT_PATHS = {
   BUNDLE: path.join(TEMP_DIR, 'bundle-report.json'),
   DOC_QUALITY: path.join(TEMP_DIR, 'doc-quality-report.json'),
   DEAD_CODE: path.join(TEMP_DIR, 'dead-code-report.json'),
   VULNERABILITY: path.join(TEMP_DIR, 'vulnerability-report.json'),
   PERFORMANCE: path.join(TEMP_DIR, 'performance-metrics.json'),
-  PREVIEW_URLS: path.join(TEMP_DIR, 'preview-urls.json')  // Add path for preview URLs
+  PREVIEW_URLS: path.join(TEMP_DIR, 'preview-urls.json'),  // Add path for preview URLs
+  DOC_FRESHNESS: path.join(TEMP_DIR, 'doc-freshness-report.json'), // Added for doc freshness
+  TYPESCRIPT_CHECK: path.join(TEMP_DIR, 'typescript-check-report.json'), // Added for typescript
+  LINT_CHECK: path.join(TEMP_DIR, 'lint-check-report.json'), // Added for lint
+  WORKFLOW_VALIDATION: path.join(TEMP_DIR, 'workflow-validation-report.json'), // Added for workflow validation
+  HEALTH_CHECK: path.join(TEMP_DIR, 'health-check-report.json') // Added for health checks
 };
 
 /**

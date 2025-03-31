@@ -501,8 +501,103 @@ export function generateChannelId(options = {}) {
   return channelId;
 }
 
+/**
+ * Deploy to Firebase hosting
+ * @param {string} projectPath - Path to the project
+ * @param {object} options - Deployment options
+ * @returns {Promise<object>} Deployment result
+ */
+export async function deployToFirebaseHosting(projectPath, options = {}) {
+  const {
+    site = 'default',
+    channelId = null,
+    only = null,
+    message = null,
+    timeout = 300000, // 5 minutes timeout by default
+    ...restOptions
+  } = options;
+  
+  logger.info(`Deploying ${projectPath} to Firebase Hosting${channelId ? ` (channel: ${channelId})` : ''}`);
+  
+  // Build the deploy command
+  let deployCommand = 'firebase deploy --only hosting';
+  
+  // Add site if specified
+  if (site && site !== 'default') {
+    deployCommand += `:${site}`;
+  }
+  
+  // Add channel if specified
+  if (channelId) {
+    deployCommand += ` --channel=${channelId}`;
+  }
+  
+  // Add message if specified
+  if (message) {
+    deployCommand += ` --message="${message}"`;
+  }
+  
+  try {
+    // Execute the deployment with timeout
+    const result = await commandRunner.runCommandAsync(deployCommand, {
+      cwd: projectPath,
+      timeout, // Add timeout to prevent indefinite hangs
+      ...restOptions
+    });
+    
+    if (result.success) {
+      logger.success(`🚀 Deployed ${projectPath} to Firebase Hosting`);
+      
+      // Extract URLs from the output
+      const urls = urlExtractor.extractHostingUrls({
+        deploymentOutput: result.output,
+        verbose: false
+      });
+      
+      return {
+        success: true,
+        urls,
+        channelId,
+        output: result.output
+      };
+    } else {
+      logger.error(`❌ Failed to deploy ${projectPath} to Firebase`);
+      logger.error(result.error);
+      
+      return {
+        success: false,
+        error: result.error,
+        output: result.output
+      };
+    }
+  } catch (error) {
+    // Handle timeout errors specially
+    if (error.message && error.message.includes('timed out')) {
+      logger.error(`❌ Deployment timed out after ${timeout/1000} seconds`);
+      logger.error('This might be due to network issues or Firebase service problems.');
+      logger.error('Try running "firebase login --reauth" and then retry the deployment.');
+      
+      return {
+        success: false,
+        timedOut: true,
+        error: `Deployment timed out after ${timeout/1000} seconds`,
+        output: error.output || ''
+      };
+    }
+    
+    logger.error(`❌ Error deploying ${projectPath} to Firebase: ${error.message}`);
+    
+    return {
+      success: false,
+      error: error.message,
+      output: error.output || ''
+    };
+  }
+}
+
 export default {
   deployToPreviewChannel,
   deployToProduction,
-  generateChannelId
+  generateChannelId,
+  deployToFirebaseHosting
 }; 

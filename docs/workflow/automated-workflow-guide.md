@@ -64,8 +64,11 @@ The workflow progresses through five distinct phases:
   - Security vulnerabilities
 
 ### 3. Build Phase
-- Builds all packages in the correct dependency order
+- Cleans previous build artifacts with platform-specific commands (Windows/Unix)
+- Uses `pnpm run build:all` to build packages sequentially in the correct dependency order
+- Verifies build artifacts exist before proceeding to deployment
 - Optimizes assets for deployment
+- Detects and reports build warnings
 
 ### 4. Deploy Phase
 - Creates a unique preview channel ID
@@ -179,6 +182,11 @@ If you encounter issues with the workflow:
 ### Missing Warnings in Dashboard
 - Run with `--verbose` flag for more detailed output
 - Check the workspace for quality issues that may not be detected
+
+### Platform-Specific Issues
+- **Windows**: If you encounter issues with deletion commands, ensure PowerShell is used instead of Command Prompt
+- **Unix/Mac**: Ensure proper permissions for script execution with `chmod +x scripts/*.js`
+- **Cross-Platform**: The workflow automatically detects your OS and uses appropriate commands for cleaning build artifacts
 
 ## Extending the Workflow
 
