@@ -107,15 +107,6 @@ export class WorkflowEngine {
 
     this.logger.info(`Authenticated as ${authResult.services.firebase.user}`);
 
-    // Then check for uncommitted changes
-    if (await hasUncommittedChanges()) {
-      this.logger.warn('You have uncommitted changes.');
-      const shouldContinue = await handleUncommittedChanges();
-      if (!shouldContinue) {
-        throw new Error('Workflow aborted due to uncommitted changes');
-      }
-    }
-
     this.logger.success('✓ Initial health checks passed.');
   }
 

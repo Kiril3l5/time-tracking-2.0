@@ -1,0 +1,527 @@
+
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Workflow Execution Report</title>
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 2rem;
+            background: #f8f9fa;
+          }
+          .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          }
+          h1 {
+            color: #2c3e50;
+            margin-bottom: 2rem;
+          }
+          h2 {
+            color: #34495e;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #eee;
+          }
+          .timestamp {
+            color: #7f8c8d;
+            font-size: 0.9rem;
+            margin-bottom: 2rem;
+          }
+          .section {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+          }
+          .card {
+            background: #f8f9fa;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+          }
+          .url-card {
+            border-left: 4px solid #3498db;
+            padding-left: 1rem;
+            margin-bottom: 1rem;
+          }
+          .url {
+            color: #3498db;
+            word-break: break-all;
+          }
+          .label {
+            font-weight: bold;
+            color: #7f8c8d;
+            display: inline-block;
+            width: 120px;
+          }
+          .workflow-info {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+          }
+          .workflow-item {
+            background: #f8f9fa;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+          }
+          .success {
+            color: #27ae60;
+          }
+          .error {
+            color: #e74c3c;
+          }
+          .warning {
+            color: #f39c12;
+          }
+          .timeline {
+            margin: 2rem 0;
+            position: relative;
+          }
+          .timeline::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 20px;
+            width: 2px;
+            background: #eee;
+          }
+          .timeline-item {
+            position: relative;
+            padding-left: 40px;
+            margin-bottom: 1.5rem;
+          }
+          .timeline-item:before {
+            content: '';
+            position: absolute;
+            left: 16px;
+            top: 0;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #3498db;
+          }
+          .timeline-header {
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>Workflow Execution Report</h1>
+          <div class="timestamp">Generated: 2025-03-31T00:59:56.693Z</div>
+          
+          <h2>Preview URLs</h2>
+          <div class="section">
+            <div class="url-card">
+              <div class="label">Hours App:</div>
+              <div class="url">https://hours-autonomyhero-2024--preview-feature-further-refi-klo507qt.web.app</div>
+            </div>
+            <div class="url-card">
+              <div class="label">Admin App:</div>
+              <div class="url">https://admin-autonomyhero-2024--preview-feature-further-refi-lkp6ze48.web.app</div>
+            </div>
+            <div class="url-card">
+              <div class="label">Channel ID:</div>
+              <div>preview-feature-further-refi-20250331</div>
+            </div>
+          </div>
+
+          <h2>Workflow Summary</h2>
+          <div class="section">
+            <div class="card">
+              <div class="label">Duration:</div>
+              <div>35s</div>
+            </div>
+            <div class="card">
+              <div class="label">Branch:</div>
+              <div>feature/further-refindment-of-workflow-</div>
+            </div>
+            <div class="card">
+              <div><span class="label">Options:</span></div>
+              <div class="workflow-info">
+                <div class="workflow-item">verbose: false</div><div class="workflow-item">skipTests: false</div><div class="workflow-item">skipBuild: false</div><div class="workflow-item">skipDeploy: false</div><div class="workflow-item">skipPr: false</div>
+              </div>
+            </div>
+          </div>
+          
+          <h2>Workflow Steps</h2>
+          <div class="section">
+            <div class="timeline">
+              
+                <div class="timeline-item">
+                  <div class="timeline-header">auth-refresh-firebase</div>
+                  <div>
+                    
+                    
+                  </div>
+                  
+                </div>
+              
+                <div class="timeline-item">
+                  <div class="timeline-header">auth-refresh-git</div>
+                  <div>
+                    
+                    
+                  </div>
+                  
+                </div>
+              
+                <div class="timeline-item">
+                  <div class="timeline-header">analyze-dependencies</div>
+                  <div>
+                    
+                    Time: 2:08:12 PM
+                  </div>
+                  <div class="success">
+                      ✓ Success
+                     </div>
+                </div>
+              
+            </div>
+          </div>
+          
+          
+            <h2>Warnings</h2>
+            <div class="section">
+              
+                <div class="card warning">
+                  <div>Invalid version range for @common: workspace:*</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @common not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @tanstack/react-query not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/react-dom not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @vitejs/plugin-react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @firebase/rules-unit-testing not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/addon-essentials not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/addon-interactions not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/addon-links not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/blocks not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/react-vite not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/test not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/testing-library not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @tanstack/react-query not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @testing-library/jest-dom not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @testing-library/react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @testing-library/user-event not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/jest not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/uuid not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Invalid version range for @common: workspace:*</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @common not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @hookform/resolvers not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @reduxjs/toolkit not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @tanstack/react-query-devtools not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @tanstack/react-query not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/react-dom not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @vitejs/plugin-react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Invalid version range for @common: workspace:*</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @common not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @tanstack/react-query not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/react-dom not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @vitejs/plugin-react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @firebase/rules-unit-testing not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/addon-essentials not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/addon-interactions not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/addon-links not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/blocks not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/react-vite not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/test not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @storybook/testing-library not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @tanstack/react-query not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @testing-library/jest-dom not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @testing-library/react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @testing-library/user-event not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/jest not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/uuid not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Invalid version range for @common: workspace:*</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @common not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @hookform/resolvers not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @reduxjs/toolkit not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @tanstack/react-query-devtools not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @tanstack/react-query not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @types/react-dom not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+                <div class="card warning">
+                  <div>Workspace dependency @vitejs/plugin-react not found in workspaces</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                </div>
+              
+            </div>
+          
+          
+          
+            <h2>Errors</h2>
+            <div class="section">
+              
+                <div class="card error">
+                  <div>Quality checker initialization failed</div>
+                  <div class="timestamp">Time: 3/30/2025, 2:08:12 PM</div>
+                  <div>Step: Workflow Engine Initialization</div>
+                </div>
+              
+            </div>
+          
+        </div>
+      </body>
+    </html>
+  

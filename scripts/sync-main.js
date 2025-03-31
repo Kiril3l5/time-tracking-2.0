@@ -14,7 +14,12 @@
 
 import { execSync } from 'child_process';
 import readline from 'readline';
+import process from 'process';
 import { logger } from './core/logger.js';
+import { workflowState } from './workflow/workflow-state.js';
+import { progressTracker } from './core/progress-tracker.js';
+import { performanceMonitor } from './core/performance-monitor.js';
+import { errorHandler } from './core/error-handler.js';
 
 // Create readline interface for user input
 const rl = readline.createInterface({
@@ -90,10 +95,20 @@ function getCurrentBranch() {
  * Main function to sync the main branch
  */
 async function syncMainBranch() {
-  logger.sectionHeader('SYNCING MAIN BRANCH');
-  logger.info("This utility synchronizes your local main branch with the remote repository.");
+  const state = workflowState.getInstance();
+  const startTime = Date.now();
   
   try {
+    // Initialize state and monitoring
+    state.startOperation('sync-main');
+    performanceMonitor.startOperation('sync-main');
+    progressTracker.initProgress(4, 'Main Branch Sync');
+    
+    logger.sectionHeader('SYNCING MAIN BRANCH');
+    logger.info("This utility synchronizes your local main branch with the remote repository.");
+    
+    // Get current branch
+    progressTracker.startStep('Branch Check');
     const currentBranch = getCurrentBranch();
     logger.info(`Current branch: ${currentBranch}`);
     
@@ -102,18 +117,22 @@ async function syncMainBranch() {
       logger.info("You're already on the main branch, pulling latest changes...");
       const result = executeCommand('git pull origin main', { stdio: 'inherit' });
       if (result.success) {
+        progressTracker.completeStep(true, 'Main branch updated successfully');
         logger.success("Main branch updated successfully!");
       } else {
+        progressTracker.completeStep(false, 'Failed to update main branch');
         logger.error("Failed to update main branch. Please check for errors above.");
       }
       return;
     }
+    progressTracker.completeStep(true, 'Branch check completed');
     
-    // Check for uncommitted changes before switching to main
+    // Check for uncommitted changes
+    progressTracker.startStep('Git State Check');
     if (hasUncommittedChanges()) {
       logger.warn("You have uncommitted changes that would be affected by switching branches.");
       logger.info("Modified files:");
-      console.log(executeCommand('git status --short').output);
+      logger.info(executeCommand('git status --short').output);
       
       // Offer to commit, stash, or abort
       logger.info("\nOptions:");
@@ -127,67 +146,68 @@ async function syncMainBranch() {
         // Commit changes
         const commitMessage = await prompt("Enter commit message: ");
         if (!commitMessage) {
-          logger.error("Commit message is required.");
-          rl.close();
-          return;
+          throw new Error("Commit message is required.");
         }
         
         executeCommand('git add .');
         const commitResult = executeCommand(`git commit -m "${commitMessage}"`);
         
         if (!commitResult.success) {
-          logger.error("Failed to commit changes.");
-          rl.close();
-          return;
+          throw new Error("Failed to commit changes.");
         }
         logger.success("Changes committed successfully.");
       } else if (choice === "2") {
         // Stash changes
         const stashResult = executeCommand('git stash push -m "Stashed before syncing main"');
         if (!stashResult.success) {
-          logger.error("Failed to stash changes.");
-          rl.close();
-          return;
+          throw new Error("Failed to stash changes.");
         }
         logger.success("Changes stashed successfully.");
         logger.info("Use 'git stash pop' to restore them later.");
       } else {
         logger.info("Sync cancelled.");
-        rl.close();
         return;
       }
     }
+    progressTracker.completeStep(true, 'Git state validated');
     
     // Switch to main and pull
+    progressTracker.startStep('Main Branch Update');
     logger.info("Switching to main branch...");
     const checkoutResult = executeCommand('git checkout main');
     if (!checkoutResult.success) {
-      logger.error("Failed to checkout main branch.");
-      rl.close();
-      return;
+      throw new Error("Failed to checkout main branch.");
     }
     
     logger.info("Pulling latest changes from remote...");
     const pullResult = executeCommand('git pull origin main', { stdio: 'inherit' });
     if (!pullResult.success) {
-      logger.error("Failed to pull latest changes from remote.");
-      rl.close();
-      return;
+      throw new Error("Failed to pull latest changes from remote.");
     }
-    
-    logger.success("Main branch updated successfully!");
+    progressTracker.completeStep(true, 'Main branch updated');
     
     // Ask if they want to go back to the previous branch
+    progressTracker.startStep('Branch Switch');
     const goBackToBranch = await prompt(`Would you like to switch back to '${currentBranch}'? (Y/n): `);
     if (goBackToBranch.toLowerCase() !== 'n') {
       const switchBackResult = executeCommand(`git checkout ${currentBranch}`);
       if (switchBackResult.success) {
         logger.success(`Switched back to branch: ${currentBranch}`);
       } else {
-        logger.error(`Failed to switch back to branch: ${currentBranch}`);
+        throw new Error(`Failed to switch back to branch: ${currentBranch}`);
       }
     }
+    progressTracker.completeStep(true, 'Branch switch completed');
     
+    // Complete sync
+    const duration = Date.now() - startTime;
+    state.completeOperation('sync-main', {
+      success: true,
+      duration,
+      metrics: performanceMonitor.getPerformanceSummary()
+    });
+    
+    progressTracker.finishProgress(true, 'Main branch sync completed successfully');
     logger.sectionHeader('NEXT STEPS');
     logger.info(`Current branch: ${goBackToBranch.toLowerCase() !== 'n' ? currentBranch : 'main'}`);
     logger.info("What would you like to do next?");
@@ -196,9 +216,24 @@ async function syncMainBranch() {
     logger.info("3. Run the complete workflow: pnpm run workflow");
     
   } catch (error) {
+    const duration = Date.now() - startTime;
+    state.completeOperation('sync-main', {
+      success: false,
+      duration,
+      error: error.message
+    });
+    
+    progressTracker.finishProgress(false, `Main branch sync failed: ${error.message}`);
     logger.error("Failed to sync main branch:", error.message);
-  } finally {
-    rl.close();
+    
+    // Handle different error types
+    if (error instanceof errorHandler.ValidationError) {
+      logger.error('Validation error:', error.message);
+    } else if (error instanceof errorHandler.GitError) {
+      logger.error('Git error:', error.message);
+    }
+    
+    return 1;
   }
 }
 

@@ -32,6 +32,10 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from './core/logger.js';
+import { workflowState } from './workflow/workflow-state.js';
+import { progressTracker } from './core/progress-tracker.js';
+import { performanceMonitor } from './core/performance-monitor.js';
+import { errorHandler } from './core/error-handler.js';
 
 // Get the root directory
 const __filename = fileURLToPath(import.meta.url);
@@ -124,10 +128,188 @@ function savePreviewUrls(urls) {
 }
 
 /**
+ * Format duration in milliseconds to human readable string
+ * @param {number} milliseconds - Duration in milliseconds
+ * @returns {string} - Formatted duration
+ */
+function formatDuration(milliseconds) {
+  const seconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  
+  if (minutes === 0) {
+    return `${seconds} seconds`;
+  }
+  
+  return `${minutes} minute${minutes !== 1 ? 's' : ''} ${remainingSeconds} second${remainingSeconds !== 1 ? 's' : ''}`;
+}
+
+/**
+ * Get preview URLs from recent deployments
+ * @returns {Promise<Object>} Object containing preview URLs
+ */
+async function getPreviewUrls() {
+  const previewUrls = {};
+  
+  try {
+    // Check for preview dashboard file
+    const previewDashboardFile = 'preview-dashboard.html';
+    if (fs.existsSync(previewDashboardFile)) {
+      logger.info(`Found preview dashboard at ${previewDashboardFile}`);
+    }
+    
+    // Check for preview URL in temp directory
+    const tempDir = path.join(process.cwd(), 'temp');
+    if (fs.existsSync(tempDir)) {
+      // Look for reports with URLs
+      const reportFiles = fs.readdirSync(tempDir)
+        .filter(file => file.endsWith('.json') || file.endsWith('.txt'));
+      
+      for (const file of reportFiles) {
+        try {
+          const filePath = path.join(tempDir, file);
+          const content = fs.readFileSync(filePath, 'utf8');
+          
+          // First check if it's a JSON file with URL info
+          if (file.endsWith('.json')) {
+            try {
+              const jsonData = JSON.parse(content);
+              // Check if it contains URL properties
+              if (jsonData.previewUrl || jsonData.url || jsonData.adminUrl || 
+                  jsonData.hoursUrl || jsonData.admin || jsonData.hours) {
+                // Extract and store URLs
+                if (jsonData.admin || jsonData.adminUrl) previewUrls.admin = jsonData.admin || jsonData.adminUrl;
+                if (jsonData.hours || jsonData.hoursUrl) previewUrls.hours = jsonData.hours || jsonData.hoursUrl;
+                if (jsonData.previewUrl) {
+                  // If there's a generic preview URL, use it as a fallback
+                  if (!previewUrls.admin) previewUrls.admin = jsonData.previewUrl;
+                  if (!previewUrls.hours) previewUrls.hours = jsonData.previewUrl;
+                }
+              }
+            } catch (e) {
+              // Not a valid JSON file, will try regex instead
+            }
+          }
+          
+          // If we don't have URLs yet, try to extract them with regex
+          if (!previewUrls.admin || !previewUrls.hours) {
+            // Look for labeled URLs
+            const adminMatch = content.match(/ADMIN:?\s+(https:\/\/[^\s,]+)/i);
+            if (adminMatch && adminMatch[1]) {
+              previewUrls.admin = adminMatch[1].trim();
+            }
+            
+            const hoursMatch = content.match(/HOURS:?\s+(https:\/\/[^\s,]+)/i);
+            if (hoursMatch && hoursMatch[1]) {
+              previewUrls.hours = hoursMatch[1].trim();
+            }
+            
+            // If still no labeled URLs, look for generic Firebase URLs
+            if (!previewUrls.admin || !previewUrls.hours) {
+              const genericUrlRegex = /(?:Project Console|Hosting URL|Web app URL):\s+(https:\/\/[^\s,]+)/gi;
+              const urlMatches = [...content.matchAll(genericUrlRegex)];
+              
+              if (urlMatches.length > 0) {
+                // Process the URLs and try to distinguish between admin and hours
+                for (const match of urlMatches) {
+                  const url = match[1].trim();
+                  if (url.includes('admin') && !previewUrls.admin) {
+                    previewUrls.admin = url;
+                  } else if (url.includes('hours') && !previewUrls.hours) {
+                    previewUrls.hours = url;
+                  } else if (!previewUrls.admin) {
+                    previewUrls.admin = url;
+                  } else if (!previewUrls.hours) {
+                    previewUrls.hours = url;
+                  }
+                }
+              }
+            }
+          }
+        } catch (error) {
+          logger.debug(`Error processing file ${file}: ${error.message}`);
+        }
+      }
+    }
+    
+    return previewUrls;
+  } catch (error) {
+    logger.error(`Error looking for preview URLs: ${error.message}`);
+    return {};
+  }
+}
+
+/**
+ * Create a GitHub PR using the GitHub CLI
+ * @param {string} title - PR title
+ * @param {string} description - PR description
+ * @returns {Promise<Object>} Result of PR creation
+ */
+async function createGitHubPR(title, description) {
+  let branch;
+  try {
+    // Check if GitHub CLI is installed
+    executeCommand('gh --version', { stdio: 'pipe' });
+    
+    // Get current branch
+    branch = execSync('git branch --show-current', { encoding: 'utf8' }).trim();
+    
+    // Create full description
+    const fullDescription = `${description}\n\n## Changes\n- Tested with preview deployment\n- Ready for review`;
+    
+    // Create PR command
+    const createPrCommand = `gh pr create --base main --head ${branch} --title "${title}" --body "${fullDescription}"`;
+    
+    // Execute command
+    executeCommand(createPrCommand, { 
+      stdio: 'inherit',
+      cwd: rootDir
+    });
+    
+    // Get PR URL
+    const prUrl = execSync('gh pr view --json url -q .url', { encoding: 'utf8' }).trim();
+    
+    // Open PR in browser
+    logger.info('Opening PR in your browser...');
+    executeCommand('gh pr view --web', { 
+      stdio: 'inherit',
+      cwd: rootDir
+    });
+    
+    return {
+      success: true,
+      url: prUrl
+    };
+  } catch (error) {
+    // Fallback to instructions if GitHub CLI is not available
+    logger.warn('GitHub CLI not available or error creating PR.');
+    logger.info('\nPlease create a PR manually:');
+    logger.info('1. Go to: https://github.com/yourusername/time-tracking-2.0/pull/new/main');
+    logger.info(`2. Select your branch: ${branch || 'your-feature-branch'}`);
+    logger.info(`3. Use title: ${title}`);
+    logger.info('4. Add preview URLs to the description');
+    logger.info('5. Submit the PR');
+    
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
  * Main function to create the PR
  */
 async function createPR() {
+  const state = workflowState.getInstance();
+  const startTime = Date.now();
+  
   try {
+    // Initialize state and monitoring
+    state.startOperation('create-pr');
+    performanceMonitor.startOperation('create-pr');
+    progressTracker.initProgress(4, 'Pull Request Creation');
+    
     // Show help and exit if requested
     if (options.help) {
       showHelp();
@@ -137,6 +319,7 @@ async function createPR() {
     logger.sectionHeader('Creating Pull Request' + (options.test ? ' (TEST MODE)' : '') + (options.dryRun ? ' (DRY RUN)' : ''));
     
     // Get current branch
+    progressTracker.startStep('Branch Validation');
     logger.info('Getting current branch...');
     const branch = execSync('git branch --show-current', { encoding: 'utf8' }).trim();
     logger.success(`Current branch: ${branch}`);
@@ -144,51 +327,39 @@ async function createPR() {
     // Check if we're on main branch
     if (branch === 'main' || branch === 'master') {
       if (!options.force) {
-        logger.error('You are on the main branch. PRs should be created from feature branches.');
-        logger.info('Options:');
-        logger.info('1. Switch to a feature branch:');
-        logger.info('   git checkout -b feature/your-feature-name');
-        logger.info('2. Use --force to override this check:');
-        logger.info('   node scripts/create-pr.js --force "Your PR title"');
-        return 1;
+        throw new Error('You are on the main branch. PRs should be created from feature branches.');
       } else {
         logger.warn('Creating PR from main branch because --force was specified.');
       }
     }
+    progressTracker.completeStep(true, 'Branch validation passed');
     
     // Make sure we have latest changes committed
+    progressTracker.startStep('Git State Check');
     logger.info('Checking for uncommitted changes...');
     const status = execSync('git status --porcelain', { encoding: 'utf8' }).trim();
     if (status) {
       logger.warn('You have uncommitted changes:');
       console.log(status);
       
-      // Check if all changes are related to temporary files
+      // Handle temp file changes
       const changes = status.split('\n');
       const tempFileChanges = changes.filter(change => {
-        // Look for deletions (lines starting with D)
         if (!change.startsWith('D')) return false;
-        
-        // Extract filename
         const filename = change.substring(2).trim();
-        
-        // Check if it's a temporary file
         return filename === '.env.build' || 
                filename === 'preview-dashboard.html' || 
                filename.startsWith('temp/');
       });
       
-      // Handle temp file changes intelligently
       if (tempFileChanges.length > 0) {
         logger.info('Detected temporary file tracking changes from gitignore updates.');
         
-        // If there are other non-temp changes, only commit the temp files
         if (tempFileChanges.length !== changes.length) {
           logger.info('Will auto-commit only the temporary file changes, leaving other changes untouched.');
           
           if (!options.dryRun && !options.test) {
             try {
-              // Add only the temp files for deletion
               for (const change of tempFileChanges) {
                 const filename = change.substring(2).trim();
                 execSync(`git add -u "${filename}"`, { stdio: 'pipe' });
@@ -197,313 +368,78 @@ async function createPR() {
               execSync(`git commit -m "chore: Remove temporary files from Git tracking"`, { stdio: 'inherit' });
               logger.success('Temporary file changes committed automatically.');
               logger.info('Note: You still have other uncommitted changes that need handling.');
-              
-              // Show remaining changes
-              const remainingStatus = execSync('git status --short', { encoding: 'utf8' }).trim();
-              if (remainingStatus) {
-                logger.info('Remaining uncommitted changes:');
-                console.log(remainingStatus);
-                
-                if (options.autoCommit) {
-                  logger.info('Auto-commit option detected, also committing remaining changes...');
-                  const commitMessage = title || `Auto-commit changes for PR from ${branch}`;
-                  
-                  execSync('git add .', { stdio: 'inherit' });
-                  execSync(`git commit -m "${commitMessage}"`, { stdio: 'inherit' });
-                  logger.success('All changes committed successfully.');
-                } else {
-                  logger.error('Please commit your remaining changes before creating PR:');
-                  logger.info('Tip: Run the following commands to commit your changes:');
-                  logger.info('  git add .');
-                  logger.info('  git commit -m "Your commit message"');
-                  logger.info('');
-                  logger.info('Alternatively, use --auto-commit to commit all changes automatically:');
-                  logger.info('  node scripts/create-pr.js --auto-commit "Your PR title"');
-                  return 1;
-                }
-              }
             } catch (error) {
-              logger.error(`Failed to commit temporary file changes: ${error.message}`);
-              return 1;
+              throw new Error(`Failed to commit temporary files: ${error.message}`);
             }
-          } else {
-            logger.info(`DRY RUN: Would auto-commit only temporary file changes`);
-            logger.warn('DRY RUN: Would still need to handle other uncommitted changes');
-          }
-        }
-        // If all changes are temp files, commit everything
-        else {
-          logger.info('These changes will be auto-committed for convenience.');
-          
-          const commitMessage = "chore: Remove temporary files from Git tracking";
-          
-          if (!options.dryRun && !options.test) {
-            try {
-              execSync('git add .', { stdio: 'inherit' });
-              execSync(`git commit -m "${commitMessage}"`, { stdio: 'inherit' });
-              logger.success('Temporary file changes committed automatically.');
-            } catch (error) {
-              logger.error(`Failed to commit temporary file changes: ${error.message}`);
-              return 1;
-            }
-          } else {
-            logger.info(`DRY RUN: Would auto-commit temporary file changes with message: "${commitMessage}"`);
           }
         }
       }
-      else if (options.autoCommit) {
-        logger.info('Auto-commit option detected, committing changes...');
-        const commitMessage = title || `Auto-commit changes for PR from ${branch}`;
-        
-        if (!options.dryRun && !options.test) {
-          try {
-            execSync('git add .', { stdio: 'inherit' });
-            execSync(`git commit -m "${commitMessage}"`, { stdio: 'inherit' });
-            logger.success('Changes committed successfully.');
-          } catch (error) {
-            logger.error(`Failed to commit changes: ${error.message}`);
-            return 1;
-          }
-        } else {
-          logger.info(`DRY RUN: Would auto-commit changes with message: "${commitMessage}"`);
-        }
-      } else {
-        logger.error('You have uncommitted changes. Please commit them first:');
-        logger.info('Tip: Run the following commands to commit your changes:');
-        logger.info('  git add .');
-        logger.info('  git commit -m "Your commit message"');
-        logger.info('');
-        logger.info('Alternatively, use --auto-commit to commit changes automatically:');
-        logger.info('  node scripts/create-pr.js --auto-commit "Your PR title"');
-        return 1;
+      
+      if (!options.autoCommit) {
+        throw new Error('You have uncommitted changes. Use --auto-commit to commit them automatically.');
       }
+    }
+    progressTracker.completeStep(true, 'Git state validated');
+    
+    // Check for preview URLs
+    progressTracker.startStep('Preview URL Check');
+    if (!options.skipUrlCheck) {
+      const previewUrls = await getPreviewUrls();
+      if (!previewUrls || Object.keys(previewUrls).length === 0) {
+        throw new Error('No preview URLs found. Please run the workflow first to generate previews.');
+      }
+      logger.success('Preview URLs found:', previewUrls);
     } else {
-      logger.success('No uncommitted changes found.');
+      logger.info('Skipping preview URL check as requested');
     }
+    progressTracker.completeStep(true, 'Preview URLs validated');
     
-    // Push branch to remote if not skipped
-    if (!options.skipPush) {
-      logger.info(`Pushing branch '${branch}' to remote...`);
-      try {
-        executeCommand(`git push -u origin ${branch}`, { 
-          stdio: 'inherit',
-          dryRun: options.dryRun,
-          test: options.test
-        });
-        
-        if (!options.dryRun && !options.test) {
-          logger.success('Branch pushed to remote.');
-        }
-      } catch (error) {
-        if (!options.dryRun && !options.test) {
-          logger.error(`Failed to push branch: ${error.message}`);
-          logger.info('Please push your branch manually and try again:');
-          logger.info(`  git push -u origin ${branch}`);
-          return 1;
-        }
+    // Create the PR
+    progressTracker.startStep('PR Creation');
+    if (!options.dryRun && !options.test) {
+      const prResult = await createGitHubPR(title, description);
+      if (!prResult.success) {
+        throw new Error(`Failed to create PR: ${prResult.error}`);
       }
+      logger.success('Pull request created successfully!');
+      logger.info(`PR URL: ${prResult.url}`);
     } else {
-      logger.info('Skipping push to remote (--skip-push specified)');
+      logger.info('DRY RUN: Would create PR with:');
+      logger.info(`Title: ${title}`);
+      logger.info(`Description: ${description}`);
     }
+    progressTracker.completeStep(true, 'PR created successfully');
     
-    // Get PR title and description
-    const prTitle = title || `Deploy ${branch} to production`;
-    const prDescription = description || 'This PR has been tested with preview deployment and is ready for review.';
+    // Complete PR creation
+    const duration = Date.now() - startTime;
+    state.completeOperation('create-pr', {
+      success: true,
+      duration,
+      metrics: performanceMonitor.getPerformanceSummary()
+    });
     
-    // Look for preview URLs
-    logger.info('Looking for preview URLs...');
-    let foundPreviewUrls = false;
-    
-    // Try to find preview URLs from recent deployments
-    const previewUrls = {};
-    
-    try {
-      // Check for preview dashboard file
-      const previewDashboardFile = 'preview-dashboard.html';
-      if (fs.existsSync(previewDashboardFile)) {
-        logger.info(`Found preview dashboard at ${previewDashboardFile}`);
-        foundPreviewUrls = true;
-      }
-      
-      // Check for preview URL in temp directory
-      const tempDir = path.join(process.cwd(), 'temp');
-      if (fs.existsSync(tempDir)) {
-        // Look for reports with URLs
-        const reportFiles = fs.readdirSync(tempDir)
-          .filter(file => file.endsWith('.json') || file.endsWith('.txt'));
-        
-        for (const file of reportFiles) {
-          try {
-            const filePath = path.join(tempDir, file);
-            const content = fs.readFileSync(filePath, 'utf8');
-            
-            // First check if it's a JSON file with URL info
-            if (file.endsWith('.json')) {
-              try {
-                const jsonData = JSON.parse(content);
-                // Check if it contains URL properties
-                if (jsonData.previewUrl || jsonData.url || jsonData.adminUrl || 
-                    jsonData.hoursUrl || jsonData.admin || jsonData.hours) {
-                  // Extract and store URLs
-                  if (jsonData.admin || jsonData.adminUrl) previewUrls.admin = jsonData.admin || jsonData.adminUrl;
-                  if (jsonData.hours || jsonData.hoursUrl) previewUrls.hours = jsonData.hours || jsonData.hoursUrl;
-                  if (jsonData.previewUrl) {
-                    // If there's a generic preview URL, use it as a fallback
-                    if (!previewUrls.admin) previewUrls.admin = jsonData.previewUrl;
-                    if (!previewUrls.hours) previewUrls.hours = jsonData.previewUrl;
-                  }
-                  foundPreviewUrls = true;
-                }
-              } catch (e) {
-                // Not a valid JSON file, will try regex instead
-              }
-            }
-            
-            // If we don't have URLs yet, try to extract them with regex
-            if (!previewUrls.admin || !previewUrls.hours) {
-              // Look for labeled URLs
-              const adminMatch = content.match(/ADMIN:?\s+(https:\/\/[^\s,]+)/i);
-              if (adminMatch && adminMatch[1]) {
-                previewUrls.admin = adminMatch[1].trim();
-                foundPreviewUrls = true;
-              }
-              
-              const hoursMatch = content.match(/HOURS:?\s+(https:\/\/[^\s,]+)/i);
-              if (hoursMatch && hoursMatch[1]) {
-                previewUrls.hours = hoursMatch[1].trim();
-                foundPreviewUrls = true;
-              }
-              
-              // If still no labeled URLs, look for generic Firebase URLs
-              if (!previewUrls.admin || !previewUrls.hours) {
-                const genericUrlRegex = /(?:Project Console|Hosting URL|Web app URL):\s+(https:\/\/[^\s,]+)/gi;
-                const urlMatches = [...content.matchAll(genericUrlRegex)];
-                
-                if (urlMatches.length > 0) {
-                  // Process the URLs and try to distinguish between admin and hours
-                  for (const match of urlMatches) {
-                    const url = match[1].trim();
-                    if (url.includes('admin') && !previewUrls.admin) {
-                      previewUrls.admin = url;
-                      foundPreviewUrls = true;
-                    } else if (url.includes('hours') && !previewUrls.hours) {
-                      previewUrls.hours = url;
-                      foundPreviewUrls = true;
-                    } else if (!previewUrls.admin) {
-                      previewUrls.admin = url;
-                      foundPreviewUrls = true;
-                    } else if (!previewUrls.hours) {
-                      previewUrls.hours = url;
-                      foundPreviewUrls = true;
-                    }
-                  }
-                }
-              }
-            }
-          } catch (error) {
-            logger.debug(`Error processing file ${file}: ${error.message}`);
-          }
-        }
-      }
-      
-      // If we found any preview URLs, save them
-      if (Object.keys(previewUrls).length > 0) {
-        logger.success('Found preview URLs:');
-        if (previewUrls.admin) logger.info(`ADMIN: ${previewUrls.admin}`);
-        if (previewUrls.hours) logger.info(`HOURS: ${previewUrls.hours}`);
-        
-        // Save the URLs for use in the dashboard
-        savePreviewUrls(previewUrls);
-      } else if (!foundPreviewUrls && !options.skipUrlCheck) {
-        logger.warn('No preview URLs found.');
-        if (!options.dryRun && !options.test) {
-          const continueWithoutUrls = await getUserInput(
-            'No preview URLs found. Continue with PR creation? (y/N): ',
-            'n'
-          );
-          if (continueWithoutUrls.toLowerCase() !== 'y') {
-            logger.error('PR creation aborted: No preview URLs found.');
-            return 1;
-          }
-        }
-      }
-    } catch (error) {
-      logger.error(`Error looking for preview URLs: ${error.message}`);
-      if (!options.skipUrlCheck && !options.dryRun && !options.test) {
-        const continueAfterError = await getUserInput(
-          'Error looking for preview URLs. Continue with PR creation? (y/N): ',
-          'n'
-        );
-        if (continueAfterError.toLowerCase() !== 'y') {
-          logger.error('PR creation aborted due to URL check error.');
-          return 1;
-        }
-      }
-    }
-    
-    // Create the full PR description
-    const fullDescription = `${prDescription}\n\n## Changes\n- Tested with preview deployment\n- Ready for review`;
-    
-    // Create PR
-    logger.info('Creating pull request...');
-    logger.info(`Title: ${prTitle}`);
-    logger.info(`Target: main <- ${branch}`);
-    
-    // Check if GitHub CLI is installed
-    try {
-      executeCommand('gh --version', { stdio: 'pipe', dryRun: options.dryRun, test: options.test });
-      
-      // Use GitHub CLI to create PR if not in test mode
-      if (!options.test) {
-        logger.info('Using GitHub CLI to create PR...');
-        
-        const createPrCommand = `gh pr create --base main --head ${branch} --title "${prTitle}" --body "${fullDescription}"`;
-        
-        if (options.dryRun) {
-          logger.info(`DRY RUN: Would create PR with command: ${createPrCommand}`);
-          logger.success('Pull request would be created with the above details.');
-        } else {
-          executeCommand(createPrCommand, { 
-            stdio: 'inherit',
-            cwd: rootDir,
-            dryRun: options.dryRun
-          });
-          
-          logger.success('Pull request created successfully!');
-          
-          // Open PR in browser
-          logger.info('Opening PR in your browser...');
-          executeCommand('gh pr view --web', { 
-            stdio: 'inherit',
-            cwd: rootDir,
-            dryRun: options.dryRun
-          });
-        }
-      } else {
-        logger.success('TEST MODE: GitHub CLI is installed, PR creation would succeed.');
-      }
-    } catch (e) {
-      // Fallback to instructions if GitHub CLI is not available
-      logger.warn('GitHub CLI not available or error creating PR.');
-      logger.info('\nPlease create a PR manually:');
-      logger.info('1. Go to: https://github.com/yourusername/time-tracking-2.0/pull/new/main');
-      logger.info(`2. Select your branch: ${branch}`);
-      logger.info(`3. Use title: ${prTitle}`);
-      logger.info('4. Add preview URLs to the description');
-      logger.info('5. Submit the PR');
-      
-      if (options.test) {
-        logger.info('TEST MODE: GitHub CLI is not available, manual PR creation would be required.');
-      }
-      
-      if (!options.test && !options.dryRun) {
-        return 1;
-      }
-    }
-    
+    progressTracker.finishProgress(true, 'PR creation completed successfully');
+    logger.success(`PR creation completed in ${formatDuration(duration)}`);
     return 0;
+
   } catch (error) {
-    logger.error('Error creating PR:', error.message);
+    const duration = Date.now() - startTime;
+    state.completeOperation('create-pr', {
+      success: false,
+      duration,
+      error: error.message
+    });
+    
+    progressTracker.finishProgress(false, `PR creation failed: ${error.message}`);
+    logger.error('PR creation failed:', error.message);
+    
+    // Handle different error types
+    if (error instanceof errorHandler.ValidationError) {
+      logger.error('Validation error:', error.message);
+    } else if (error instanceof errorHandler.GitError) {
+      logger.error('Git error:', error.message);
+    }
+    
     return 1;
   }
 }

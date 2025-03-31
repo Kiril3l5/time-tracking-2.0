@@ -17,6 +17,10 @@ This document outlines a streamlined implementation plan for transforming the Ti
 - Works offline in areas with poor connectivity
 - Remembers user login information
 
+## Implementation Strategy Overview
+
+For a complete strategic plan with timelines and detailed technical implementation, see the [Path Forward](../planning/path-forward.md) document. This implementation plan focuses on the tactical steps needed to achieve those strategic goals.
+
 ## Mobile Testing Setup
 
 ### 1. Development Environment
@@ -162,6 +166,8 @@ export default defineConfig({
 - [Mobile-First CSS](https://developer.mozilla.org/en-US/docs/Web/CSS/Media_Queries/Using_media_queries)
 - [Touch Events](https://developer.mozilla.org/en-US/docs/Web/API/Touch_events)
 - [Performance Best Practices](https://web.dev/performance-get-started/)
+- [Time Handling Implementation Plan](../planning/time-handling-implementation.md) - Detailed plan for time calculation engine and offline sync
+- [Path Forward](../planning/path-forward.md) - Strategic implementation path for the entire project
 
 ## Implementation Tracking
 
@@ -171,9 +177,16 @@ export default defineConfig({
 | - Week 1: Mobile Setup & Navigation | Completed | 2024-06-06 | 2024-06-13 | 2024-06-13 |
 | - Week 2: Authentication & UI Components | Completed | 2024-06-14 | 2024-06-20 | 2024-06-17 |
 | - Week 3: Shared Components & Data Management | In Progress | 2024-06-18 | 2024-06-27 | |
-| 2: Workers Portal (Hours) | Not Started | | | |
-| 3: Managers Portal (Admin) | Not Started | | | |
-| 4: Enhancements & Optimization | Not Started | | | |
+| 2: Workers Portal (Hours) | Planned | 2024-06-28 | 2024-07-11 | |
+| - Week 1: Time Entry Screens | Planned | 2024-06-28 | 2024-07-04 | |
+| - Week 2: Weekly View & Time Visualization | Planned | 2024-07-05 | 2024-07-11 | |
+| 3: Managers Portal (Admin) | Planned | 2024-07-12 | 2024-07-25 | |
+| - Week 1: Approval Screens | Planned | 2024-07-12 | 2024-07-18 | |
+| - Week 2: Reporting Dashboard | Planned | 2024-07-19 | 2024-07-25 | |
+| 4: Offline Support & Enhancements | Planned | 2024-07-26 | 2024-08-08 | |
+| - Week 1: Offline Data Synchronization | Planned | 2024-07-26 | 2024-08-01 | |
+| - Week 2: Performance Optimization | Planned | 2024-08-02 | 2024-08-08 | |
+| 5: Polish & QA | Planned | 2024-08-09 | 2024-08-16 | |
 
 ## Essential Tech Stack
 
@@ -800,532 +813,376 @@ if (typeof window !== 'undefined') {
 - Implement the mobile dashboard for the hours portal
 - Create mobile-optimized time entry screens
 
-## Phase 2: Workers Portal Implementation (4 weeks)
+## Phase 2: Worker Portal Implementation (2 weeks)
 
-### Week 4-5: Time Entry Core Experience
+### Week 1: Time Entry Screens
 
 #### Tasks:
-- [ ] Create mobile dashboard in `packages/hours/src/pages/Dashboard.tsx`:
-  - [ ] Today's quick summary
-  - [ ] This week's hours at a glance
-  - [ ] Quick actions for today
-- [ ] Implement time entry form:
-  - [ ] Simple hours input with presets
-  - [ ] Project/task selection optimized for touch
-  - [ ] Quick submission process
-- [ ] Implement optimistic updates for time entries
+- [ ] Implement time entry form for mobile:
+  - [ ] Create intuitive time entry interface with quick-tap time allocation
+  - [ ] Add project selection with recently used projects first
+  - [ ] Implement voice input for description field (where supported)
+  - [ ] Add draft saving functionality for incomplete entries
+- [ ] Create time entry list view:
+  - [ ] Implement virtualized list for performance
+  - [ ] Add pull-to-refresh functionality
+  - [ ] Create swipe actions for entries (edit, delete, submit)
+- [ ] Implement quick entry shortcuts:
+  - [ ] Create preset time allocations (1h, 2h, 4h, 8h)
+  - [ ] Add favorite projects functionality
+  - [ ] Implement "continue yesterday's task" feature
 
-#### Implementation Details:
+#### Implementation Guidelines:
 
-**Time Entry Form with React Hook Form**:
+**Mobile Time Entry Form**
 ```tsx
-// packages/hours/src/components/TimeEntryForm.tsx
-import { useState } from 'react';
-import { useForm } from 'react-hook-form';
-import { format } from 'date-fns';
+// Key components to implement:
+// 1. TimeEntryForm.tsx - Main form component
+// 2. QuickTimeSelector.tsx - Buttons for quick time selection
+// 3. ProjectSelector.tsx - Touch-friendly project dropdown
+// 4. TimeEntryDescription.tsx - Description field with voice input
+```
 
-interface TimeEntryFormProps {
-  onSubmit: (data: TimeEntryData) => void;
-  isLoading?: boolean;
-  initialData?: Partial<TimeEntryData>;
-}
+**Mobile Time Entry List**
+```tsx
+// Implement using virtualized list for performance
+// Use swipe gestures for common actions:
+// - Swipe right: Edit entry
+// - Swipe left: Delete/submit entry
+// This provides a native app-like experience
+```
 
-interface TimeEntryData {
-  date: string;
-  hours: number;
-  projectId: string;
-  notes?: string;
-}
+### Week 2: Weekly View & Time Visualization
 
-export const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
-  onSubmit,
-  isLoading = false,
-  initialData = {}
-}) => {
-  const [showNotes, setShowNotes] = useState(false);
-  const today = format(new Date(), 'yyyy-MM-dd');
+#### Tasks:
+- [ ] Implement weekly calendar view:
+  - [ ] Create touch-friendly week navigator with swipe gestures
+  - [ ] Add day status indicators showing entry status
+  - [ ] Implement quick-entry capability from calendar
+- [ ] Create time visualization components:
+  - [ ] Visual time block representation
+  - [ ] Weekly hours summary with overtime indication
+  - [ ] Progress toward targets visualization
+- [ ] Implement draft/submitted status indicators:
+  - [ ] Visual distinction between draft and submitted entries
+  - [ ] Badge indicators for approval status
+  - [ ] Notifications for rejected entries
+
+## Phase 3: Manager Portal Implementation (2 weeks)
+
+### Week 1: Approval Screens
+
+#### Tasks:
+- [ ] Create mobile approval queue:
+  - [ ] Implement card-based interface for time entries pending approval
+  - [ ] Add swipe gestures for approve/reject
+  - [ ] Create batch approval functionality
+- [ ] Implement detailed entry view:
+  - [ ] Show comprehensive time entry details
+  - [ ] Add approval history timeline
+  - [ ] Create rejection feedback form
+
+### Week 2: Reporting Dashboard
+
+#### Tasks:
+- [ ] Create mobile-optimized reporting dashboard:
+  - [ ] Implement responsive data visualizations
+  - [ ] Add filters for different time periods
+  - [ ] Create team summary view
+- [ ] Implement export functionality:
+  - [ ] PDF report generation
+  - [ ] CSV data export
+  - [ ] Email scheduling options
+
+## Phase 4: Offline Support & Enhancements (2 weeks)
+
+### Week 1: Offline Data Synchronization
+
+#### Tasks:
+- [ ] Implement IndexedDB storage:
+  - [ ] Create schema for offline data
+  - [ ] Implement CRUD operations
+  - [ ] Add TTL for cached data
+- [ ] Create synchronization mechanism:
+  - [ ] Implement queue for pending operations
+  - [ ] Add conflict resolution strategy
+  - [ ] Create retry mechanism for failed operations
+- [ ] Add offline status indicators:
+  - [ ] Visual indicators for connection status
+  - [ ] Entry status indicators (local/synced)
+  - [ ] Sync progress visualization
+
+### Week 2: Performance Optimization
+
+#### Tasks:
+- [ ] Optimize bundle size:
+  - [ ] Implement code splitting
+  - [ ] Add lazy loading for non-critical components
+  - [ ] Optimize image assets
+- [ ] Improve perceived performance:
+  - [ ] Add skeleton screens for loading states
+  - [ ] Implement optimistic UI updates
+  - [ ] Pre-fetch likely needed data
+
+## Phase 5: Polish & QA (1 week)
+
+#### Tasks:
+- [ ] Cross-device testing:
+  - [ ] Test on multiple iOS and Android devices
+  - [ ] Verify functionality on different browsers
+  - [ ] Check performance on lower-end devices
+- [ ] Accessibility improvements:
+  - [ ] Add ARIA labels
+  - [ ] Test with screen readers
+  - [ ] Improve keyboard navigation
+- [ ] Final optimizations:
+  - [ ] Fix any remaining UI issues
+  - [ ] Optimize critical rendering paths
+  - [ ] Add final user documentation
+
+## Time Handling Implementation
+
+### Core Time Calculation Engine
+
+The time handling functionality forms the core of our application and requires careful implementation. This section outlines the approach for building a robust time calculation engine.
+
+#### Time Entry Model
+
+```typescript
+// Enhanced time entry model with additional fields
+interface TimeEntry {
+  // Core fields from existing model
+  id: string;
+  userId: string;
+  companyId: string;
+  date: string; // YYYY-MM-DD format
   
-  const { register, handleSubmit, setValue, watch } = useForm<TimeEntryData>({
-    defaultValues: {
-      date: today,
-      hours: 8,
-      projectId: '',
-      notes: '',
-      ...initialData
+  // Enhanced hours tracking
+  hours: number;               // Total hours (sum of all types)
+  regularHours: number;        // Regular work hours
+  overtimeHours: number;       // Overtime hours
+  ptoHours: number;            // Paid time off
+  unpaidLeaveHours: number;    // Unpaid leave
+  
+  // Improved time tracking (optional fields)
+  startTime?: string;          // HH:MM format, for clock in/out
+  endTime?: string;            // HH:MM format, for clock in/out
+  breaks?: {                   // Break tracking
+    start: string;             // HH:MM format
+    end: string;               // HH:MM format
+    duration: number;          // In minutes
+  }[];
+  
+  // Workflow state fields (unchanged)
+  status: 'draft' | 'pending' | 'approved' | 'rejected' | 'processed';
+  isSubmitted: boolean;
+  needsApproval: boolean;
+  // ...other existing fields
+}
+```
+
+#### Time Calculation Implementation
+
+The time calculation engine will handle:
+
+1. **Hour Calculations**
+   - Total hours calculation from components
+   - Overtime calculation based on company rules
+   - Time rounding (nearest 15min, etc.)
+
+2. **Time Format Handling**
+   - Support for both decimal hours and HH:MM format
+   - Timezone-aware calculations
+   - Date boundary handling
+
+3. **Validation Rules**
+   - Maximum hours per day
+   - Required fields based on company settings
+   - Logical validation (end time after start time, etc.)
+
+```typescript
+// Time calculation utility example
+const calculateHours = {
+  // Calculate total hours from start/end times
+  fromTimeRange: (start: string, end: string, breakMinutes: number = 0): number => {
+    if (!start || !end) return 0;
+    
+    const startDate = parseTimeString(start);
+    const endDate = parseTimeString(end);
+    
+    // Calculate duration in minutes
+    const durationMinutes = (endDate.getTime() - startDate.getTime()) / 60000;
+    
+    // Subtract breaks
+    const netMinutes = durationMinutes - breakMinutes;
+    
+    // Convert to hours with configurable rounding
+    return roundTime(netMinutes / 60);
+  },
+  
+  // Round time to nearest increment (default 15min = 0.25h)
+  roundToIncrement: (hours: number, increment: number = 0.25): number => {
+    return Math.round(hours / increment) * increment;
+  },
+  
+  // Calculate overtime based on regular hours threshold
+  calculateOvertime: (totalHours: number, regularThreshold: number): { 
+    regularHours: number; 
+    overtimeHours: number; 
+  } => {
+    if (totalHours <= regularThreshold) {
+      return { regularHours: totalHours, overtimeHours: 0 };
     }
-  });
-  
-  const hours = watch('hours');
-  const presets = [4, 6, 8, 10];
-  
-  const selectPreset = (preset: number) => {
-    setValue('hours', preset);
-  };
-  
-  return (
-    <form className="space-y-4" onSubmit={handleSubmit(onSubmit)}>
-      {/* Form implementation as shown in the design system */}
-      {/* ... */}
-      
-      {/* Optimized mobile submit button */}
-      <div className="sticky bottom-0 bg-white pt-2 pb-safe-bottom mt-6">
-        <button
-          type="submit"
-          disabled={isLoading}
-          className="w-full bg-primary-600 text-white rounded-lg h-12 font-medium"
-        >
-          {isLoading ? 'Saving...' : 'Save Time Entry'}
-        </button>
-      </div>
-    </form>
-  );
+    
+    return {
+      regularHours: regularThreshold,
+      overtimeHours: totalHours - regularThreshold
+    };
+  }
 };
 ```
 
-**Optimistic Updates with React Query**:
-```tsx
-// packages/hours/src/hooks/useTimeEntries.ts
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { addDoc, collection } from 'firebase/firestore';
-import { db } from '@/firebase/config';
-import { TimeEntry } from '@/types';
+### Offline Time Entry Synchronization
 
-export function useCreateTimeEntry() {
-  const queryClient = useQueryClient();
+To ensure a seamless experience even in areas with poor connectivity, we'll implement a comprehensive offline synchronization system:
+
+1. **Local Storage Strategy**
+   - Use IndexedDB for storing time entries
+   - Implement data versioning for conflict resolution
+   - Add timestamp tracking for sync ordering
+
+2. **Synchronization Protocol**
+   - Queue-based system for pending changes
+   - Prioritized sync for critical operations
+   - Background sync when connection is restored
+
+3. **Conflict Resolution**
+   - Timestamp-based resolution (latest wins)
+   - Field-level merging when possible
+   - User-prompted resolution for complex conflicts
+
+```typescript
+// Offline sync implementation approach
+export class TimeEntrySyncManager {
+  // Initialize with dependencies
+  constructor(
+    private localStore: LocalStorage,
+    private remoteApi: FirebaseApi,
+    private conflictResolver: ConflictResolver
+  ) {}
   
-  return useMutation({
-    mutationFn: async (entry: Omit<TimeEntry, 'id'>) => {
-      const docRef = await addDoc(collection(db, 'timeEntries'), entry);
-      return { id: docRef.id, ...entry };
-    },
-    onMutate: async (newEntry) => {
-      // Cancel outgoing refetches to avoid overwriting optimistic update
-      await queryClient.cancelQueries({ queryKey: ['timeEntries'] });
-      
-      // Get current time entries
-      const previousEntries = queryClient.getQueryData<TimeEntry[]>(['timeEntries']);
-      
-      // Create optimistic entry with temporary ID
-      const optimisticEntry = {
-        id: `temp-${new Date().getTime()}`,
-        ...newEntry,
-        createdAt: new Date().toISOString(),
-      };
-      
-      // Update cache with optimistic entry
-      queryClient.setQueryData<TimeEntry[]>(['timeEntries'], old => [
-        ...(old || []),
-        optimisticEntry as TimeEntry
-      ]);
-      
-      return { previousEntries };
-    },
-    onError: (err, newEntry, context) => {
-      // If mutation fails, restore previous entries
-      queryClient.setQueryData(['timeEntries'], context?.previousEntries);
-    },
-    onSettled: () => {
-      // Refetch after error or success
-      queryClient.invalidateQueries({ queryKey: ['timeEntries'] });
+  // Queue an entry for synchronization
+  async queueForSync(entry: TimeEntry): Promise<void> {
+    // Add to local sync queue with metadata
+    await this.localStore.addToSyncQueue({
+      data: entry,
+      operation: entry.id ? 'update' : 'create',
+      timestamp: new Date().toISOString(),
+      attempts: 0,
+      status: 'pending'
+    });
+    
+    // Try immediate sync if online
+    if (navigator.onLine) {
+      this.processSyncQueue();
     }
-  });
-}
-```
-
-#### Deliverables:
-- Mobile worker dashboard
-- Streamlined time entry form
-- Optimistic updates for time entries
-
-### Week 6-7: Weekly View & History
-
-#### Tasks:
-- [ ] Create weekly timesheet view:
-  - [ ] Swipeable week navigation
-  - [ ] Day cards with quick entry
-  - [ ] Weekly summary statistics
-- [ ] Implement time entry history:
-  - [ ] Infinite scroll for past entries
-  - [ ] Entry details with expand/collapse
-  - [ ] Status indicators for approvals
-- [ ] Add debounced updates for form inputs
-
-#### Implementation Details:
-
-**Swipeable Week Navigation**:
-```tsx
-// packages/hours/src/components/WeekNavigator.tsx
-import { useState } from 'react';
-import { useSwipeable } from 'react-swipeable';
-import { format, startOfWeek, endOfWeek, addWeeks, subWeeks } from 'date-fns';
-
-export const WeekNavigator: React.FC<{ onWeekChange: (start: Date, end: Date) => void }> = ({ onWeekChange }) => {
-  const [currentDate, setCurrentDate] = useState(new Date());
+  }
   
-  const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 }); // Monday
-  const weekEnd = endOfWeek(currentDate, { weekStartsOn: 1 }); // Sunday
-  
-  const goToPreviousWeek = () => {
-    const newDate = subWeeks(currentDate, 1);
-    setCurrentDate(newDate);
-    onWeekChange(startOfWeek(newDate, { weekStartsOn: 1 }), endOfWeek(newDate, { weekStartsOn: 1 }));
-  };
-  
-  const goToNextWeek = () => {
-    const newDate = addWeeks(currentDate, 1);
-    setCurrentDate(newDate);
-    onWeekChange(startOfWeek(newDate, { weekStartsOn: 1 }), endOfWeek(newDate, { weekStartsOn: 1 }));
-  };
-  
-  const swipeHandlers = useSwipeable({
-    onSwipedLeft: goToNextWeek,
-    onSwipedRight: goToPreviousWeek,
-    trackMouse: true
-  });
-  
-  return (
-    <div 
-      {...swipeHandlers}
-      className="flex items-center justify-between bg-white p-4 sticky top-0 z-10"
-    >
-      <button 
-        type="button"
-        onClick={goToPreviousWeek}
-        className="h-10 w-10 flex items-center justify-center rounded-full bg-gray-100"
-      >
-        ←
-      </button>
-      
-      <div className="text-center">
-        <h2 className="font-medium">
-          {format(weekStart, 'MMM d')} - {format(weekEnd, 'MMM d, yyyy')}
-        </h2>
-        <p className="text-sm text-gray-500">Swipe to change week</p>
-      </div>
-      
-      <button 
-        type="button"
-        onClick={goToNextWeek}
-        className="h-10 w-10 flex items-center justify-center rounded-full bg-gray-100"
-      >
-        →
-      </button>
-    </div>
-  );
-};
-```
-
-**Debounced Input Updates**:
-```tsx
-// packages/common/src/hooks/useDebounce.ts
-import { useCallback } from 'react';
-import debounce from 'lodash/debounce';
-
-export function useDebouncedCallback<T extends (...args: any[]) => any>(
-  callback: T,
-  delay: number = 500
-) {
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useCallback(
-    debounce((...args: Parameters<T>) => {
-      callback(...args);
-    }, delay),
-    [callback, delay]
-  );
-}
-
-// Usage in a form component
-const debouncedUpdate = useDebouncedCallback((value) => {
-  updateTimeEntry({ ...entry, hours: value });
-}, 800);
-
-// In the UI
-<input
-  type="number"
-  onChange={(e) => debouncedUpdate(e.target.value)}
-  // ...
-/>
-```
-
-#### Deliverables:
-- Mobile weekly view with swipe navigation
-- Time entry history interface
-- Debounced update implementation for form inputs
-
-## Phase 3: Managers Portal Implementation (4 weeks)
-
-### Week 8-9: Approval Dashboard & Queue
-
-#### Tasks:
-- [ ] Create manager dashboard in `packages/admin/src/pages/Dashboard.tsx`:
-  - [ ] Pending approvals count
-  - [ ] Quick filters by employee/project
-  - [ ] Recent activity summary
-- [ ] Implement approval queue:
-  - [ ] Card-based approval interface
-  - [ ] Swipe to approve/reject pattern
-  - [ ] Batch approval capabilities
-- [ ] Handle form input focus for mobile
-
-#### Implementation Details:
-
-**Swipeable Approval Card**:
-```tsx
-// Implementation as shown in the design system document
-// packages/admin/src/components/ApprovalCard.tsx
-```
-
-**Form Input Focus Management**:
-```tsx
-// packages/common/src/hooks/useInputFocus.ts
-import { useRef, useEffect } from 'react';
-
-export function useInputFocus(isFocused: boolean) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  
-  useEffect(() => {
-    if (isFocused && inputRef.current) {
-      // Add a slight delay to let the keyboard appear
-      setTimeout(() => {
-        inputRef.current?.scrollIntoView({ 
-          behavior: 'smooth', 
-          block: 'center' 
+  // Process the sync queue
+  async processSyncQueue(): Promise<void> {
+    if (!navigator.onLine) return;
+    
+    const queue = await this.localStore.getSyncQueue();
+    
+    for (const item of queue) {
+      try {
+        // Get latest remote version for conflict detection
+        const remoteEntry = item.operation === 'update' 
+          ? await this.remoteApi.getTimeEntry(item.data.id)
+          : null;
+          
+        // Check for conflicts
+        if (remoteEntry && remoteEntry.updatedAt !== item.data.updatedAt) {
+          // Handle conflict
+          const resolved = await this.conflictResolver.resolve(item.data, remoteEntry);
+          await this.remoteApi.updateTimeEntry(resolved);
+        } else {
+          // No conflict, proceed with operation
+          if (item.operation === 'create') {
+            await this.remoteApi.createTimeEntry(item.data);
+          } else {
+            await this.remoteApi.updateTimeEntry(item.data);
+          }
+        }
+        
+        // Mark as synced
+        await this.localStore.removeFromSyncQueue(item.id);
+      } catch (error) {
+        // Update attempt count and status
+        await this.localStore.updateSyncQueueItem({
+          ...item,
+          attempts: item.attempts + 1,
+          status: 'error',
+          error: error.message
         });
-      }, 300);
+      }
     }
-  }, [isFocused]);
-  
-  return inputRef;
-}
-
-// Usage in a component
-const MyInput = ({ label, isFocused, ...props }) => {
-  const inputRef = useInputFocus(isFocused);
-  
-  return (
-    <div>
-      <label>{label}</label>
-      <input ref={inputRef} {...props} />
-    </div>
-  );
-};
-```
-
-#### Deliverables:
-- Manager mobile dashboard
-- Swipe-based approval interface
-- Form input focus management
-
-### Week 10-11: Employee Management & Basic Reports
-
-#### Tasks:
-- [ ] Create employee time summary view:
-  - [ ] Individual employee hours by week
-  - [ ] Status overview (approved/pending/rejected)
-  - [ ] Quick filters for date ranges
-- [ ] Implement simplified mobile reports:
-  - [ ] Hours by employee
-  - [ ] Hours by project
-  - [ ] Export/share capabilities
-- [ ] Implement card-based mobile tables
-
-#### Implementation Details:
-
-**Card-Based Mobile Tables**:
-```tsx
-// Implementation as shown in the design system document
-// packages/common/src/components/data-display/ResponsiveTable.tsx
-```
-
-#### Deliverables:
-- Employee summary interface
-- Basic mobile reports
-- Share/export functionality
-
-## Phase 4: Enhancements & Optimization (3 weeks)
-
-### Week 12-13: PWA Implementation & Polish
-
-#### Tasks:
-- [ ] Implement basic PWA features:
-  - [ ] Web app manifest
-  - [ ] Service worker for offline app shell
-  - [ ] Add to home screen experience
-- [ ] Add final polish:
-  - [ ] Loading states and animations
-  - [ ] Error handling for mobile context
-  - [ ] Transition animations
-- [ ] Fix iOS Safari-specific issues
-
-#### Implementation Details:
-
-**PWA Web Manifest**:
-```json
-// public/manifest.json
-{
-  "short_name": "TimeTrack",
-  "name": "Time Tracking 2.0",
-  "icons": [
-    {
-      "src": "favicon.ico",
-      "sizes": "64x64",
-      "type": "image/x-icon"
-    },
-    {
-      "src": "logo192.png",
-      "type": "image/png",
-      "sizes": "192x192"
-    },
-    {
-      "src": "logo512.png",
-      "type": "image/png",
-      "sizes": "512x512"
-    }
-  ],
-  "start_url": ".",
-  "display": "standalone",
-  "theme_color": "#f59e0b",
-  "background_color": "#ffffff"
+  }
 }
 ```
 
-**iOS Safari Fixes**:
-```css
-/* Fix for 100vh issues in iOS Safari */
-.min-h-screen {
-  min-height: 100vh;
-  /* Use fallback for iOS */
-  min-height: -webkit-fill-available;
-}
+### Time Entry User Experience
 
-/* Fix for position:fixed elements when keyboard is active */
-.ios-fixed-footer {
-  position: sticky;
-  bottom: 0;
-  z-index: 40;
-}
-```
+The mobile time entry experience will focus on simplicity and efficiency:
 
-#### Deliverables:
-- Basic PWA functionality
-- Polished mobile experience
-- iOS Safari compatibility fixes
+1. **Quick Entry Mode**
+   - Single screen with minimal required fields
+   - Quick-tap time allocation buttons
+   - Recently used projects list
+   - Voice input for descriptions
 
-### Week 14: Testing & Performance Optimization
+2. **Detailed Entry Mode**
+   - Clock in/out functionality
+   - Break tracking
+   - Project task selection
+   - Detailed notes
 
-#### Tasks:
-- [ ] Conduct cross-device testing:
-  - [ ] iOS testing on multiple devices
-  - [ ] Android testing on multiple devices
-- [ ] Optimize performance:
-  - [ ] Reduce bundle size where possible
-  - [ ] Optimize image loading
-  - [ ] Audit and fix performance issues
-- [ ] Final documentation updates
+3. **Entry Management**
+   - Swipe actions for common operations
+   - Visual status indicators
+   - Batch operations for multiple entries
 
-#### Implementation Details:
+### Manager Approval Workflow
 
-**Performance Optimization**:
-```jsx
-// Dynamic imports for code splitting
-import { lazy, Suspense } from 'react';
+The manager approval workflow will be optimized for mobile:
 
-// Lazy load non-critical components
-const Reports = lazy(() => import('./Reports'));
+1. **Approval Queue**
+   - Card-based interface with essential information
+   - Swipe gestures for approve/reject
+   - Batch approval capability
+   - Filtering and sorting options
 
-// Use in component
-<Suspense fallback={<LoadingSpinner />}>
-  <Reports />
-</Suspense>
+2. **Approval Details**
+   - Detailed time entry review
+   - Historical context (past entries)
+   - Quick approval with standard messages
+   - Custom feedback for rejections
 
-// Image optimization
-<img 
-  src={smallImage} 
-  srcSet={`${smallImage} 1x, ${mediumImage} 2x`}
-  loading="lazy" 
-  alt="..." 
-/>
-```
+## Integration with Project Structure
 
-#### Deliverables:
-- Cross-device testing report
-- Performance optimization improvements
-- Final documentation updates
+This implementation plan follows the [Project Structure Guidelines](./project-structure-guidelines.md) to ensure consistency throughout the development process. The [Development Workflow](./development.md) document provides additional guidance on development practices.
 
-## Implementation Strategy
+Key integration points:
 
-### Development Workflow
+1. **Component Organization**
+   - All new components will follow the directory structure outlined in the guidelines
+   - Mobile-specific components will be properly categorized by function
 
-For efficient solo development:
+2. **Development Process**
+   - Follow the branching strategy and commit conventions
+   - Implement automated testing for all new components
+   - Use feature flags for progressive deployment
 
-1. **Follow 2-4 Day Sprints**:
-   - **Day 1-2**: Build component foundations for a particular feature
-   - **Day 3-4**: Implement the feature using those components
-   - **Day 5**: Test on real devices, fix issues, then move to the next feature
+## Conclusion
 
-2. **Mobile-First Process**:
-   - Start with mobile-only views first
-   - Focus on complete mobile functionality before enhancing for tablet/desktop
-   - Test frequently on actual devices
-
-3. **Implementation Order**:
-   - Build shared UI components first
-   - Implement /hours portal before /admin portal
-   - Focus on critical workflows before "nice-to-have" features
-
-### Common Mobile Development Pitfalls
-
-1. **iOS Safari Issues**:
-   - Virtual keyboard can push fixed elements up
-   - 100vh can cause overscrolling problems
-   - Always test on actual iOS devices
-
-2. **Form Input Challenges**:
-   - Input focus may be obscured by the keyboard
-   - Implement the scroll-into-view pattern for all forms
-   - Use appropriate input types to trigger correct mobile keyboards
-
-3. **Offline Sync Complexities**:
-   - Test offline scenarios extensively
-   - Handle conflicts when reconnecting to network
-   - Provide clear UI indicators for sync status
-
-4. **Performance Considerations**:
-   - Mobile networks can be slow - implement loading states
-   - Mobile CPUs can be limited - debounce heavy operations
-   - Battery life is precious - minimize background operations
-
-### Questions to Ask During Implementation
-
-1. **Is this interaction optimized for one-handed use?**
-2. **Does this work correctly when offline?**
-3. **How does this handle spotty network connections?**
-4. **Is this performant on mid-range devices?**
-5. **How does this behave with the virtual keyboard open?**
-
-## Success Metrics
-
-- **Time Savings**: Workers can submit time in under 30 seconds
-- **Error Reduction**: Decrease in submission errors compared to competitors
-- **Manager Efficiency**: Approvals can be processed in bulk with minimal effort
-- **Adoption Rate**: Percentage of users choosing mobile over desktop
-
-## Future Enhancements (Post-Initial Implementation)
-
-Once the core mobile experience is complete, consider these enhancements:
-
-1. **Advanced Features**:
-   - Location-based time tracking
-   - Photo/document attachments
-   - Voice input for notes
-   - Push notifications for approvals
-
-2. **Additional Optimizations**:
-   - Advanced offline workflows
-   - Background sync capabilities
-   - Improved animations and transitions
-
-3. **Analytics & Insights**:
-   - Usage patterns analysis
-   - Performance monitoring
-   - User feedback collection 
+This comprehensive implementation plan provides a roadmap for transforming the Time Tracking System into a modern, mobile-first application. By following this plan and the associated guidelines, we can deliver a high-quality product that provides significant value to users in the field. 

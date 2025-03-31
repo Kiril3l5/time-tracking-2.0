@@ -11,6 +11,13 @@ Last updated: 2024-06-18
 | [Mobile-First Implementation Plan](workflow/mobile-first-implementation-plan.md) | A comprehensive guide for implementing mobile-first features across both portals. **STATUS: IN PROGRESS** (Phase 1, Week 3 In Progress) | 250 KB |
 | [Mobile Design System](design/mobile-design-system.md) | Design guidelines and component patterns for mobile UI | 180 KB |
 
+## Planning
+
+| Document | Summary | Size | Status |
+|----------|---------|------|--------|
+| [Path Forward](planning/path-forward.md) | Strategic implementation path for completing the Time Tracking 2.0 application with detailed timeline | 12 KB | CURRENT |
+| [Time Handling Implementation](planning/time-handling-implementation.md) | Detailed implementation plan for the time calculation engine, time entry forms, and offline synchronization | 15 KB | CURRENT |
+
 ## Database Schema & Security
 
 | Document | Summary | Size | Status |

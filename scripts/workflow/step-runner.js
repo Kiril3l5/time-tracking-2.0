@@ -71,7 +71,11 @@ async function withRetry(fn, maxRetries = MAX_RETRIES, initialDelay = RETRY_DELA
       // Calculate delay with exponential backoff
       const delay = initialDelay * Math.pow(2, attempt - 1);
       logger.warn(`Attempt ${attempt} failed, retrying in ${delay/1000} seconds...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      
+      // Simple delay implementation
+      await new Promise(resolve => {
+        setTimeout(resolve, delay);
+      });
     }
   }
   
@@ -83,30 +87,42 @@ export const WORKFLOW_STEPS = [
   {
     id: 1,
     name: 'Workflow Engine Initialization',
-    description: 'Initialize all workflow components',
+    description: 'Initialize workflow components',
     critical: true,
     async execute(options) {
       const startTime = Date.now();
       
       try {
-        // Initialize only the components we have
-        await Promise.all([
-          options.packageCoordinator.initialize(),
-          options.qualityChecker.initialize()
-        ]);
+        // Initialize package coordinator
+        options.logger.info('Initializing package coordinator...');
+        const packageResult = await options.packageCoordinator.initialize();
+        if (!packageResult.success) {
+          throw new Error('Package coordinator initialization failed');
+        }
+
+        // Initialize quality checker
+        options.logger.info('Initializing quality checker...');
+        const qualityResult = await options.qualityChecker.initialize();
+        if (!qualityResult.success) {
+          throw new Error('Quality checker initialization failed');
+        }
 
         // Track performance
         const duration = Date.now() - startTime;
-        performanceMonitor.trackStepPerformance('initialization', duration);
+        options.performanceMonitor.trackStepPerformance('workflow-initialization', duration);
 
         return {
           success: true,
-          duration
+          duration,
+          output: {
+            packageCoordinator: packageResult,
+            qualityChecker: qualityResult
+          }
         };
       } catch (error) {
         // Track error
-        logger.error(`Step ${this.name} failed:`, error);
-        workflowState.trackError(error, this.name, this.critical);
+        options.logger.error(`Step ${this.name} failed:`, error);
+        options.workflowState.trackError(error, this.name, this.critical);
 
         return {
           success: false,
@@ -126,6 +142,7 @@ export const WORKFLOW_STEPS = [
       
       try {
         // Run health checks
+        this.logger.info('Running health checks...');
         const healthResult = await runChecks();
         if (!healthResult.success) {
           throw new Error('Health checks failed');
@@ -133,7 +150,7 @@ export const WORKFLOW_STEPS = [
 
         // Track performance
         const duration = Date.now() - startTime;
-        performanceMonitor.trackStepPerformance('environment-validation', duration);
+        options.performanceMonitor.trackStepPerformance('environment-validation', duration);
 
         return {
           success: true,
@@ -142,8 +159,8 @@ export const WORKFLOW_STEPS = [
         };
       } catch (error) {
         // Track error
-        logger.error(`Step ${this.name} failed:`, error);
-        workflowState.trackError(error, this.name, this.critical);
+        this.logger.error(`Step ${this.name} failed:`, error);
+        options.workflowState.trackError(error, this.name, this.critical);
 
         return {
           success: false,
@@ -155,41 +172,32 @@ export const WORKFLOW_STEPS = [
   },
   {
     id: 3,
-    name: 'Security & Git Checks',
-    description: 'Run security and Git configuration checks',
+    name: 'Quality Checks',
+    description: 'Run quality checks across packages',
     critical: true,
     async execute(options) {
       const startTime = Date.now();
       
       try {
-        // Run security vulnerability scanning
-        const securityResult = await runChecks.securityScan();
-        if (!securityResult.success) {
-          throw new Error('Security vulnerability scan failed');
-        }
-
-        // Run Git configuration checks
-        const gitResult = await runChecks.validateGitConfig();
-        if (!gitResult.success) {
-          throw new Error('Git configuration validation failed');
+        // Run quality checks
+        const qualityResult = await options.qualityChecker.runQualityChecks(options);
+        if (!qualityResult.success) {
+          throw new Error('Quality checks failed');
         }
 
         // Track performance
         const duration = Date.now() - startTime;
-        performanceMonitor.trackStepPerformance('security-git-checks', duration);
+        options.performanceMonitor.trackStepPerformance('quality-checks', duration);
 
         return {
           success: true,
           duration,
-          output: {
-            security: securityResult,
-            git: gitResult
-          }
+          output: qualityResult
         };
       } catch (error) {
         // Track error
-        logger.error(`Step ${this.name} failed:`, error);
-        workflowState.trackError(error, this.name, this.critical);
+        this.logger.error(`Step ${this.name} failed:`, error);
+        options.workflowState.trackError(error, this.name, this.critical);
 
         return {
           success: false,
@@ -201,43 +209,6 @@ export const WORKFLOW_STEPS = [
   },
   {
     id: 4,
-    name: 'Quality Checks',
-    description: 'Run quality checks across packages',
-    critical: true,
-    async execute(options) {
-      const startTime = Date.now();
-      
-      try {
-        // Run quality checks
-        const qualityResult = await qualityChecker.runQualityChecks(options);
-        if (!qualityResult.success) {
-          throw new Error('Quality checks failed');
-        }
-
-        // Track performance
-        const duration = Date.now() - startTime;
-        performanceMonitor.trackStepPerformance('quality-checks', duration);
-
-        return {
-          success: true,
-          duration,
-          output: qualityResult
-        };
-      } catch (error) {
-        // Track error
-        logger.error(`Step ${this.name} failed:`, error);
-        workflowState.trackError(error, this.name, this.critical);
-
-        return {
-          success: false,
-          duration: Date.now() - startTime,
-          error: error.message
-        };
-      }
-    }
-  },
-  {
-    id: 5,
     name: 'Build Application',
     description: 'Build packages in dependency order',
     critical: true,
@@ -277,7 +248,81 @@ export const WORKFLOW_STEPS = [
     }
   },
   {
+    id: 5,
+    name: 'Git State Management',
+    description: 'Handle uncommitted changes and branch state',
+    critical: true,
+    async execute(options) {
+      const startTime = Date.now();
+      
+      try {
+        // Check for uncommitted changes
+        const hasChanges = await hasUncommittedChanges();
+        if (hasChanges) {
+          // Handle changes based on user choice
+          await handleUncommittedChanges();
+        }
+
+        // Track performance
+        const duration = Date.now() - startTime;
+        performanceMonitor.trackStepPerformance('git-state', duration);
+
+        return {
+          success: true,
+          duration
+        };
+      } catch (error) {
+        // Track error
+        logger.error(`Step ${this.name} failed:`, error);
+        workflowState.trackError(error, this.name, this.critical);
+
+        return {
+          success: false,
+          duration: Date.now() - startTime,
+          error: error.message
+        };
+      }
+    }
+  },
+  {
     id: 6,
+    name: 'Security & Git Checks',
+    description: 'Run security and Git configuration checks',
+    critical: true,
+    async execute(options) {
+      const startTime = Date.now();
+      
+      try {
+        // Run security vulnerability scanning
+        const securityResult = await runChecks();
+        if (!securityResult.success) {
+          throw new Error('Security checks failed');
+        }
+
+        // Track performance
+        const duration = Date.now() - startTime;
+        performanceMonitor.trackStepPerformance('security-git-checks', duration);
+
+        return {
+          success: true,
+          duration,
+          output: securityResult
+        };
+      } catch (error) {
+        // Track error
+        logger.error(`Step ${this.name} failed:`, error);
+        workflowState.trackError(error, this.name, this.critical);
+
+        return {
+          success: false,
+          duration: Date.now() - startTime,
+          error: error.message
+        };
+      }
+    }
+  },
+  {
+    id: 7,
     name: 'Deployment',
     description: 'Deploy packages to preview environment',
     critical: true,
@@ -314,7 +359,7 @@ export const WORKFLOW_STEPS = [
     }
   },
   {
-    id: 7,
+    id: 8,
     name: 'Results & Cleanup',
     description: 'Generate reports and clean up resources',
     critical: false,
@@ -336,9 +381,9 @@ export const WORKFLOW_STEPS = [
 
         // Clean up resources
         await Promise.all([
-          options.deploymentManager.cleanup(),
-          options.dashboardGenerator.cleanup(),
-          options.consolidatedReport.cleanup()
+          options.deploymentManager?.cleanup(),
+          options.dashboardGenerator?.cleanup(),
+          options.consolidatedReport?.cleanup()
         ]);
 
         // Track performance

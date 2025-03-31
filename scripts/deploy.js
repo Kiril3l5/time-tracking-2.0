@@ -44,6 +44,7 @@ import { config } from './core/config.js';
 import { environment } from './core/environment.js';
 import { progressTracker } from './core/progress-tracker.js';
 import { performanceMonitor } from './core/performance-monitor.js';
+import { errorHandler } from './core/error-handler.js';
 
 // Import authentication modules
 import { verifyFirebaseAuth } from './auth/firebase-auth.js';
@@ -61,6 +62,9 @@ import { deployToFirebase } from './firebase/deployment.js';
 
 // Import build modules
 import { buildPackages } from './build/build-manager.js';
+
+// Import workflow state
+import { workflowState } from './workflow/workflow-state.js';
 
 /* global process */
 
@@ -421,112 +425,166 @@ async function deployProduction(args) {
 }
 
 /**
+ * Main deployment function
+ */
+async function deploy(args) {
+  const state = workflowState.getInstance();
+  const startTime = Date.now();
+  
+  try {
+    // Initialize state and monitoring
+    state.startOperation('deploy');
+    performanceMonitor.startOperation('deploy');
+    progressTracker.initProgress(5, 'Production Deployment');
+    
+    // Show help and exit if requested
+    if (args.help) {
+      showHelp();
+      return 0;
+    }
+
+    // Verify authentication
+    progressTracker.startStep('Authentication');
+    const authResult = await verifyAuthentication();
+    if (!authResult) {
+      throw new Error('Authentication failed');
+    }
+    progressTracker.completeStep(true, 'Authentication verified');
+    
+    // Run quality checks if not skipped
+    if (!args.quick) {
+      progressTracker.startStep('Quality Checks');
+      const checksResult = await runQualityChecks(args);
+      if (!checksResult) {
+        throw new Error('Quality checks failed');
+      }
+      progressTracker.completeStep(true, 'Quality checks passed');
+    } else {
+      progressTracker.startStep('Quality Checks (Skipped)');
+      progressTracker.completeStep(true, 'Quality checks skipped (quick mode)');
+    }
+
+    // Build application if not skipped
+    if (!args['skip-build']) {
+      progressTracker.startStep('Build');
+      const buildResult = await buildApplication(args);
+      if (!buildResult) {
+        throw new Error('Build failed');
+      }
+      progressTracker.completeStep(true, 'Build completed');
+    } else {
+      progressTracker.startStep('Build (Skipped)');
+      progressTracker.completeStep(true, 'Build skipped');
+    }
+
+    // Deploy to Firebase
+    progressTracker.startStep('Firebase Deployment');
+    const deployResult = await deployProduction(args);
+    if (!deployResult) {
+      throw new Error('Firebase deployment failed');
+    }
+    progressTracker.completeStep(true, 'Deployed to Firebase');
+
+    // Handle Git operations if not skipped
+    if (!args['skip-git']) {
+      progressTracker.startStep('Git Operations');
+      const gitResult = await performGitOperations(args);
+      if (!gitResult) {
+        throw new Error('Git operations failed');
+      }
+      progressTracker.completeStep(true, 'Git operations completed');
+    } else {
+      progressTracker.startStep('Git Operations (Skipped)');
+      progressTracker.completeStep(true, 'Git operations skipped');
+    }
+
+    // Complete deployment
+    const duration = Date.now() - startTime;
+    state.completeOperation('deploy', {
+      success: true,
+      duration,
+      metrics: performanceMonitor.getPerformanceSummary()
+    });
+    
+    progressTracker.finishProgress(true, 'Deployment completed successfully');
+    logger.success(`Deployment completed in ${formatDuration(duration)}`);
+    return 0;
+
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    state.completeOperation('deploy', {
+      success: false,
+      duration,
+      error: error.message
+    });
+    
+    progressTracker.finishProgress(false, `Deployment failed: ${error.message}`);
+    logger.error('Deployment failed:', error.message);
+    
+    // Handle different error types
+    if (error instanceof errorHandler.ValidationError) {
+      logger.error('Validation error:', error.message);
+    } else if (error instanceof errorHandler.DeploymentError) {
+      logger.error('Deployment error:', error.message);
+    }
+    
+    return 1;
+  }
+}
+
+/**
+ * Format duration in milliseconds to human readable string
+ * @param {number} milliseconds - Duration in milliseconds
+ * @returns {string} - Formatted duration
+ */
+function formatDuration(milliseconds) {
+  const seconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  
+  if (minutes === 0) {
+    return `${seconds} seconds`;
+  }
+  
+  return `${minutes} minute${minutes !== 1 ? 's' : ''} ${remainingSeconds} second${remainingSeconds !== 1 ? 's' : ''}`;
+}
+
+/**
  * Main function that runs the complete workflow
  */
 async function main() {
+  // Parse command line arguments
+  const args = parseArguments();
+  
+  // Check for commit message when not skipping Git
+  if (!args['skip-git'] && !args.commitMessage) {
+    logger.error('No commit message provided');
+    logger.info('Usage: node scripts/deploy.js "Your commit message"');
+    showHelp();
+    return 1;
+  }
+  
+  // Enable verbose logging if specified
+  if (args.verbose) {
+    logger.setLevel('debug');
+  }
+  
+  // Start log file if requested
+  if (args['save-logs']) {
+    const logFile = logger.startFileLogging('deploy');
+    logger.info(`Saving logs to: ${logFile}`);
+  }
+  
   try {
-    // Parse command line arguments
-    const args = parseArguments();
-    
-    // Show help and exit if --help is specified
-    if (args.help) {
-      showHelp();
-      process.exit(0);
-    }
-    
-    // Check for commit message when not skipping Git
-    if (!args['skip-git'] && !args.commitMessage) {
-      logger.error('No commit message provided');
-      logger.info('Usage: node scripts/deploy.js "Your commit message"');
-      showHelp();
-      process.exit(1);
-    }
-    
-    // Enable verbose logging if specified
-    if (args.verbose) {
-      logger.setLevel('debug');
-    }
-    
-    // Start log file if requested
-    if (args['save-logs']) {
-      const logFile = logger.startFileLogging('deploy');
-      logger.info(`Saving logs to: ${logFile}`);
-    }
-    
-    // Load configuration
-    logger.info('Loading configuration...');
-    const firebaseConfig = config.getFirebaseConfig();
-    const _buildConfig = config.getBuildConfig();
-    const _previewConfig = config.getPreviewConfig();
-    
-    logger.info(`Loaded configuration for project: ${firebaseConfig.projectId}`);
-    
-    // Display workflow header
-    logger.sectionHeader('Firebase Production Deployment Workflow');
-    logger.info(`Starting production deployment workflow at ${new Date().toISOString()}`);
-    
-    // Verify authentication
-    const authPassed = await verifyAuthentication();
-    if (!authPassed) {
-      logger.error('Authentication checks failed. Aborting workflow.');
-      process.exit(1);
-    }
-    
-    // Run quality checks
-    const checksPassed = await runQualityChecks(args);
-    
-    // Only proceed with build and deploy if checks passed
-    if (checksPassed || args.quick) {
-      // Build the application for production
-      const buildPassed = await buildApplication(args);
-      
-      if (buildPassed) {
-        // Perform Git operations
-        const gitPassed = await performGitOperations(args);
-        if (!gitPassed && !args['skip-git']) {
-          logger.warn('Git operations failed, but continuing with deployment');
-          // Ask the user if they want to continue
-          logger.info('Do you want to continue with deployment despite Git errors? (y/n)');
-          const response = await new Promise(resolve => {
-            process.stdin.once('data', data => {
-              resolve(data.toString().trim().toLowerCase());
-            });
-          });
-          
-          if (response !== 'y') {
-            logger.info('Deployment canceled by user');
-            process.exit(1);
-          }
-        }
-        
-        // Deploy to production, setting skipBuild to true since we already built
-        args['skip-build'] = true;  // Ensure we skip the second build
-        const deployPassed = await deployProduction(args);
-        
-        // Final result
-        if (deployPassed) {
-          logger.success('Production deployment completed successfully!');
-          logger.info('Your changes are now live at:');
-          logger.info(`- Admin: https://admin.autonomyheroes.com/`);
-          logger.info(`- Hours: https://hours.autonomyheroes.com/`);
-          process.exit(0);
-        } else {
-          logger.error('Production deployment failed.');
-          process.exit(1);
-        }
-      } else {
-        logger.error('Build failed. Cannot deploy.');
-        process.exit(1);
-      }
-    } else {
-      logger.error('Quality checks failed. Cannot proceed with deployment.');
-      process.exit(1);
-    }
+    // Run the deployment
+    const result = await deploy(args);
     
     // Stop log file if it was started
     if (args['save-logs']) {
       logger.stopFileLogging();
     }
+    
+    process.exit(result);
   } catch (error) {
     logger.error(`Error in deployment workflow:`);
     logger.error(error.message);
@@ -535,5 +593,5 @@ async function main() {
   }
 }
 
-// Run the main function
+// Execute main function
 main(); 

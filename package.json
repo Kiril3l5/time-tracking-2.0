@@ -185,7 +185,8 @@
     "vite-plugin-static-copy": "^2.3.0",
     "vitest": "^0.34.6",
     "zod": "^3.24.2",
-    "zustand": "^5.0.3"
+    "zustand": "^5.0.3",
+    "date-fns": "^4.1.0"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

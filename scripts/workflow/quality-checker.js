@@ -1,298 +1,70 @@
 /**
  * Quality Checker Module
  * 
- * Manages quality checks including linting, testing, and type checking.
+ * Manages code quality validation including linting, 
+ * type checking, and test execution.
  */
 
-// Core Dependencies
-import { logger } from '../core/logger.js';
 import { commandRunner } from '../core/command-runner.js';
-import { performanceMonitor } from '../core/performance-monitor.js';
-import errorHandler from '../core/error-handler.js';
+import { logger } from '../core/logger.js';
 
-// Workflow Components
-import getWorkflowState from './workflow-state.js';
-
-/**
- * Quality Checker Class
- */
 export class QualityChecker {
   constructor() {
-    this.logger = logger;
     this.commandRunner = commandRunner;
-    this.performanceMonitor = performanceMonitor;
-    this.errorHandler = errorHandler;
-    this.workflowState = getWorkflowState();
   }
 
   /**
-   * Initialize the quality checker
-   * @returns {Promise<Object>} Initialization result
+   * Run linting on the codebase
+   * @returns {Promise<Object>} Result of linting
    */
-  async initialize() {
-    this.logger.info('Initializing quality checker...');
-    const startTime = Date.now();
-    
-    try {
-      // Check if node_modules exists
-      const nodeModulesResult = await this.commandRunner.runCommand('ls node_modules');
-      if (!nodeModulesResult.success) {
-        throw new this.errorHandler.WorkflowError('node_modules directory not found. Please run pnpm install first.');
-      }
-
-      // Check if pnpm-lock.yaml exists
-      const lockFileResult = await this.commandRunner.runCommand('ls pnpm-lock.yaml');
-      if (!lockFileResult.success) {
-        throw new this.errorHandler.WorkflowError('pnpm-lock.yaml not found. Please run pnpm install first.');
-      }
-
-      // Verify required dependencies are installed
-      const requiredDeps = ['eslint', 'typescript', 'vitest'];
-      for (const dep of requiredDeps) {
-        const result = await this.commandRunner.runCommand(`pnpm list ${dep}`);
-        if (!result.success) {
-          throw new this.errorHandler.WorkflowError(
-            `Required dependency ${dep} is not installed. Please run pnpm install first.`
-          );
-        }
-      }
-      
-      const duration = Date.now() - startTime;
-      this.logger.success(`Quality checker initialized (Duration: ${duration}ms)`);
-      
-      return {
-        success: true,
-        duration
-      };
-      
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      this.logger.error(`Quality checker initialization failed: ${error.message}`);
-      
-      return {
-        success: false,
-        duration,
-        error: error.message
-      };
-    }
+  async runLinting() {
+    logger.info('Running linting checks...');
+    return this.commandRunner.runCommandAsync('pnpm lint', { 
+      stdio: 'inherit',
+      ignoreError: true
+    });
   }
 
   /**
-   * Run quality checks on packages
-   * @param {Object} context - Execution context
-   * @returns {Promise<Object>} Quality check results
+   * Run TypeScript type checking
+   * @returns {Promise<Object>} Result of type checking
    */
-  async runQualityChecks(context) {
-    const { buildOrder, packages } = context;
-    this.logger.info('Running quality checks...');
-    const startTime = Date.now();
-    
-    try {
-      const results = {
-        success: true,
-        duration: 0,
-        packages: new Map(),
-        errors: [],
-        warnings: []
-      };
-      
-      // Run checks in build order
-      for (const packageName of buildOrder) {
-        const packageInfo = packages.get(packageName);
-        if (!packageInfo) {
-          throw new this.errorHandler.WorkflowError(`Package ${packageName} not found`);
-        }
-        
-        this.logger.info(`Running quality checks for ${packageName}...`);
-        const packageStartTime = Date.now();
-        
-        try {
-          // Run linting
-          const lintResult = await this.runLinting(packageInfo);
-          if (!lintResult.success) {
-            results.errors.push({
-              package: packageName,
-              type: 'linting',
-              errors: lintResult.errors
-            });
-          }
-          
-          // Run type checking
-          const typeResult = await this.runTypeChecking(packageInfo);
-          if (!typeResult.success) {
-            results.errors.push({
-              package: packageName,
-              type: 'type-checking',
-              errors: typeResult.errors
-            });
-          }
-          
-          // Run tests
-          const testResult = await this.runTests(packageInfo);
-          if (!testResult.success) {
-            results.errors.push({
-              package: packageName,
-              type: 'testing',
-              errors: testResult.errors
-            });
-          }
-          
-          // Add warnings
-          results.warnings.push(...lintResult.warnings, ...typeResult.warnings, ...testResult.warnings);
-          
-          // Store package results
-          results.packages.set(packageName, {
-            success: lintResult.success && typeResult.success && testResult.success,
-            duration: Date.now() - packageStartTime,
-            linting: lintResult,
-            typeChecking: typeResult,
-            testing: testResult
-          });
-          
-        } catch (error) {
-          this.logger.error(`Quality checks failed for ${packageName}: ${error.message}`);
-          results.errors.push({
-            package: packageName,
-            type: 'general',
-            error: error.message
-          });
-          
-          results.packages.set(packageName, {
-            success: false,
-            duration: Date.now() - packageStartTime,
-            error: error.message
-          });
-        }
-      }
-      
-      // Calculate overall success
-      results.success = results.errors.length === 0;
-      results.duration = Date.now() - startTime;
-      
-      // Add results to workflow state
-      this.workflowState.updateMetrics({
-        qualityChecks: {
-          totalPackages: buildOrder.length,
-          successfulPackages: Array.from(results.packages.values()).filter(p => p.success).length,
-          failedPackages: Array.from(results.packages.values()).filter(p => !p.success).length,
-          totalErrors: results.errors.length,
-          totalWarnings: results.warnings.length
-        }
-      });
-      
-      if (results.success) {
-        this.logger.success(`Quality checks completed successfully (Duration: ${results.duration}ms)`);
-      } else {
-        this.logger.warn(`Quality checks completed with errors (Duration: ${results.duration}ms)`);
-      }
-      
-      return results;
-      
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      this.logger.error(`Quality checks failed: ${error.message}`);
-      
-      return {
-        success: false,
-        duration,
-        error: error.message
-      };
-    }
-  }
-
-  /**
-   * Run linting checks
-   * @private
-   * @param {Object} packageInfo - Package information
-   * @returns {Promise<Object>} Linting results
-   */
-  async runLinting(packageInfo) {
-    const startTime = Date.now();
-    
-    try {
-      const result = await this.commandRunner.runCommand(
-        `cd ${packageInfo.path} && pnpm lint`
-      );
-      
-      return {
-        success: result.success,
-        duration: Date.now() - startTime,
-        errors: result.success ? [] : [result.error],
-        warnings: []
-      };
-    } catch (error) {
-      return {
-        success: false,
-        duration: Date.now() - startTime,
-        errors: [error.message],
-        warnings: []
-      };
-    }
-  }
-
-  /**
-   * Run type checking
-   * @private
-   * @param {Object} packageInfo - Package information
-   * @returns {Promise<Object>} Type checking results
-   */
-  async runTypeChecking(packageInfo) {
-    const startTime = Date.now();
-    
-    try {
-      const result = await this.commandRunner.runCommand(
-        `cd ${packageInfo.path} && pnpm type-check`
-      );
-      
-      return {
-        success: result.success,
-        duration: Date.now() - startTime,
-        errors: result.success ? [] : [result.error],
-        warnings: []
-      };
-    } catch (error) {
-      return {
-        success: false,
-        duration: Date.now() - startTime,
-        errors: [error.message],
-        warnings: []
-      };
-    }
+  async runTypeChecking() {
+    logger.info('Running type checking...');
+    return this.commandRunner.runCommandAsync('pnpm typecheck', { 
+      stdio: 'inherit',
+      ignoreError: true
+    });
   }
 
   /**
    * Run tests
-   * @private
-   * @param {Object} packageInfo - Package information
-   * @returns {Promise<Object>} Test results
+   * @returns {Promise<Object>} Result of test execution
    */
-  async runTests(packageInfo) {
-    const startTime = Date.now();
-    
-    try {
-      const result = await this.commandRunner.runCommand(
-        `cd ${packageInfo.path} && pnpm test`
-      );
-      
-      return {
-        success: result.success,
-        duration: Date.now() - startTime,
-        errors: result.success ? [] : [result.error],
-        warnings: []
-      };
-    } catch (error) {
-      return {
-        success: false,
-        duration: Date.now() - startTime,
-        errors: [error.message],
-        warnings: []
-      };
-    }
+  async runTests() {
+    logger.info('Running tests...');
+    return this.commandRunner.runCommandAsync('pnpm test', { 
+      stdio: 'inherit',
+      ignoreError: true
+    });
   }
-}
 
-// Export quality checker instance
-export const qualityChecker = new QualityChecker();
-
-// Export runQualityChecks function for direct use
-export const runQualityChecks = (context) => qualityChecker.runQualityChecks(context); 
+  /**
+   * Run all quality checks
+   * @returns {Promise<Object>} Combined results
+   */
+  async runAllChecks() {
+    const lintResult = await this.runLinting();
+    const typeResult = await this.runTypeChecking();
+    const testResult = await this.runTests();
+    
+    return {
+      success: lintResult.success && typeResult.success && testResult.success,
+      results: {
+        linting: lintResult,
+        typeChecking: typeResult,
+        testing: testResult
+      }
+    };
+  }
+} 
