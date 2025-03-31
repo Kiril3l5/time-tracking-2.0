@@ -1,8 +1,8 @@
 {
-  "timestamp": "2025-03-31T01:47:59.645Z",
+  "timestamp": "2025-03-31T01:26:25.179Z",
   "metrics": {
-    "duration": 41319,
-    "totalDuration": 41728
+    "duration": 37077,
+    "totalDuration": 36767
   },
   "preview": {
     "hours": "https://hours-autonomyhero-2024--preview-feature-further-refi-klo507qt.web.app",
@@ -11,7 +11,7 @@
   },
   "workflow": {
     "options": {
-      "verbose": false,
+      "verbose": true,
       "skipTests": false,
       "skipBuild": false,
       "skipDeploy": false,
@@ -27,8 +27,8 @@
         "result": {
           "success": true
         },
-        "duration": 91,
-        "timestamp": "2025-03-31T01:47:18.424Z"
+        "duration": 94,
+        "timestamp": "2025-03-31T01:25:48.199Z"
       },
       {
         "name": "Firebase Authentication",
@@ -36,8 +36,8 @@
         "result": {
           "success": true
         },
-        "duration": 2203,
-        "timestamp": "2025-03-31T01:47:20.627Z"
+        "duration": 2315,
+        "timestamp": "2025-03-31T01:25:50.515Z"
       },
       {
         "name": "Dependency Check",
@@ -45,8 +45,8 @@
         "result": {
           "success": true
         },
-        "duration": 285,
-        "timestamp": "2025-03-31T01:47:20.912Z"
+        "duration": 300,
+        "timestamp": "2025-03-31T01:25:50.815Z"
       },
       {
         "name": "Setup Phase",
@@ -54,8 +54,8 @@
         "result": {
           "success": true
         },
-        "duration": 2581,
-        "timestamp": "2025-03-31T01:47:20.913Z"
+        "duration": 2711,
+        "timestamp": "2025-03-31T01:25:50.816Z"
       },
       {
         "name": "Package Analysis",
@@ -63,8 +63,8 @@
         "result": {
           "success": true
         },
-        "duration": 1,
-        "timestamp": "2025-03-31T01:47:20.916Z"
+        "duration": 2,
+        "timestamp": "2025-03-31T01:25:50.820Z"
       },
       {
         "name": "Quality Checks",
@@ -72,8 +72,8 @@
         "result": {
           "success": true
         },
-        "duration": 9817,
-        "timestamp": "2025-03-31T01:47:30.733Z"
+        "duration": 10547,
+        "timestamp": "2025-03-31T01:26:01.368Z"
       },
       {
         "name": "Validation Phase",
@@ -81,8 +81,8 @@
         "result": {
           "success": true
         },
-        "duration": 9818,
-        "timestamp": "2025-03-31T01:47:30.733Z"
+        "duration": 10550,
+        "timestamp": "2025-03-31T01:26:01.368Z"
       },
       {
         "name": "Package Build",
@@ -90,8 +90,8 @@
         "result": {
           "success": true
         },
-        "duration": 5099,
-        "timestamp": "2025-03-31T01:47:35.834Z"
+        "duration": 5430,
+        "timestamp": "2025-03-31T01:26:06.801Z"
       },
       {
         "name": "Build Phase",
@@ -99,8 +99,8 @@
         "result": {
           "success": true
         },
-        "duration": 5099,
-        "timestamp": "2025-03-31T01:47:35.834Z"
+        "duration": 5431,
+        "timestamp": "2025-03-31T01:26:06.802Z"
       },
       {
         "name": "Create Channel ID",
@@ -108,8 +108,8 @@
         "result": {
           "success": true
         },
-        "duration": 39,
-        "timestamp": "2025-03-31T01:47:35.876Z"
+        "duration": 46,
+        "timestamp": "2025-03-31T01:26:06.850Z"
       },
       {
         "name": "Deploy Hours App",
@@ -117,8 +117,8 @@
         "result": {
           "success": true
         },
-        "duration": 8556,
-        "timestamp": "2025-03-31T01:47:44.433Z"
+        "duration": 9211,
+        "timestamp": "2025-03-31T01:26:16.062Z"
       },
       {
         "name": "Deploy Admin App",
@@ -126,8 +126,8 @@
         "result": {
           "success": true
         },
-        "duration": 8640,
-        "timestamp": "2025-03-31T01:47:53.073Z"
+        "duration": 9111,
+        "timestamp": "2025-03-31T01:26:25.174Z"
       },
       {
         "name": "Deploy Phase",
@@ -135,17 +135,8 @@
         "result": {
           "success": true
         },
-        "duration": 17238,
-        "timestamp": "2025-03-31T01:47:53.075Z"
-      },
-      {
-        "name": "Channel Cleanup",
-        "phase": "Results",
-        "result": {
-          "success": true
-        },
-        "duration": 6569,
-        "timestamp": "2025-03-31T01:47:59.645Z"
+        "duration": 18372,
+        "timestamp": "2025-03-31T01:26:25.176Z"
       }
     ]
   },

@@ -27,6 +27,19 @@ export async function generateReport(data) {
     // Load any existing metrics from files
     const existingMetrics = loadExistingMetrics();
     
+    // Extract warnings from workflow steps
+    let warnings = [];
+    if (data.workflow && data.workflow.steps) {
+      // Get warnings from failed steps or steps with error info
+      warnings = data.workflow.steps
+        .filter(step => step.error || (step.result && !step.result.success))
+        .map(step => ({
+          message: step.error || `${step.name} failed`,
+          timestamp: step.timestamp,
+          phase: step.phase
+        }));
+    }
+    
     // Create the full report by combining passed data and existing metrics
     const report = {
       timestamp: data.timestamp || new Date().toISOString(),
@@ -42,9 +55,9 @@ export async function generateReport(data) {
       workflow: {
         options: data.workflow?.options || {},
         git: data.workflow?.git || {},
-        steps: existingMetrics?.steps || []
+        steps: data.workflow?.steps || existingMetrics?.steps || []
       },
-      warnings: existingMetrics?.warnings || [],
+      warnings: warnings.length > 0 ? warnings : (existingMetrics?.warnings || []),
       errors: existingMetrics?.errors || []
     };
 
@@ -124,6 +137,157 @@ function openInBrowser(filePath) {
  * @returns {string} Dashboard HTML
  */
 function generateDashboardHtml(report) {
+  // Group warnings by category
+  const warningsByCategory = {};
+  
+  if (report.warnings && report.warnings.length > 0) {
+    report.warnings.forEach(warning => {
+      const message = warning.message || warning;
+      let category = warning.phase || 'General';
+      
+      if (!warningsByCategory[category]) {
+        warningsByCategory[category] = [];
+      }
+      warningsByCategory[category].push(warning);
+    });
+  }
+  
+  // Map for workflow phases - for categorizing steps 
+  const phaseMap = {
+    'Setup': ['auth-refresh', 'authentication', 'setup', 'init'],
+    'Validation': ['analyze', 'validation', 'check', 'lint', 'test'],
+    'Build': ['build', 'compile', 'transpile', 'bundle'],
+    'Deploy': ['deploy', 'publish', 'upload', 'firebase'],
+    'Results': ['report', 'result', 'generate', 'dashboard', 'channel', 'cleanup']
+  };
+  
+  // Function to determine the phase of a step
+  function determinePhase(stepName) {
+    const lowerStepName = stepName.toLowerCase();
+    for (const [phase, keywords] of Object.entries(phaseMap)) {
+      if (keywords.some(keyword => lowerStepName.includes(keyword))) {
+        return phase;
+      }
+    }
+    return 'Other';
+  }
+  
+  // Process timeline data - prioritize using actual steps from the report
+  const timelineSteps = [];
+  
+  if (report.workflow.steps && report.workflow.steps.length > 0) {
+    // Sort steps by timestamp
+    const sortedSteps = [...report.workflow.steps].sort((a, b) => {
+      const timestampA = new Date(a.timestamp || 0).getTime();
+      const timestampB = new Date(b.timestamp || 0).getTime();
+      return timestampA - timestampB;
+    });
+    
+    // Process each step with phase categorization
+    sortedSteps.forEach(step => {
+      const stepTime = new Date(step.timestamp || new Date());
+      const duration = step.duration ? formatDuration(step.duration) : 'N/A';
+      const phase = step.phase || determinePhase(step.name);
+      
+      timelineSteps.push({
+        ...step,
+        phase,
+        formattedTime: stepTime.toLocaleString(),
+        duration
+      });
+    });
+  }
+  
+  // Count completed steps
+  const completedSteps = timelineSteps.filter(step => step.result && step.result.success).length;
+  const totalSteps = timelineSteps.length;
+  
+  // Extract error information for better display
+  const errorSummary = {
+    count: report.errors ? report.errors.length : 0,
+    criticalCount: 0,
+    byStep: {},
+    criticalSteps: []
+  };
+  
+  if (report.errors && report.errors.length > 0) {
+    report.errors.forEach(error => {
+      const step = error.step || 'Unknown';
+      
+      if (!errorSummary.byStep[step]) {
+        errorSummary.byStep[step] = [];
+      }
+      
+      errorSummary.byStep[step].push(error);
+      
+      // Track critical errors
+      if (error.critical) {
+        errorSummary.criticalCount++;
+        if (!errorSummary.criticalSteps.includes(step)) {
+          errorSummary.criticalSteps.push(step);
+        }
+      }
+    });
+  }
+  
+  // Count warnings by category for the summary
+  let totalWarnings = 0;
+  
+  if (report.warnings && report.warnings.length > 0) {
+    report.warnings.forEach(warning => {
+      totalWarnings++;
+      const category = warning.phase || 'General';
+      
+      if (!warningsByCategory[category]) {
+        warningsByCategory[category] = [];
+      }
+      
+      warningsByCategory[category].push(warning);
+    });
+  }
+  
+  // Generate suggestions for common warnings
+  function generateSuggestion(warning) {
+    const message = warning.message || warning;
+    const lowerMessage = message.toLowerCase();
+    
+    // Channel cleanup suggestions
+    if (lowerMessage.includes('channel cleanup') || lowerMessage.includes('firebase') && lowerMessage.includes('channel')) {
+      return "Consider running 'firebase hosting:channel:list' to check available channels and manually delete some if needed.";
+    }
+    
+    // Linting suggestions
+    if (lowerMessage.includes('lint') || lowerMessage.includes('eslint')) {
+      return "Run 'pnpm lint --fix' to automatically fix linting issues where possible.";
+    }
+    
+    // TypeScript suggestions
+    if (lowerMessage.includes('typescript') || lowerMessage.includes('type') && lowerMessage.includes('error')) {
+      return "Check for proper type definitions and add missing type imports.";
+    }
+    
+    // Testing suggestions
+    if (lowerMessage.includes('test') && (lowerMessage.includes('fail') || lowerMessage.includes('error'))) {
+      return "Run tests individually with 'pnpm test -- -t \"testName\"' to debug specific test failures.";
+    }
+    
+    // Build suggestions
+    if (lowerMessage.includes('build') && lowerMessage.includes('fail')) {
+      return "Try running 'pnpm clean' followed by 'pnpm install' before building again.";
+    }
+    
+    // Deployment suggestions
+    if (lowerMessage.includes('deploy') || lowerMessage.includes('firebase')) {
+      return "Ensure you have proper Firebase permissions and check connection with 'firebase login:list'.";
+    }
+    
+    // Generic suggestion
+    return "Review the related code and configuration files for potential issues.";
+  }
+  
+  // Determine if we need to show the errors panel at the top
+  const hasErrors = errorSummary.count > 0;
+
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -137,251 +301,291 @@ function generateDashboardHtml(report) {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       background-color: #f9fafb;
     }
-    .header-gradient {
-      background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-    }
-    .card {
-      transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
-    }
-    .card:hover {
-      transform: translateY(-5px);
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-    }
-    .step-card {
-      border-left: 4px solid #3b82f6;
-    }
-    .success-card {
-      border-left: 4px solid #10b981;
-    }
-    .error-card {
-      border-left: 4px solid #ef4444;
-    }
-    .warning-card {
-      border-left: 4px solid #f59e0b;
-    }
-    .badge {
-      display: inline-block;
-      padding: 0.25rem 0.5rem;
-      border-radius: 9999px;
-      font-size: 0.75rem;
-      font-weight: 600;
-    }
-    .badge-blue {
-      background-color: #dbeafe;
-      color: #1e40af;
-    }
-    .badge-green {
-      background-color: #d1fae5;
-      color: #065f46;
-    }
-    .badge-yellow {
-      background-color: #fef3c7;
-      color: #92400e;
-    }
-    .badge-red {
-      background-color: #fee2e2;
-      color: #b91c1c;
-    }
-    .timeline-item {
-      position: relative;
-      padding-left: 1.5rem;
-      margin-bottom: 1.5rem;
-    }
-    .timeline-item::before {
+    .timeline-item:not(:last-child):after {
       content: '';
       position: absolute;
-      left: 0;
-      top: 0;
-      width: 1rem;
-      height: 1rem;
-      border-radius: 50%;
-      background-color: #3b82f6;
-    }
-    .timeline-item::after {
-      content: '';
-      position: absolute;
-      left: 0.5rem;
-      top: 1rem;
-      bottom: -1.5rem;
-      width: 1px;
+      left: 1.25rem;
+      top: 2.5rem;
+      height: calc(100% - 1rem);
+      width: 2px;
       background-color: #e5e7eb;
-      transform: translateX(-50%);
     }
-    .timeline-item:last-child::after {
-      display: none;
+    .warning-item {
+      border-left: 4px solid #f59e0b;
+      padding-left: 1rem;
+      margin-bottom: 1rem;
     }
-    .animate-pulse {
-      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-    }
-    @keyframes pulse {
-      0%, 100% {
-        opacity: 1;
-      }
-      50% {
-        opacity: .5;
-      }
+    .suggestion-item {
+      background-color: #ecfdf5;
+      border-left: 4px solid #10b981;
+      padding: 0.5rem 1rem;
+      margin-top: 0.5rem;
     }
   </style>
 </head>
 <body>
-  <div class="container mx-auto px-4 py-8">
-    <header class="header-gradient text-white p-6 rounded-lg shadow-lg mb-8">
-      <div class="flex justify-between items-center">
-        <div>
-          <h1 class="text-3xl font-bold">Workflow Dashboard</h1>
-          <p class="text-gray-100 mt-1">Generated: ${new Date(report.timestamp).toLocaleString()}</p>
+  <div class="container mx-auto px-4 py-8 max-w-6xl">
+    <!-- Header with summary stats -->
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8">
+      <div>
+        <h1 class="text-3xl font-bold text-gray-900">Workflow Dashboard</h1>
+        <p class="text-gray-600">${new Date(report.timestamp).toLocaleString()}</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-3 mt-4 md:mt-0">
+        <div class="bg-indigo-100 text-indigo-800 rounded-lg px-3 py-1 text-sm font-medium">
+          <span class="font-bold">${completedSteps}</span>/${totalSteps} Steps
         </div>
-        <div class="text-right">
-          <span class="badge bg-white text-indigo-600">Branch: ${report.workflow.git.branch || 'Unknown'}</span>
-          <p class="text-gray-100 mt-2">Duration: ${formatDuration(report.metrics.duration)}</p>
+        <div class="bg-${totalWarnings > 0 ? 'amber' : 'green'}-100 text-${totalWarnings > 0 ? 'amber' : 'green'}-800 rounded-lg px-3 py-1 text-sm font-medium">
+          <span class="font-bold">${totalWarnings}</span> Warnings
+        </div>
+        <div class="bg-${hasErrors ? 'red' : 'green'}-100 text-${hasErrors ? 'red' : 'green'}-800 rounded-lg px-3 py-1 text-sm font-medium">
+          <span class="font-bold">${errorSummary.count}</span> Errors
+        </div>
+        <div class="bg-blue-100 text-blue-800 rounded-lg px-3 py-1 text-sm font-medium">
+          Duration: ${formatDuration(report.metrics?.duration || 0)}
         </div>
       </div>
-    </header>
+    </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-      <!-- Preview URLs -->
-      <div class="bg-white p-6 rounded-lg shadow">
-        <h2 class="text-xl font-bold mb-4 text-gray-800">Preview URLs</h2>
-        <div class="space-y-4">
-          ${report.preview.hours !== 'Not deployed' ? `
-            <div class="card success-card p-4 rounded bg-green-50">
-              <h3 class="font-semibold text-green-800">Hours App</h3>
-              <a href="${report.preview.hours}" target="_blank" class="text-blue-600 hover:underline break-all">
-                ${report.preview.hours}
-              </a>
+    ${hasErrors ? `
+    <!-- Error Panel - only shown if there are errors -->
+    <div class="bg-red-50 border-l-4 border-red-500 p-4 mb-8">
+      <div class="flex">
+        <div class="flex-shrink-0">
+          <svg class="h-5 w-5 text-red-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+          </svg>
+        </div>
+        <div class="ml-3">
+          <h3 class="text-lg font-medium text-red-800">
+            Workflow completed with ${errorSummary.count} errors
+          </h3>
+          <div class="mt-2 text-red-700">
+            <ul class="list-disc pl-5 space-y-1">
+              ${Object.entries(errorSummary.byStep).map(([step, errors]) => `
+                <li>${step}: ${errors.length} ${errors.length === 1 ? 'error' : 'errors'}
+                  <ul class="list-disc pl-5 text-sm text-red-600 mt-1">
+                    ${errors.map(error => `<li>${error.message || error}</li>`).join('')}
+                  </ul>
+                </li>
+              `).join('')}
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+    ` : ''}
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+      <!-- Main Content Column -->
+      <div class="md:col-span-2 space-y-8">
+        <!-- Preview URLs -->
+        ${report.preview ? `
+        <div class="bg-white rounded-lg shadow-md overflow-hidden">
+          <div class="px-6 py-4 bg-gradient-to-r from-indigo-500 to-purple-600">
+            <h2 class="text-xl font-bold text-white">Preview URLs</h2>
+          </div>
+          <div class="p-6">
+            <div class="space-y-4">
+              <div>
+                <div class="flex items-center">
+                  <svg class="h-5 w-5 text-indigo-500 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd" />
+                  </svg>
+                  <h3 class="text-lg font-medium text-gray-900">Hours App</h3>
+                </div>
+                <a href="${report.preview.hours}" target="_blank" class="block mt-1 text-indigo-600 hover:text-indigo-800 truncate">
+                  ${report.preview.hours}
+                </a>
+              </div>
+              <div>
+                <div class="flex items-center">
+                  <svg class="h-5 w-5 text-indigo-500 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd" />
+                  </svg>
+                  <h3 class="text-lg font-medium text-gray-900">Admin App</h3>
+                </div>
+                <a href="${report.preview.admin}" target="_blank" class="block mt-1 text-indigo-600 hover:text-indigo-800 truncate">
+                  ${report.preview.admin}
+                </a>
+              </div>
+              <div class="pt-2 border-t border-gray-200">
+                <div class="text-sm text-gray-500">
+                  Channel ID: <span class="font-mono text-gray-700">${report.preview.channelId}</span>
+                </div>
+              </div>
             </div>
-          ` : `
-            <div class="card p-4 rounded bg-gray-50">
-              <h3 class="font-semibold text-gray-600">Hours App</h3>
-              <p class="text-gray-500">Not deployed</p>
+          </div>
+        </div>
+        ` : ''}
+
+        <!-- Workflow Timeline -->
+        <div class="bg-white rounded-lg shadow-md overflow-hidden">
+          <div class="px-6 py-4 bg-gradient-to-r from-indigo-500 to-purple-600">
+            <h2 class="text-xl font-bold text-white">Workflow Timeline</h2>
+          </div>
+          <div class="p-6">
+            <div class="relative">
+              ${timelineSteps.map((step, index) => `
+                <div class="ml-10 relative pb-8 timeline-item">
+                  <div class="absolute -left-10 top-1">
+                    <span class="h-8 w-8 rounded-full flex items-center justify-center ring-8 ring-white ${
+                      step.result && step.result.success 
+                        ? 'bg-green-500' 
+                        : step.error 
+                          ? 'bg-red-500' 
+                          : 'bg-gray-400'
+                    }">
+                      ${
+                        step.result && step.result.success 
+                          ? `<svg class="h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                              <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                            </svg>`
+                          : step.error 
+                            ? `<svg class="h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                              </svg>`
+                            : `<svg class="h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 000 2h6a1 1 0 100-2H7z" clip-rule="evenodd" />
+                              </svg>`
+                      }
+                    </span>
+                  </div>
+                  <div>
+                    <div class="flex justify-between">
+                      <h3 class="text-lg font-medium text-gray-900">${step.name}</h3>
+                      <span class="text-sm text-gray-500">${step.formattedTime}</span>
+                    </div>
+                    <div class="mt-1 flex text-sm">
+                      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-${
+                        step.phase === 'Setup' ? 'blue' : 
+                        step.phase === 'Validation' ? 'yellow' : 
+                        step.phase === 'Build' ? 'purple' :
+                        step.phase === 'Deploy' ? 'green' : 
+                        step.phase === 'Results' ? 'indigo' : 'gray'
+                      }-100 text-${
+                        step.phase === 'Setup' ? 'blue' : 
+                        step.phase === 'Validation' ? 'yellow' : 
+                        step.phase === 'Build' ? 'purple' :
+                        step.phase === 'Deploy' ? 'green' : 
+                        step.phase === 'Results' ? 'indigo' : 'gray'
+                      }-800 mr-3">
+                        ${step.phase}
+                      </span>
+                      <span class="text-gray-500">Duration: ${step.duration}</span>
+                    </div>
+                    ${step.error ? `
+                      <div class="mt-2 p-3 bg-red-50 text-red-700 rounded-md">
+                        ${step.error}
+                      </div>
+                    ` : ''}
+                  </div>
+                </div>
+              `).join('')}
             </div>
-          `}
-          
-          ${report.preview.admin !== 'Not deployed' ? `
-            <div class="card success-card p-4 rounded bg-green-50">
-              <h3 class="font-semibold text-green-800">Admin App</h3>
-              <a href="${report.preview.admin}" target="_blank" class="text-blue-600 hover:underline break-all">
-                ${report.preview.admin}
-              </a>
-            </div>
-          ` : `
-            <div class="card p-4 rounded bg-gray-50">
-              <h3 class="font-semibold text-gray-600">Admin App</h3>
-              <p class="text-gray-500">Not deployed</p>
-            </div>
-          `}
-          
-          <div class="p-4 rounded bg-gray-50">
-            <h3 class="font-semibold text-gray-600">Channel ID</h3>
-            <p class="text-gray-600 font-mono">${report.preview.channelId}</p>
           </div>
         </div>
       </div>
 
-      <!-- Workflow Options -->
-      <div class="bg-white p-6 rounded-lg shadow">
-        <h2 class="text-xl font-bold mb-4 text-gray-800">Workflow Configuration</h2>
-        <div class="grid grid-cols-2 gap-4">
-          ${Object.entries(report.workflow.options).map(([key, value]) => `
-            <div class="p-3 rounded ${value === true ? 'bg-blue-50' : 'bg-gray-50'}">
-              <span class="font-medium ${value === true ? 'text-blue-700' : 'text-gray-600'}">${key}</span>
-              <span class="ml-2 badge ${value === true ? 'badge-blue' : 'badge-gray'}">${value}</span>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    </div>
-
-    <!-- Timeline -->
-    <div class="bg-white p-6 rounded-lg shadow mb-8">
-      <h2 class="text-xl font-bold mb-4 text-gray-800">Workflow Timeline</h2>
-      <div class="pl-4">
-        ${report.workflow.steps.map((step, index) => `
-          <div class="timeline-item">
-            <div class="flex justify-between mb-1">
-              <h3 class="font-semibold text-gray-800">${step.name}</h3>
-              ${step.duration ? `<span class="text-gray-500 text-sm">${formatDuration(step.duration)}</span>` : ''}
-            </div>
-            ${step.timestamp ? `
-              <p class="text-gray-500 text-sm">
-                ${new Date(step.timestamp).toLocaleString()}
-              </p>
-            ` : ''}
-            ${step.result ? `
-              <span class="badge ${step.result.success ? 'badge-green' : 'badge-red'}">
-                ${step.result.success ? 'Success' : 'Failed'}
-              </span>
-            ` : ''}
+      <!-- Sidebar Column -->
+      <div class="space-y-8">
+        <!-- Warnings and Suggestions Section -->
+        <div class="bg-white rounded-lg shadow-md overflow-hidden">
+          <div class="px-6 py-4 bg-gradient-to-r from-amber-500 to-yellow-500">
+            <h2 class="text-xl font-bold text-white">Warnings & Suggestions</h2>
           </div>
-        `).join('')}
+          <div class="p-6">
+            ${Object.keys(warningsByCategory).length > 0 ? `
+              <div class="space-y-6">
+                ${Object.entries(warningsByCategory).map(([category, warnings]) => `
+                  <div>
+                    <h3 class="text-lg font-semibold text-gray-900 mb-3">${category} (${warnings.length})</h3>
+                    <div class="space-y-4">
+                      ${warnings.map(warning => `
+                        <div class="warning-item">
+                          <div class="text-gray-700">${warning.message || warning}</div>
+                          ${warning.step ? `<div class="text-sm text-gray-500 mt-1">Step: ${warning.step}</div>` : ''}
+                          <div class="suggestion-item mt-2">
+                            <div class="text-sm font-medium text-green-800">Suggestion:</div>
+                            <div class="text-sm text-gray-700">${generateSuggestion(warning)}</div>
+                          </div>
+                        </div>
+                      `).join('')}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            ` : `
+              <div class="text-center py-6">
+                <svg class="mx-auto h-12 w-12 text-green-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <h3 class="mt-2 text-sm font-medium text-gray-900">No warnings</h3>
+                <p class="mt-1 text-sm text-gray-500">Everything looks good!</p>
+              </div>
+            `}
+          </div>
+        </div>
+
+        <!-- Workflow Options -->
+        <div class="bg-white rounded-lg shadow-md overflow-hidden">
+          <div class="px-6 py-4 bg-gradient-to-r from-gray-500 to-gray-600">
+            <h2 class="text-xl font-bold text-white">Workflow Options</h2>
+          </div>
+          <div class="px-6 py-4">
+            <dl class="divide-y divide-gray-200">
+              ${Object.entries(report.workflow.options || {}).map(([key, value]) => `
+                <div class="py-3 flex justify-between">
+                  <dt class="text-sm font-medium text-gray-500">${key}</dt>
+                  <dd class="text-sm text-gray-900 text-right">${value === true ? 'Yes' : value === false ? 'No' : value || 'N/A'}</dd>
+                </div>
+              `).join('')}
+            </dl>
+          </div>
+        </div>
+
+        <!-- Git Info -->
+        <div class="bg-white rounded-lg shadow-md overflow-hidden">
+          <div class="px-6 py-4 bg-gradient-to-r from-gray-500 to-gray-600">
+            <h2 class="text-xl font-bold text-white">Git Information</h2>
+          </div>
+          <div class="px-6 py-4">
+            <dl class="divide-y divide-gray-200">
+              ${Object.entries(report.workflow.git || {}).map(([key, value]) => `
+                <div class="py-3 flex justify-between">
+                  <dt class="text-sm font-medium text-gray-500">${key}</dt>
+                  <dd class="text-sm text-gray-900 text-right">${value || 'N/A'}</dd>
+                </div>
+              `).join('')}
+            </dl>
+          </div>
+        </div>
       </div>
     </div>
 
-    ${report.warnings && report.warnings.length > 0 ? `
-      <!-- Warnings -->
-      <div class="bg-white p-6 rounded-lg shadow mb-8">
-        <h2 class="text-xl font-bold mb-4 text-gray-800">Warnings (${report.warnings.length})</h2>
-        <div class="space-y-3">
-          ${report.warnings.slice(0, 10).map(warning => `
-            <div class="warning-card p-3 rounded bg-yellow-50">
-              <p class="text-yellow-700">${warning.message}</p>
-              ${warning.timestamp ? `
-                <p class="text-yellow-500 text-xs mt-1">
-                  ${new Date(warning.timestamp).toLocaleString()}
-                </p>
-              ` : ''}
-            </div>
-          `).join('')}
-          ${report.warnings.length > 10 ? `
-            <div class="p-3 rounded bg-gray-50 text-gray-500 text-center">
-              + ${report.warnings.length - 10} more warnings
-            </div>
-          ` : ''}
-        </div>
-      </div>
-    ` : ''}
-
-    ${report.errors && report.errors.length > 0 ? `
-      <!-- Errors -->
-      <div class="bg-white p-6 rounded-lg shadow mb-8">
-        <h2 class="text-xl font-bold mb-4 text-gray-800">Errors (${report.errors.length})</h2>
-        <div class="space-y-3">
-          ${report.errors.map(error => `
-            <div class="error-card p-3 rounded bg-red-50">
-              <p class="text-red-700">${error.message || error}</p>
-              ${error.timestamp ? `
-                <p class="text-red-500 text-xs mt-1">
-                  ${new Date(error.timestamp).toLocaleString()}
-                </p>
-              ` : ''}
-              ${error.step ? `
-                <p class="text-red-500 text-xs mt-1">
-                  Step: ${error.step}
-                </p>
-              ` : ''}
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    ` : ''}
-
-    <!-- Next Steps -->
-    <div class="bg-indigo-50 p-6 rounded-lg shadow">
-      <h2 class="text-xl font-bold mb-4 text-indigo-800">Next Steps</h2>
-      <ul class="list-disc pl-5 text-indigo-700">
-        <li class="mb-2">Push your changes to GitHub</li>
-        <li class="mb-2">Create a pull request with preview URLs</li>
-        <li class="mb-2">Share the preview links with your team for feedback</li>
-      </ul>
+    <!-- Footer -->
+    <div class="mt-8 text-center text-gray-500 text-sm">
+      Generated at ${new Date(report.timestamp).toLocaleString()} • Workflow Duration: ${formatDuration(report.metrics?.duration || 0)}
     </div>
-
-    <footer class="mt-8 text-center text-gray-500 text-sm">
-      <p>Generated by Improved Workflow Tool</p>
-    </footer>
   </div>
+
+  <script>
+    // Simple script to enable collapsible sections
+    document.addEventListener('DOMContentLoaded', function() {
+      const collapsibles = document.querySelectorAll('[data-collapsible]');
+      collapsibles.forEach(el => {
+        el.addEventListener('click', function() {
+          const target = document.querySelector(this.dataset.collapsible);
+          if (target) {
+            target.classList.toggle('hidden');
+          }
+        });
+      });
+    });
+  </script>
 </body>
-</html>  
-  `;
+</html>
+`;
 }
 
 /**
