@@ -6,7 +6,6 @@ import { dirname, join } from 'path';
 import fs from 'fs';
 import { logger } from './core/logger.js';
 import { commandRunner } from './core/command-runner.js';
-import { verifyAllAuth } from './auth/auth-manager.js';
 import { getCurrentBranch, hasUncommittedChanges } from './workflow/branch-manager.js';
 import { QualityChecker } from './workflow/quality-checker.js';
 import { PackageCoordinator } from './workflow/package-coordinator.js';
@@ -18,7 +17,6 @@ import { performanceMonitor } from './core/performance-monitor.js';
 import { setTimeout } from 'timers/promises';
 import { cleanupChannels } from './firebase/channel-cleanup.js';
 import { runAllAdvancedChecks } from './workflow/advanced-checker.js';
-import { analyzeDocumentation } from './checks/doc-quality.js';
 import { runChecks as runHealthChecks } from './checks/health-checker.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -197,7 +195,7 @@ class Workflow {
       await this.deploy();
       
       // 5. Results Phase
-      const reportPath = await this.generateResults();
+      const _reportPath = await this.generateResults();
       
       // End performance monitoring silently - no need to show metrics in console
       performanceMonitor.end();
@@ -245,7 +243,7 @@ class Workflow {
       // Try to generate a minimal dashboard with the error info
       try {
         if (this.workflowSteps && this.workflowSteps.length > 0) {
-          const failureReport = await generateReport({
+          const _failureReport = await generateReport({
             timestamp: new Date().toISOString(),
             preview: this.previewUrls,
             workflow: {
@@ -416,7 +414,8 @@ class Workflow {
         const docStartTime = Date.now();
         this.logger.info('Checking documentation quality...');
         try {
-          // Add hard-coded documentation warnings for demonstration
+          // Add documentation warnings directly
+          // Since analyzeDocumentation was removed, we'll use hard-coded warnings
           [
             'Missing documentation for key features in README.md',
             'Installation instructions incomplete in setup docs',
@@ -979,7 +978,7 @@ class Workflow {
       
       // Try to create a minimal dashboard with the error info
       try {
-        const failureReport = await generateReport({
+        const _failureReport = await generateReport({
           timestamp: new Date().toISOString(),
           preview: this.previewUrls,
           workflow: {

@@ -110,13 +110,15 @@ const LoginForm = ({
       if (redirectUrl) {
         window.location.href = redirectUrl;
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Handle different error codes
-      const errorMessage = err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' 
-        ? 'Invalid email or password'
-        : err.code === 'auth/too-many-requests'
-          ? 'Too many failed login attempts. Please try again later.'
-          : 'An error occurred during login. Please try again.';
+      const errorMessage = err && typeof err === 'object' && 'code' in err
+        ? err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' 
+          ? 'Invalid email or password'
+          : err.code === 'auth/too-many-requests'
+            ? 'Too many failed login attempts. Please try again later.'
+            : 'An error occurred during login. Please try again.'
+        : 'An error occurred during login. Please try again.';
       
       setError(errorMessage);
     } finally {
@@ -139,7 +141,7 @@ const LoginForm = ({
       setError('Biometric authentication is not fully implemented yet.');
       
       // Redirect after successful login would go here
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError('Biometric authentication failed. Please use password.');
     } finally {
       setIsSubmitting(false);

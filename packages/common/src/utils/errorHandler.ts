@@ -31,9 +31,13 @@ export function logError(
 
   // Always log to console in development
   if (process.env.NODE_ENV !== 'production') {
+    // eslint-disable-next-line no-console
     console.group(`[${severity.toUpperCase()}] Error Logged`);
+    // eslint-disable-next-line no-console
     console.error('Error:', errorObj);
+    // eslint-disable-next-line no-console
     console.info('Context:', context);
+    // eslint-disable-next-line no-console
     console.groupEnd();
   }
 
@@ -76,13 +80,13 @@ export function setupGlobalErrorHandlers(): void {
 /**
  * Create an async error handler that catches and logs errors from async functions
  */
-export function createAsyncErrorHandler<T extends (...args: any[]) => Promise<any>>(
+export function createAsyncErrorHandler<T extends (...args: unknown[]) => Promise<unknown>>(
   asyncFn: T,
   context: ErrorContext = {}
 ): (...args: Parameters<T>) => Promise<ReturnType<T>> {
   return async (...args: Parameters<T>): Promise<ReturnType<T>> => {
     try {
-      return await asyncFn(...args);
+      return await asyncFn(...args) as ReturnType<T>;
     } catch (error) {
       logError(
         error instanceof Error ? error : new Error(String(error)),

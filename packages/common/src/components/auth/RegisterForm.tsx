@@ -126,16 +126,22 @@ const RegisterForm = ({
           window.location.href = redirectUrl;
         }
       }, 1500);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Handle Firebase auth errors
-      if (err.code === 'auth/email-already-in-use') {
-        setError('This email is already registered. Please use a different email or login.');
-      } else if (err.code === 'auth/invalid-email') {
-        setError('Invalid email address format.');
-      } else if (err.code === 'auth/weak-password') {
-        setError('Password is too weak. Please choose a stronger password.');
+      if (err && typeof err === 'object' && 'code' in err) {
+        if (err.code === 'auth/email-already-in-use') {
+          setError('This email is already registered. Please use a different email or login.');
+        } else if (err.code === 'auth/invalid-email') {
+          setError('Invalid email address format.');
+        } else if (err.code === 'auth/weak-password') {
+          setError('Password is too weak. Please choose a stronger password.');
+        } else {
+          setError('message' in err && typeof err.message === 'string' 
+            ? err.message 
+            : 'An error occurred during registration.');
+        }
       } else {
-        setError(err.message || 'An error occurred during registration.');
+        setError('An error occurred during registration.');
       }
     } finally {
       setIsSubmitting(false);

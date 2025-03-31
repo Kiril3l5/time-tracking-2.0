@@ -1,7 +1,7 @@
 // Type declarations for React Query v5
 import { 
-  UseQueryOptions as OriginalUseQueryOptions,
-  UseMutationOptions as OriginalUseMutationOptions,
+  UseQueryOptions as _OriginalUseQueryOptions,
+  UseMutationOptions as _OriginalUseMutationOptions,
   QueryClient,
   QueryKey
 } from '@tanstack/react-query';

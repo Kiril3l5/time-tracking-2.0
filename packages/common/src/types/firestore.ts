@@ -61,7 +61,7 @@ export interface User {
     registrationMethod: string;
     registrationTime: string;
     userAgent?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   };
 }
 

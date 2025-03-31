@@ -174,7 +174,7 @@ export const getUserClaims = async (user: User): Promise<{
   role?: string;
   companyId?: string;
   permissions?: string[];
-  [key: string]: any;
+  [key: string]: unknown;
 }> => {
   const idTokenResult = await getIdTokenResult(user);
   return idTokenResult.claims;

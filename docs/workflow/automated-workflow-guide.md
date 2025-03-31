@@ -1,136 +1,199 @@
-# Automated Development Workflow Guide
+# Automated Workflow Guide
 
-This guide provides an overview of our automated development workflow, which handles environment setup, code validation, building, and deployment to preview environments.
-
-> **Related Documentation**
-> - [Preview Deployment Guide](./preview-deployment-guide.md) - For preview deployment details
-> - [Firebase Configuration Guide](../firebase/firebase-config-guide.md) - For Firebase setup
-> - [GitHub Workflow Guide](../github/github-workflow-guide.md) - For PR management
+The Time Tracking 2.0 system includes a powerful automated workflow tool that streamlines the development process. This guide explains how to use the workflow tool and understand its components.
 
 ## Overview
 
-The automated workflow simplifies the development process with these key phases:
-1. Environment setup and verification
-2. Code quality validation
-3. Building the application
-4. Deploying to preview environments
-5. Results display and report generation
+The automated workflow system orchestrates the entire development cycle from setup to deployment, providing:
 
-## Core Workflow Phases
+- Code quality validation (linting, type checking, testing)
+- Automated building of packages
+- Preview deployment to Firebase
+- Interactive dashboard with detailed reporting
+- Channel cleanup to maintain Firebase resources
+- Branch management for easy commit and PR creation
+
+## Running the Workflow
+
+To start the workflow, run:
+
+```bash
+# Using npm
+npm run workflow
+
+# Using pnpm
+pnpm run workflow
+```
+
+### Workflow Options
+
+The workflow supports several command-line options:
+
+```bash
+# Skip quality checks
+pnpm run workflow --skip-tests
+
+# Skip build phase
+pnpm run workflow --skip-build
+
+# Skip deployment 
+pnpm run workflow --skip-deploy
+
+# Verbose mode (more detailed output)
+pnpm run workflow --verbose
+```
+
+## Workflow Phases
+
+The workflow progresses through five distinct phases:
 
 ### 1. Setup Phase
-- Verifies Git configuration (user name and email)
-- Checks Firebase authentication
-- Ensures required dependencies are installed (pnpm)
+- Verifies Git configuration
+- Checks Firebase authentication status
+- Validates required dependencies
 
 ### 2. Validation Phase
 - Analyzes package dependencies
-- Runs linting checks
-- Performs TypeScript type checking
-- Executes unit tests
+- Runs code quality checks:
+  - Linting with ESLint
+  - Type checking with TypeScript
+  - Tests with Vitest
+- Performs advanced checks:
+  - Documentation quality
+  - Dead code detection
+  - Security vulnerabilities
 
 ### 3. Build Phase
-- Builds the application
-- Creates production-ready assets
+- Builds all packages in the correct dependency order
+- Optimizes assets for deployment
 
 ### 4. Deploy Phase
-- Creates a unique Firebase preview channel based on branch name
-- Deploys hours and admin applications
-- Captures preview URLs for sharing
+- Creates a unique preview channel ID
+- Deploys the Hours app to Firebase Hosting
+- Deploys the Admin app to Firebase Hosting
+- Provides preview URLs for both apps
 
 ### 5. Results Phase
-- Displays preview URLs
-- Generates a consolidated workflow report
-- Provides instructions for PR creation
+- Cleans up old preview channels (maintaining only the 5 most recent)
+- Generates a comprehensive dashboard
+- Displays warnings and suggestions for improvement
+- Provides options for branch/commit management
 
-## Command-Line Options
+## The Dashboard
 
-| Option | Description |
-|--------|-------------|
-| `--verbose` | Enable verbose logging |
-| `--skip-tests` | Skip test execution and validation |
-| `--skip-build` | Skip the build process |
-| `--skip-deploy` | Skip deployment to preview |
-| `--skip-pr` | Skip PR creation instructions |
-| `--help`, `-h` | Show help information |
+The workflow generates an interactive dashboard that opens automatically in your browser after completion. The dashboard provides:
 
-## Quick Start
+### Preview URLs
+Direct links to your deployed preview apps for:
+- Hours application
+- Admin application
+- Channel ID for reference
 
-```bash
-# Run complete workflow
-node scripts/improved-workflow.js
+### Workflow Timeline
+A chronological view of all workflow steps including:
+- Success/failure status for each step
+- Duration of each step
+- Error details for failed steps
 
-# Skip test execution
-node scripts/improved-workflow.js --skip-tests
+### Warnings & Suggestions
+A comprehensive list of potential issues categorized by:
+- Phase (Setup, Validation, Build, Deploy, Results)
+- Type (Documentation, Security, Code Quality, etc.)
 
-# Skip build and deployment
-node scripts/improved-workflow.js --skip-build --skip-deploy
+Each warning includes a specific suggestion for how to fix the issue.
 
-# Get more detailed logs
-node scripts/improved-workflow.js --verbose
-```
-
-## Implementation Details
-
-The workflow consists of several focused modules:
-
-### Core Components
-- **Logger**: Handles logging with various log levels and formatting
-- **Command Runner**: Executes shell commands with error handling
-- **Progress Tracker**: Provides visual step-by-step tracking
-
-### Workflow Components
-- **Quality Checker**: Runs linting, type checking, and tests
-- **Package Coordinator**: Analyzes package dependencies
-- **Deployment Manager**: Handles preview deployment to Firebase
-- **Report Generator**: Creates consolidated workflow reports
-
-## Workflow Reports
-
-At the end of each run, the workflow generates a consolidated report that includes:
-- Preview URLs for both hours and admin apps
-- Channel ID information
-- Workflow duration and execution details
+### Workflow Settings
+Shows the configuration used for this run, including:
+- Command-line options
 - Git branch information
 
-These reports are saved in the `reports` directory:
-- JSON format for programmatic access
-- HTML format for easy viewing in a browser
-- A `latest-report.html` file is always available with the most recent results
+## Channel Cleanup
 
-## Error Handling
+The workflow automatically manages Firebase preview channels:
 
-The workflow includes error handling at each phase:
-- Setup errors (Git config, Firebase auth)
-- Validation errors (linting, type checking, tests)
-- Build errors (compilation failures)
-- Deployment errors (Firebase issues)
+- Maintains only the 5 most recent preview channels
+- Deletes older channels to stay within Firebase hosting limits
+- Shows cleanup status in the dashboard
 
-## After Deployment
+## Understanding Warning Categories
 
-After a successful deployment:
+The dashboard groups warnings into several categories:
 
-1. Access the preview URLs displayed in the results
-2. View the detailed HTML report in the `reports` directory
-3. Create a PR following the instructions provided
-4. Share the preview URLs with your team for feedback
+### Documentation
+- Missing or incomplete README files
+- Missing JSDoc comments
+- Broken links in documentation
+- Incomplete API documentation
+
+### Security
+- Dependencies with vulnerabilities
+- Authentication issues
+- Missing security configurations
+
+### Code Quality
+- Unused imports/exports
+- Unnecessary type annotations
+- Console.log statements in production code
+- Type 'any' usage
+
+### Environment
+- Missing environment variables
+- Invalid configuration settings
+
+## After Workflow Completion
+
+Once the workflow completes, you'll be prompted with options for branch management:
+
+1. **Commit Changes**: You can choose to commit your changes directly
+2. **Create Pull Request**: Option to create a PR with the preview URLs included
+3. **Continue Working**: Keep your changes uncommitted for further work
+
+## Workflow Structure
+
+The workflow is composed of several specialized modules:
+
+- `improved-workflow.js`: Main orchestration script
+- `workflow/quality-checker.js`: Handles code quality validation
+- `workflow/doc-quality.js`: Checks documentation quality
+- `workflow/deployment-manager.js`: Manages deployments
+- `workflow/consolidated-report.js`: Generates the dashboard
+- `firebase/channel-cleanup.js`: Manages Firebase preview channels
 
 ## Troubleshooting
 
-### Common Issues
+If you encounter issues with the workflow:
 
-1. **Git Configuration Issues**
-   - Ensure Git user.name and user.email are configured
-   - Run `git config --global user.name "Your Name"` and `git config --global user.email "your.email@example.com"`
+### Dashboard Not Opening
+- The dashboard is saved as `preview-dashboard.html` in the project root
+- Open it manually if it doesn't launch automatically
 
-2. **Firebase Authentication Issues**
-   - Run `firebase login` to authenticate
-   - Verify with `firebase login:list`
+### Firebase Authentication Issues
+- Run `firebase login` to refresh your authentication
+- Verify your Firebase project access
 
-3. **Build Failures**
-   - Check for TypeScript errors
-   - Ensure all dependencies are installed with `pnpm install`
+### Preview Deployment Failures
+- Check Firebase permissions
+- Verify your internet connection
+- Review the error details in the dashboard
 
-4. **Deployment Issues**
-   - Verify Firebase project configuration
-   - Check Firebase hosting configuration in firebase.json 
+### Missing Warnings in Dashboard
+- Run with `--verbose` flag for more detailed output
+- Check the workspace for quality issues that may not be detected
+
+## Extending the Workflow
+
+The workflow is designed to be extensible. To add new checks or features:
+
+1. Add new modules in the appropriate scripts directory
+2. Connect them to the main workflow in a modular way
+3. Ensure warnings are properly categorized
+
+## Best Practices
+
+For optimal workflow usage:
+
+1. **Run Regularly**: Use the workflow during development, not just before PRs
+2. **Review All Warnings**: Address issues shown in the dashboard
+3. **Keep Channels Clean**: Let the workflow manage channel cleanup
+4. **Include Preview URLs**: When sharing code for review, include the preview URLs
+5. **Maintain Documentation**: Update docs to reflect changes in the system 

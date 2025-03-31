@@ -33,7 +33,7 @@ interface FirebaseRuleMatchers<R> {
 // Augment Vitest's expect interface using declaration merging
 declare module 'vitest' {
   // Extend the Assertion interface to include our custom matchers
-  interface Assertion<T = any> extends FirebaseRuleMatchers<Assertion<T>> {}
+  interface Assertion<T = unknown> extends FirebaseRuleMatchers<Assertion<T>> {}
   
   // Also extend asymmetric matchers (for expect.extend)
   interface AsymmetricMatchersContaining extends FirebaseRuleMatchers<void> {}

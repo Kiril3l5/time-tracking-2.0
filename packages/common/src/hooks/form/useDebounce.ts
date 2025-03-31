@@ -63,7 +63,7 @@ export function useDebounce<T>(value: T, delay = 500): T {
  * };
  * ```
  */
-export function useDebouncedCallback<T extends (...args: any[]) => any>(
+export function useDebouncedCallback<T extends (...args: unknown[]) => unknown>(
   callback: T,
   delay = 500
 ) {
@@ -78,7 +78,7 @@ export function useDebouncedCallback<T extends (...args: any[]) => any>(
  * Utility function to debounce a function (not a hook).
  * Used internally by useDebouncedCallback.
  */
-function debounce<T extends (...args: any[]) => any>(
+function debounce<T extends (...args: unknown[]) => unknown>(
   func: T,
   wait = 500
 ) {

@@ -14,6 +14,44 @@ Current development status and progress:
 - **Preview Deployment System**: COMPLETED
 - **Automated Workflow**: COMPLETED
 
+## Automated Workflow & Preview System
+
+The project includes a comprehensive automated workflow system that streamlines development:
+
+### Workflow Dashboard
+
+The workflow generates an interactive dashboard that provides:
+
+- **Preview URLs**: Direct links to both Hours and Admin apps
+- **Workflow Timeline**: Chronological view of all workflow steps
+- **Warnings & Suggestions**: Categorized warnings with recommended fixes
+- **Workflow Settings**: Configuration details for the current run
+
+![Workflow Dashboard](./docs/images/workflow-dashboard.png)
+
+### Key Features
+
+- **Code Quality Validation**: Automatically checks code quality including lint, type, and test errors
+- **Preview Deployments**: Deploys both applications to Firebase preview channels
+- **Warning Collection**: Gathers warnings from multiple sources and displays them in categories
+- **Channel Management**: Automatically maintains only the 5 most recent preview channels
+- **Branch Management**: Provides options for commit and PR creation after previewing
+
+### Running the Workflow
+
+```bash
+# Start the workflow
+pnpm run workflow
+
+# With verbose output
+pnpm run workflow --verbose
+```
+
+For detailed information on the workflow, see:
+- [Development Workflow Guide](./docs/workflow/development-workflow.md)
+- [Automated Workflow Guide](./docs/workflow/automated-workflow-guide.md)
+- [Preview Deployment Guide](./docs/workflow/preview-deployment-guide.md)
+
 ## Mobile-First Implementation
 
 This project implements a mobile-first approach, prioritizing a great user experience on mobile devices while maintaining responsive design for desktop users. Key features include:

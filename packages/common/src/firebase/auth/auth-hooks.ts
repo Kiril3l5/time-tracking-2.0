@@ -4,12 +4,22 @@ import { onAuthChange, getUserProfile, getUserClaims } from './auth-service';
 import { UserProfile } from '../../types/firestore';
 
 /**
+ * Type for user claims from Firebase
+ */
+interface UserClaims {
+  role?: string;
+  permissions?: string[];
+  companyId?: string;
+  [key: string]: unknown; // For any other properties in the claims
+}
+
+/**
  * Hook to get and monitor the authentication state
  */
 export const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [userClaims, setUserClaims] = useState<Record<string, any> | null>(null);
+  const [userClaims, setUserClaims] = useState<UserClaims | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<Error | null>(null);
 

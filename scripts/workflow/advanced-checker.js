@@ -7,14 +7,9 @@
  */
 
 import { logger } from '../core/logger.js';
-import { commandRunner } from '../core/command-runner.js';
-import { progressTracker } from '../core/progress-tracker.js';
 import { analyzeBundles } from '../checks/bundle-analyzer.js';
 import { analyzeDeadCode } from '../checks/dead-code-detector.js';
 import { analyzeDocumentation } from '../checks/doc-quality.js';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { existsSync, readFileSync } from 'fs';
 import { execSync } from 'child_process';
 
 /**
