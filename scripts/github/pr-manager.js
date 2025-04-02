@@ -96,52 +96,6 @@ export async function createPR(options) {
       throw new Error(`Failed to push to remote: ${pushResult.error}`);
     }
     
-    // Check if we're trying to create a PR to the same branch
-    if (baseBranch === headBranch) {
-      logger.info(`Creating PR from local ${headBranch} to remote ${baseBranch}`);
-      
-      // Prepare body with proper escaping
-      const escapedBody = body
-        .replace(/"/g, '\\"')        // Escape double quotes
-        .replace(/\n/g, '\\n');      // Escape newlines
-      
-      // For same-branch PRs, we need to use origin reference explicitly
-      const createCommand = `gh pr create --title "${title.replace(/"/g, '\\"')}" --body "${escapedBody}" --base ${baseBranch} --head origin:${headBranch} --repo origin`;
-      
-      try {
-        const result = await commandRunner.runCommand(createCommand, { stdio: 'pipe' });
-        
-        if (!result.success) {
-          throw new Error(`Failed to create PR: ${result.error}`);
-        }
-        
-        // Extract PR URL from output
-        const prUrl = result.output.trim();
-        
-        // Update workflow state
-        const state = getWorkflowState();
-        state.updateState({
-          prUrl,
-          prStatus: 'created'
-        });
-        
-        return {
-          success: true,
-          prUrl,
-          prNumber: prUrl.split('/').pop()
-        };
-      } catch (error) {
-        if (error.message && error.message.includes('no changes between')) {
-          logger.error('No changes detected between local and remote branches. Make sure you have pushed your changes.');
-          return {
-            success: false,
-            error: 'No changes between branches'
-          };
-        }
-        throw error;
-      }
-    }
-    
     // Prepare body with proper escaping
     const escapedBody = body
       .replace(/"/g, '\\"')        // Escape double quotes
@@ -179,7 +133,12 @@ export async function createPR(options) {
         };
       } catch (error) {
         // Check if PR already exists (this happens if it was created between our check and creation)
-        if (error.message && (error.message.includes('already exists') || error.message.includes('already a pull request'))) {
+        if (error.message && (
+            error.message.includes('already exists') || 
+            error.message.includes('already a pull request') || 
+            error.message.includes('A pull request for branch') || 
+            error.message.includes('pull request exists'))) {
+          
           logger.info('A PR already exists for this branch');
           
           // Try to get the existing PR info

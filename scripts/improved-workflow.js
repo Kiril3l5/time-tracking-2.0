@@ -982,68 +982,51 @@ class Workflow {
           }
           
           logger.success('Changes committed successfully.');
-        }
-      }
-
-      // Ask about creating a PR
-      const createPrChoice = await commandRunner.promptWorkflowOptions(
-        '\nWould you like to create a pull request with your preview URLs?',
-        ['Yes, create PR', 'No, I\'ll do it later']
-      );
-
-      if (createPrChoice === '1') {
-        // Get the PR title
-        const defaultTitle = `Updates from ${currentBranch}`;
-        const title = await commandRunner.promptText(
-          'Enter PR title',
-          defaultTitle
-        );
-
-        // Ask for target branch
-        const createToMainChoice = await commandRunner.promptWorkflowOptions(
-          '\nCreate PR to which branch?',
-          ['Same branch on remote (for review)', 'Main branch (for production)']
-        );
-        
-        // Determine target branch based on user choice
-        const targetBranch = createToMainChoice === '1' ? currentBranch : 'main';
-
-        // Create PR description with preview URLs
-        const description = this.previewUrls && this.previewUrls.hours && this.previewUrls.admin ?
-          `Preview URLs:\n- Hours: ${this.previewUrls.hours}\n- Admin: ${this.previewUrls.admin}` :
-          'Preview deployment';
-
-        logger.info('\nCreating PR...');
-        
-        // Use the PR manager module to create the PR
-        const prResult = await createPR({
-          title,
-          body: description,
-          baseBranch: targetBranch,
-          headBranch: currentBranch
-        });
-        
-        if (prResult.success) {
-          logger.success(`PR created successfully: ${prResult.prUrl}`);
           
-          try {
-            // Open the PR in browser
-            await commandRunner.runCommandAsync('gh pr view --web', { stdio: 'pipe' });
-          } catch (error) {
-            // Ignore browser open errors
+          // Push changes to remote
+          logger.info('Pushing changes to remote...');
+          const pushResult = await commandRunner.runCommand(
+            `git push -u origin ${currentBranch}`,
+            { stdio: 'inherit' }
+          );
+          
+          if (!pushResult.success) {
+            logger.error('Failed to push to remote:', pushResult.error);
+            return;
           }
-        } else {
-          logger.error('Failed to create PR:', prResult.error);
-          logger.info('\nYou can create a PR manually:');
-          logger.info('1. Go to GitHub and create a new PR');
-          logger.info(`2. Use branch: ${currentBranch}`);
-          logger.info(`3. With title: ${title}`);
-          logger.info('4. Include the preview URLs in your description');
+          
+          logger.success(`Changes pushed to branch: ${currentBranch}`);
+          logger.info('GitHub Actions will run automatically on this push.');
+          logger.info('You can manually create a PR when ready on GitHub.');
+        }
+      } else {
+        // No uncommitted changes, ask if user wants to push
+        const pushChoice = await commandRunner.promptWorkflowOptions(
+          '\nWould you like to push your committed changes to remote?',
+          ['Yes, push changes', 'No, I\'ll do it later']
+        );
+        
+        if (pushChoice === '1') {
+          // Push changes to remote
+          logger.info('Pushing changes to remote...');
+          const pushResult = await commandRunner.runCommand(
+            `git push -u origin ${currentBranch}`,
+            { stdio: 'inherit' }
+          );
+          
+          if (!pushResult.success) {
+            logger.error('Failed to push to remote:', pushResult.error);
+            return;
+          }
+          
+          logger.success(`Changes pushed to branch: ${currentBranch}`);
+          logger.info('GitHub Actions will run automatically on this push.');
+          logger.info('You can manually create a PR when ready on GitHub.');
         }
       }
     } catch (error) {
       logger.error('Error handling branch options:', error.message);
-      logger.info('\nYou can create a PR manually using GitHub\'s web interface.');
+      logger.info('You can manually commit and push using the git command line.');
     }
   }
 }
