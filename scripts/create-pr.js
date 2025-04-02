@@ -32,7 +32,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from './core/logger.js';
-import { workflowState } from './workflow/workflow-state.js';
+import getWorkflowState from './workflow/workflow-state.js';
 import { progressTracker } from './core/progress-tracker.js';
 import { performanceMonitor } from './core/performance-monitor.js';
 import { handleError, ValidationError, WorkflowError } from './core/error-handler.js';
@@ -375,7 +375,7 @@ async function createGitHubPR(title, description) {
  * Main function to create the PR
  */
 async function createPR() {
-  const state = workflowState.getInstance();
+  const state = getWorkflowState();
   const startTime = Date.now();
   
   try {
