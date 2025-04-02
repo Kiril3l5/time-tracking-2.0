@@ -97,7 +97,81 @@ function executeCommand(command, options = {}) {
     logger.info(`DRY RUN: Would execute: ${command}`);
     return null;
   }
-  return execSync(command, { encoding: 'utf8', ...options });
+  try {
+    return execSync(command, { 
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'], // Capture stderr as well
+      ...options 
+    });
+  } catch (error) {
+    // Log both stdout and stderr if available
+    if (error.stdout) logger.debug('Command stdout:', error.stdout);
+    if (error.stderr) logger.error('Command stderr:', error.stderr);
+    throw error;
+  }
+}
+
+function stageChanges() {
+  try {
+    logger.info('Staging changes...');
+    const result = executeCommand('git add .');
+    if (!result) {
+      logger.warn('No changes to stage');
+      return false;
+    }
+    return true;
+  } catch (error) {
+    if (error.message.includes('fatal: not a git repository')) {
+      logger.error('Not a git repository. Please initialize git first.');
+    } else {
+      logger.error('Failed to stage changes:', error.message);
+    }
+    return false;
+  }
+}
+
+function commitChanges(message) {
+  try {
+    logger.info('Committing changes...');
+    // Escape special characters in the commit message
+    const escapedMessage = message.replace(/"/g, '\\"');
+    const result = executeCommand(`git commit -m "${escapedMessage}"`);
+    if (!result) {
+      logger.warn('No changes to commit');
+      return false;
+    }
+    return true;
+  } catch (error) {
+    if (error.message.includes('nothing to commit')) {
+      logger.warn('No changes to commit');
+    } else if (error.message.includes('fatal: not a git repository')) {
+      logger.error('Not a git repository. Please initialize git first.');
+    } else {
+      logger.error('Failed to commit changes:', error.message);
+    }
+    return false;
+  }
+}
+
+function pushChanges() {
+  try {
+    logger.info('Pushing changes...');
+    const result = executeCommand('git push');
+    if (!result) {
+      logger.warn('No changes to push');
+      return false;
+    }
+    return true;
+  } catch (error) {
+    if (error.message.includes('fatal: not a git repository')) {
+      logger.error('Not a git repository. Please initialize git first.');
+    } else if (error.message.includes('no upstream branch')) {
+      logger.error('No upstream branch set. Please set up tracking branch first.');
+    } else {
+      logger.error('Failed to push changes:', error.message);
+    }
+    return false;
+  }
 }
 
 /**
