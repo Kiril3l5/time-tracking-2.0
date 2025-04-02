@@ -380,7 +380,7 @@ async function createPR() {
   
   try {
     // Initialize state and monitoring
-    state.startOperation('create-pr');
+    state.initialize();
     performanceMonitor.startOperation('create-pr');
     progressTracker.initProgress(4, 'Pull Request Creation');
     
@@ -486,7 +486,7 @@ async function createPR() {
     
     // Complete PR creation
     const duration = Date.now() - startTime;
-    state.completeOperation('create-pr', {
+    state.complete({
       success: true,
       duration,
       metrics: performanceMonitor.getPerformanceSummary()
@@ -498,7 +498,7 @@ async function createPR() {
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    state.completeOperation('create-pr', {
+    state.complete({
       success: false,
       duration,
       error: error.message
