@@ -46,9 +46,9 @@ export async function createPR(options) {
       throw new Error('GitHub authentication required. Please run "gh auth login" first.');
     }
 
-    // First, check if a PR already exists
+    // First, check if a PR already exists with the EXACT same source and target branches
     const existingPrCheck = await commandRunner.runCommand(
-      `gh pr list --head ${headBranch} --json url,number --limit 1`,
+      `gh pr list --head ${headBranch} --base ${baseBranch} --json url,number,headRefName,baseRefName --limit 1`,
       { stdio: 'pipe' }
     );
     
@@ -56,8 +56,11 @@ export async function createPR(options) {
       try {
         // Parse the JSON output
         const prData = JSON.parse(existingPrCheck.output);
-        if (prData && prData.length > 0) {
-          logger.info('PR already exists for this branch.');
+        if (prData && prData.length > 0 && 
+            prData[0].headRefName === headBranch && 
+            prData[0].baseRefName === baseBranch) {
+          
+          logger.info(`PR already exists from ${headBranch} to ${baseBranch}`);
           
           // Update the existing PR with the new title/body
           await updatePR({
@@ -93,6 +96,52 @@ export async function createPR(options) {
       throw new Error(`Failed to push to remote: ${pushResult.error}`);
     }
     
+    // Check if we're trying to create a PR to the same branch
+    if (baseBranch === headBranch) {
+      logger.info(`Creating PR from local ${headBranch} to remote ${baseBranch}`);
+      
+      // Prepare body with proper escaping
+      const escapedBody = body
+        .replace(/"/g, '\\"')        // Escape double quotes
+        .replace(/\n/g, '\\n');      // Escape newlines
+      
+      // For same-branch PRs, we need to use origin reference explicitly
+      const createCommand = `gh pr create --title "${title.replace(/"/g, '\\"')}" --body "${escapedBody}" --base ${baseBranch} --head origin:${headBranch} --repo origin`;
+      
+      try {
+        const result = await commandRunner.runCommand(createCommand, { stdio: 'pipe' });
+        
+        if (!result.success) {
+          throw new Error(`Failed to create PR: ${result.error}`);
+        }
+        
+        // Extract PR URL from output
+        const prUrl = result.output.trim();
+        
+        // Update workflow state
+        const state = getWorkflowState();
+        state.updateState({
+          prUrl,
+          prStatus: 'created'
+        });
+        
+        return {
+          success: true,
+          prUrl,
+          prNumber: prUrl.split('/').pop()
+        };
+      } catch (error) {
+        if (error.message && error.message.includes('no changes between')) {
+          logger.error('No changes detected between local and remote branches. Make sure you have pushed your changes.');
+          return {
+            success: false,
+            error: 'No changes between branches'
+          };
+        }
+        throw error;
+      }
+    }
+    
     // Prepare body with proper escaping
     const escapedBody = body
       .replace(/"/g, '\\"')        // Escape double quotes
@@ -117,8 +166,8 @@ export async function createPR(options) {
         const prUrl = result.output.trim();
         
         // Update workflow state
-        const workflowState = getWorkflowState();
-        workflowState.updateState({
+        const state = getWorkflowState();
+        state.updateState({
           prUrl,
           prStatus: 'created'
         });
@@ -217,8 +266,8 @@ export async function updatePR(options) {
     }
 
     // Update workflow state
-    const workflowState = getWorkflowState();
-    workflowState.updateState({
+    const state = getWorkflowState();
+    state.updateState({
       prStatus: 'updated'
     });
 
@@ -259,8 +308,8 @@ export async function checkPRStatus(prNumber) {
     const status = JSON.parse(result.stdout);
 
     // Update workflow state
-    const workflowState = getWorkflowState();
-    workflowState.updateState({
+    const state = getWorkflowState();
+    state.updateState({
       prStatus: status.state,
       prMergeable: status.mergeable,
       prReviewDecision: status.reviewDecision
@@ -323,8 +372,8 @@ export async function mergePR(options) {
     }
 
     // Update workflow state
-    const workflowState = getWorkflowState();
-    workflowState.updateState({
+    const state = getWorkflowState();
+    state.updateState({
       prStatus: 'merged'
     });
 

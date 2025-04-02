@@ -181,6 +181,18 @@ class WorkflowState {
   getWarnings() {
     return [...this.state.warnings];
   }
+
+  /**
+   * Update arbitrary state properties
+   * @param {Object} updates - State updates to apply
+   */
+  updateState(updates) {
+    this.state = {
+      ...this.state,
+      ...updates
+    };
+    return this.state;
+  }
 }
 
 // Create a singleton instance

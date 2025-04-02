@@ -999,6 +999,15 @@ class Workflow {
           defaultTitle
         );
 
+        // Ask for target branch
+        const createToMainChoice = await commandRunner.promptWorkflowOptions(
+          '\nCreate PR to which branch?',
+          ['Same branch on remote (for review)', 'Main branch (for production)']
+        );
+        
+        // Determine target branch based on user choice
+        const targetBranch = createToMainChoice === '1' ? currentBranch : 'main';
+
         // Create PR description with preview URLs
         const description = this.previewUrls && this.previewUrls.hours && this.previewUrls.admin ?
           `Preview URLs:\n- Hours: ${this.previewUrls.hours}\n- Admin: ${this.previewUrls.admin}` :
@@ -1010,7 +1019,7 @@ class Workflow {
         const prResult = await createPR({
           title,
           body: description,
-          baseBranch: 'main',
+          baseBranch: targetBranch,
           headBranch: currentBranch
         });
         
