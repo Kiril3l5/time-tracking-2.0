@@ -52,8 +52,50 @@ export async function createPR(options) {
     
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
+        // Check if PR already exists for this branch
+        const existingPrCheck = await commandRunner.runCommand(
+          `gh pr list --head ${headBranch} --json url,number --limit 1`,
+          { stdio: 'pipe' }
+        );
+        
+        if (existingPrCheck.success && existingPrCheck.output && existingPrCheck.output.includes('"url"')) {
+          // PR already exists, parse the URL and return it
+          try {
+            const prData = JSON.parse(existingPrCheck.output);
+            if (prData.length > 0) {
+              logger.info('PR already exists for this branch');
+              
+              // Update existing PR with new info
+              await updatePR({
+                prNumber: prData[0].number,
+                title,
+                body
+              });
+              
+              // Open the PR in browser
+              await commandRunner.runCommand('gh pr view --web', { stdio: 'pipe' });
+              
+              return {
+                success: true,
+                prUrl: prData[0].url,
+                prNumber: prData[0].number,
+                alreadyExists: true
+              };
+            }
+          } catch (parseError) {
+            logger.debug('Error parsing existing PR response:', parseError);
+          }
+        }
+        
+        // Properly escape the PR body
+        // Replace newlines with literal \n and escape double quotes
+        const safeBody = body
+          ? body.replace(/\n/g, '\\n').replace(/"/g, '\\"')
+          : '';
+        
+        // Use the properly escaped body
         const result = await commandRunner.runCommand(
-          `gh pr create --title "${title}" --body "${body || ''}" --base ${baseBranch} --head ${headBranch}`,
+          `gh pr create --title "${title.replace(/"/g, '\\"')}" --body "${safeBody}" --base ${baseBranch} --head ${headBranch}`,
           { stdio: 'pipe' }
         );
 
@@ -62,7 +104,7 @@ export async function createPR(options) {
         }
 
         // Extract PR URL from output
-        const prUrl = result.stdout.trim();
+        const prUrl = result.output.trim();
         
         // Update workflow state
         const workflowState = getWorkflowState();
@@ -77,6 +119,31 @@ export async function createPR(options) {
           prNumber: prUrl.split('/').pop()
         };
       } catch (error) {
+        // Check for "already exists" error
+        if (error.message.includes('already exists') || error.message.includes('already a pull request')) {
+          logger.info('PR already exists for this branch');
+          
+          // Try to get the existing PR
+          const existingPrResult = await commandRunner.runCommand(
+            `gh pr view --json url,number`,
+            { stdio: 'pipe' }
+          );
+          
+          if (existingPrResult.success) {
+            try {
+              const prData = JSON.parse(existingPrResult.output);
+              return {
+                success: true,
+                prUrl: prData.url,
+                prNumber: prData.number,
+                alreadyExists: true
+              };
+            } catch (parseError) {
+              logger.debug('Error parsing PR view response:', parseError);
+            }
+          }
+        }
+        
         if (attempt === maxRetries - 1) {
           throw error;
         }
@@ -84,6 +151,8 @@ export async function createPR(options) {
         await setTimeout(retryDelay);
       }
     }
+    
+    throw new Error('Failed to create PR after maximum retries');
   } catch (error) {
     logger.error('Failed to create PR:', error);
     return {
