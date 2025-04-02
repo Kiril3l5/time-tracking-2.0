@@ -33,76 +33,86 @@ async function checkGitHubAuth() {
  * @returns {Promise<Object>} PR creation result
  */
 export async function createPR(options) {
-  const { title, body, baseBranch, headBranch } = options;
+  const { title, body, baseBranch = 'main', headBranch } = options;
   
   try {
-    // Check GitHub authentication first
+    // Validate required fields
+    if (!title || !headBranch) {
+      throw new Error('PR title and head branch are required');
+    }
+
+    // Check GitHub authentication
     if (!await checkGitHubAuth()) {
       throw new Error('GitHub authentication required. Please run "gh auth login" first.');
     }
 
-    // Validate required fields
-    if (!title || !baseBranch || !headBranch) {
-      throw new Error('Missing required PR fields');
+    // First, check if a PR already exists
+    const existingPrCheck = await commandRunner.runCommand(
+      `gh pr list --head ${headBranch} --json url,number --limit 1`,
+      { stdio: 'pipe' }
+    );
+    
+    if (existingPrCheck.success && existingPrCheck.output && existingPrCheck.output.length > 2) {
+      try {
+        // Parse the JSON output
+        const prData = JSON.parse(existingPrCheck.output);
+        if (prData && prData.length > 0) {
+          logger.info('PR already exists for this branch.');
+          
+          // Update the existing PR with the new title/body
+          await updatePR({
+            prNumber: prData[0].number,
+            title,
+            body
+          });
+          
+          // View the PR in browser
+          await commandRunner.runCommand('gh pr view --web', { stdio: 'pipe' });
+          
+          return {
+            success: true,
+            prUrl: prData[0].url,
+            prNumber: prData[0].number,
+            alreadyExists: true
+          };
+        }
+      } catch (error) {
+        logger.debug('Error checking for existing PR:', error.message);
+        // Continue to create new PR
+      }
     }
-
-    // Create PR using GitHub CLI with retries
+    
+    // Push to remote first to ensure branch exists
+    logger.info('Pushing changes to remote...');
+    const pushResult = await commandRunner.runCommand(
+      `git push -u origin ${headBranch}`,
+      { stdio: 'inherit' }
+    );
+    
+    if (!pushResult.success) {
+      throw new Error(`Failed to push to remote: ${pushResult.error}`);
+    }
+    
+    // Prepare body with proper escaping
+    const escapedBody = body
+      .replace(/"/g, '\\"')        // Escape double quotes
+      .replace(/\n/g, '\\n');      // Escape newlines
+    
+    // Create PR command with escaped values
+    const createCommand = `gh pr create --title "${title.replace(/"/g, '\\"')}" --body "${escapedBody}" --base ${baseBranch} --head ${headBranch}`;
+    
+    // Create PR with retries
     const maxRetries = 2;
     const retryDelay = 1000;
     
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        // Check if PR already exists for this branch
-        const existingPrCheck = await commandRunner.runCommand(
-          `gh pr list --head ${headBranch} --json url,number --limit 1`,
-          { stdio: 'pipe' }
-        );
+        const result = await commandRunner.runCommand(createCommand, { stdio: 'pipe' });
         
-        if (existingPrCheck.success && existingPrCheck.output && existingPrCheck.output.includes('"url"')) {
-          // PR already exists, parse the URL and return it
-          try {
-            const prData = JSON.parse(existingPrCheck.output);
-            if (prData.length > 0) {
-              logger.info('PR already exists for this branch');
-              
-              // Update existing PR with new info
-              await updatePR({
-                prNumber: prData[0].number,
-                title,
-                body
-              });
-              
-              // Open the PR in browser
-              await commandRunner.runCommand('gh pr view --web', { stdio: 'pipe' });
-              
-              return {
-                success: true,
-                prUrl: prData[0].url,
-                prNumber: prData[0].number,
-                alreadyExists: true
-              };
-            }
-          } catch (parseError) {
-            logger.debug('Error parsing existing PR response:', parseError);
-          }
-        }
-        
-        // Properly escape the PR body
-        // Replace newlines with literal \n and escape double quotes
-        const safeBody = body
-          ? body.replace(/\n/g, '\\n').replace(/"/g, '\\"')
-          : '';
-        
-        // Use the properly escaped body
-        const result = await commandRunner.runCommand(
-          `gh pr create --title "${title.replace(/"/g, '\\"')}" --body "${safeBody}" --base ${baseBranch} --head ${headBranch}`,
-          { stdio: 'pipe' }
-        );
-
         if (!result.success) {
           throw new Error(`Failed to create PR: ${result.error}`);
         }
-
+        
         // Extract PR URL from output
         const prUrl = result.output.trim();
         
@@ -112,49 +122,56 @@ export async function createPR(options) {
           prUrl,
           prStatus: 'created'
         });
-
+        
         return {
           success: true,
           prUrl,
           prNumber: prUrl.split('/').pop()
         };
       } catch (error) {
-        // Check for "already exists" error
-        if (error.message.includes('already exists') || error.message.includes('already a pull request')) {
-          logger.info('PR already exists for this branch');
+        // Check if PR already exists (this happens if it was created between our check and creation)
+        if (error.message && (error.message.includes('already exists') || error.message.includes('already a pull request'))) {
+          logger.info('A PR already exists for this branch');
           
-          // Try to get the existing PR
-          const existingPrResult = await commandRunner.runCommand(
-            `gh pr view --json url,number`,
-            { stdio: 'pipe' }
-          );
-          
-          if (existingPrResult.success) {
-            try {
-              const prData = JSON.parse(existingPrResult.output);
+          // Try to get the existing PR info
+          try {
+            const viewResult = await commandRunner.runCommand(
+              `gh pr view --json url,number`,
+              { stdio: 'pipe' }
+            );
+            
+            if (viewResult.success) {
+              const prInfo = JSON.parse(viewResult.output);
               return {
                 success: true,
-                prUrl: prData.url,
-                prNumber: prData.number,
+                prUrl: prInfo.url,
+                prNumber: prInfo.number,
                 alreadyExists: true
               };
-            } catch (parseError) {
-              logger.debug('Error parsing PR view response:', parseError);
             }
+          } catch (viewError) {
+            // Ignore view errors and report generic success
+            logger.debug('Error viewing existing PR:', viewError.message);
           }
+          
+          return {
+            success: true,
+            alreadyExists: true
+          };
         }
         
         if (attempt === maxRetries - 1) {
           throw error;
         }
+        
         logger.warn(`PR creation attempt ${attempt + 1} failed, retrying in ${retryDelay}ms...`);
         await setTimeout(retryDelay);
       }
     }
     
-    throw new Error('Failed to create PR after maximum retries');
+    throw new Error('Max retries reached for PR creation');
   } catch (error) {
-    logger.error('Failed to create PR:', error);
+    logger.error('Failed to create PR:', error.message);
     return {
       success: false,
       error: error.message

@@ -210,6 +210,92 @@ export async function syncMainBranch(promptFn) {
 }
 
 /**
+ * Get the last edited files
+ * @returns {string[]} Array of recently modified files
+ */
+function getLastEditedFiles() {
+  try {
+    // Get recently modified files
+    const changedFiles = execSync('git diff --name-only', { encoding: 'utf8' }).trim();
+    const stagedFiles = execSync('git diff --name-only --staged', { encoding: 'utf8' }).trim();
+    
+    // Also check untracked files
+    const untrackedFiles = execSync('git ls-files --others --exclude-standard', { encoding: 'utf8' }).trim();
+    
+    // Combine and filter for uniqueness
+    const allChangedFiles = [...new Set([
+      ...changedFiles.split('\n').filter(f => f),
+      ...stagedFiles.split('\n').filter(f => f),
+      ...untrackedFiles.split('\n').filter(f => f)
+    ])];
+    
+    return allChangedFiles;
+  } catch (error) {
+    logger.debug('Error getting last edited files:', error.message);
+    return [];
+  }
+}
+
+/**
+ * Generate a descriptive commit message based on changed files
+ * @param {string[]} files - Array of changed files
+ * @param {string} branchName - Current branch name
+ * @returns {string} Generated commit message
+ */
+function generateCommitMessage(files, branchName) {
+  // Default prefix based on branch type
+  let prefix = 'update';
+  if (branchName.startsWith('feature/')) prefix = 'feat';
+  else if (branchName.startsWith('fix/') || branchName.startsWith('bugfix/')) prefix = 'fix';
+  else if (branchName.startsWith('docs/')) prefix = 'docs';
+  else if (branchName.startsWith('chore/')) prefix = 'chore';
+  
+  // If no files changed, use branch name
+  if (!files.length) {
+    // Convert kebab-case to Title Case
+    const branchTitle = branchName
+      .replace(/^(feature\/|fix\/|bugfix\/|docs\/|chore\/)/, '')
+      .split('-')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+    
+    return `${prefix}: ${branchTitle}`;
+  }
+  
+  // Group files by directory
+  const filesByDir = {};
+  files.forEach(file => {
+    const dir = file.split('/')[0];
+    if (!filesByDir[dir]) filesByDir[dir] = [];
+    filesByDir[dir].push(file);
+  });
+  
+  // Generate description based on directories modified
+  const dirNames = Object.keys(filesByDir);
+  
+  if (dirNames.length === 1) {
+    // Single directory changed
+    const dir = dirNames[0];
+    const fileCount = filesByDir[dir].length;
+    
+    if (fileCount === 1) {
+      // Single file in single directory
+      const file = filesByDir[dir][0].split('/').pop();
+      return `${prefix}: Update ${file} in ${dir}`;
+    } else {
+      // Multiple files in single directory
+      return `${prefix}: Update ${fileCount} files in ${dir}`;
+    }
+  } else if (dirNames.length <= 3) {
+    // 2-3 directories changed
+    return `${prefix}: Update files in ${dirNames.join(', ')}`;
+  } else {
+    // Many directories changed
+    return `${prefix}: Update ${files.length} files across ${dirNames.length} directories`;
+  }
+}
+
+/**
  * Commit changes with a suggested message based on branch name
  * @param {string} branchName - Current branch name
  * @param {Function} promptFn - Function to prompt the user
@@ -229,29 +315,12 @@ export async function commitChanges(branchName, promptFn) {
     return { success: true };
   }
   
-  // Generate commit message suggestion based on changes
-  let suggestedMessage = '';
-  
   try {
-    // Get the branch name without prefix for a default message
-    const nameWithoutPrefix = branchName.replace(/^(feature\/|fix\/|bugfix\/|docs\/|chore\/)/, '');
+    // Get last edited files for smart commit message
+    const lastEditedFiles = getLastEditedFiles();
     
-    // Convert kebab-case to normal text with capitalization
-    suggestedMessage = nameWithoutPrefix
-      .split('-')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
-    
-    // Add conventional commit type prefix based on branch
-    if (branchName.startsWith('feature/')) {
-      suggestedMessage = `feat: ${suggestedMessage}`;
-    } else if (branchName.startsWith('fix/') || branchName.startsWith('bugfix/')) {
-      suggestedMessage = `fix: ${suggestedMessage}`;
-    } else if (branchName.startsWith('docs/')) {
-      suggestedMessage = `docs: ${suggestedMessage}`;
-    } else if (branchName.startsWith('chore/')) {
-      suggestedMessage = `chore: ${suggestedMessage}`;
-    }
+    // Generate commit message suggestion based on changed files
+    const suggestedMessage = generateCommitMessage(lastEditedFiles, branchName);
     
     // Get commit message from user
     const commitMessage = await promptFn(`Enter commit message`, suggestedMessage);
@@ -261,8 +330,15 @@ export async function commitChanges(branchName, promptFn) {
     }
     
     // Stage and commit changes
+    logger.info("Committing changes...");
     execSync('git add .', { stdio: 'inherit' });
-    execSync(`git commit -m "${commitMessage}"`, { stdio: 'inherit' });
+    execSync(`git commit -m "${commitMessage.replace(/"/g, '\\"')}"`, { stdio: 'inherit' });
+    
+    // Verify commit actually happened
+    const verifyCommit = execSync('git log -1 --pretty=%B', { encoding: 'utf8' }).trim();
+    if (verifyCommit !== commitMessage) {
+      logger.warn("Commit operation may not have completed successfully.");
+    }
     
     logger.success("Changes committed successfully!");
     return { success: true, message: commitMessage };

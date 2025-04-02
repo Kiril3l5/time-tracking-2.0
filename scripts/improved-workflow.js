@@ -19,7 +19,6 @@ import { cleanupChannels } from './firebase/channel-cleanup.js';
 import { runAllAdvancedChecks } from './workflow/advanced-checker.js';
 import { verifyAllAuth } from './auth/auth-manager.js';
 import { createPR } from './github/pr-manager.js';
-import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -953,92 +952,6 @@ class Workflow {
   }
 
   /**
-   * Get the last edited files
-   * @returns {string[]} Array of recently modified files
-   */
-  static getLastEditedFiles() {
-    try {
-      // Get recently modified files
-      const changedFiles = execSync('git diff --name-only', { encoding: 'utf8' }).trim();
-      const stagedFiles = execSync('git diff --name-only --staged', { encoding: 'utf8' }).trim();
-      
-      // Also check untracked files
-      const untrackedFiles = execSync('git ls-files --others --exclude-standard', { encoding: 'utf8' }).trim();
-      
-      // Combine and filter for uniqueness
-      const allChangedFiles = [...new Set([
-        ...changedFiles.split('\n').filter(f => f),
-        ...stagedFiles.split('\n').filter(f => f),
-        ...untrackedFiles.split('\n').filter(f => f)
-      ])];
-      
-      return allChangedFiles;
-    } catch (error) {
-      logger.debug('Error getting last edited files:', error.message);
-      return [];
-    }
-  }
-
-  /**
-   * Generate a descriptive commit message based on changed files
-   * @param {string[]} files - Array of changed files
-   * @param {string} branchName - Current branch name
-   * @returns {string} Generated commit message
-   */
-  static generateCommitMessage(files, branchName) {
-    // Default prefix based on branch type
-    let prefix = 'update';
-    if (branchName.startsWith('feature/')) prefix = 'feat';
-    else if (branchName.startsWith('fix/') || branchName.startsWith('bugfix/')) prefix = 'fix';
-    else if (branchName.startsWith('docs/')) prefix = 'docs';
-    else if (branchName.startsWith('chore/')) prefix = 'chore';
-    
-    // If no files changed, use branch name
-    if (!files.length) {
-      // Convert kebab-case to Title Case
-      const branchTitle = branchName
-        .replace(/^(feature\/|fix\/|bugfix\/|docs\/|chore\/)/, '')
-        .split('-')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
-      
-      return `${prefix}: ${branchTitle}`;
-    }
-    
-    // Group files by directory
-    const filesByDir = {};
-    files.forEach(file => {
-      const dir = file.split('/')[0];
-      if (!filesByDir[dir]) filesByDir[dir] = [];
-      filesByDir[dir].push(file);
-    });
-    
-    // Generate description based on directories modified
-    const dirNames = Object.keys(filesByDir);
-    
-    if (dirNames.length === 1) {
-      // Single directory changed
-      const dir = dirNames[0];
-      const fileCount = filesByDir[dir].length;
-      
-      if (fileCount === 1) {
-        // Single file in single directory
-        const file = filesByDir[dir][0].split('/').pop();
-        return `${prefix}: Update ${file} in ${dir}`;
-      } else {
-        // Multiple files in single directory
-        return `${prefix}: Update ${fileCount} files in ${dir}`;
-      }
-    } else if (dirNames.length <= 3) {
-      // 2-3 directories changed
-      return `${prefix}: Update files in ${dirNames.join(', ')}`;
-    } else {
-      // Many directories changed
-      return `${prefix}: Update ${files.length} files across ${dirNames.length} directories`;
-    }
-  }
-
-  /**
    * Handle branch options after seeing preview
    */
   async handleBranchOptions() {
@@ -1052,35 +965,17 @@ class Workflow {
       if (hasUncommittedChanges()) {
         logger.info('\nYou have uncommitted changes.');
         
-        // Use commandRunner for proper input handling
         const choice = await commandRunner.promptWorkflowOptions(
           'Would you like to commit these changes?',
           ['Yes, commit changes', 'No, keep changes uncommitted']
         );
 
         if (choice === '1') {
-          logger.info('Committing changes...');
-          
-          // Get last edited files for smart commit message
-          const lastEditedFiles = Workflow.getLastEditedFiles();
-          
-          // Generate smart commit message based on edited files and branch
-          const suggestedMessage = Workflow.generateCommitMessage(lastEditedFiles, currentBranch);
-          
-          // Use commandRunner for proper input handling
-          const commitMessage = await commandRunner.promptText(
-            'Enter commit message',
-            suggestedMessage
+          // Use the branch-manager's commitChanges function
+          const commitResult = await commitChanges(currentBranch, (prompt, defaultValue) => 
+            commandRunner.promptText(prompt, defaultValue)
           );
           
-          // Commit changes
-          const stageResult = await commandRunner.runCommandAsync('git add .', { stdio: 'inherit' });
-          if (!stageResult.success) {
-            logger.error('Failed to stage changes:', stageResult.error);
-            return;
-          }
-          
-          const commitResult = await commandRunner.runCommandAsync(`git commit -m "${commitMessage}"`, { stdio: 'inherit' });
           if (!commitResult.success) {
             logger.error('Failed to commit changes:', commitResult.error);
             return;
@@ -1091,45 +986,27 @@ class Workflow {
       }
 
       // Ask about creating a PR
-      // Use commandRunner for proper input handling
       const createPrChoice = await commandRunner.promptWorkflowOptions(
         '\nWould you like to create a pull request with your preview URLs?',
         ['Yes, create PR', 'No, I\'ll do it later']
       );
 
       if (createPrChoice === '1') {
-        // Get last commit message for smart PR title
-        let lastCommitMessage = '';
-        try {
-          lastCommitMessage = execSync('git log -1 --pretty=%B', { encoding: 'utf8' }).trim();
-        } catch (error) {
-          // Ignore errors
-        }
-        
-        // Default title based on branch or last commit
-        const defaultTitle = lastCommitMessage || `Updates from ${currentBranch}`;
-        
-        // Use commandRunner for proper input handling
+        // Get the PR title
+        const defaultTitle = `Updates from ${currentBranch}`;
         const title = await commandRunner.promptText(
           'Enter PR title',
           defaultTitle
         );
 
+        // Create PR description with preview URLs
         const description = this.previewUrls && this.previewUrls.hours && this.previewUrls.admin ?
           `Preview URLs:\n- Hours: ${this.previewUrls.hours}\n- Admin: ${this.previewUrls.admin}` :
           'Preview deployment';
 
         logger.info('\nCreating PR...');
         
-        // Push changes to remote
-        logger.info(`Pushing changes to remote...`);
-        const pushResult = await commandRunner.runCommandAsync(`git push -u origin ${currentBranch}`, { stdio: 'inherit' });
-        if (!pushResult.success) {
-          logger.error('Failed to push to remote:', pushResult.error);
-          return;
-        }
-        
-        // Use PR manager for PR creation instead of direct CLI
+        // Use the PR manager module to create the PR
         const prResult = await createPR({
           title,
           body: description,
@@ -1140,8 +1017,12 @@ class Workflow {
         if (prResult.success) {
           logger.success(`PR created successfully: ${prResult.prUrl}`);
           
-          // Open the PR in browser
-          await commandRunner.runCommandAsync('gh pr view --web', { stdio: 'pipe' });
+          try {
+            // Open the PR in browser
+            await commandRunner.runCommandAsync('gh pr view --web', { stdio: 'pipe' });
+          } catch (error) {
+            // Ignore browser open errors
+          }
         } else {
           logger.error('Failed to create PR:', prResult.error);
           logger.info('\nYou can create a PR manually:');
