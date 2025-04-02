@@ -57,7 +57,7 @@ const options = {
 // Filter out option flags from arguments
 const filteredArgs = args.filter(arg => !arg.startsWith('--'));
 const title = filteredArgs[0];
-const description = filteredArgs[1];
+let prDescription = filteredArgs[1]; // Make this mutable for later changes
 
 /**
  * Display help information
@@ -314,73 +314,89 @@ async function getPreviewUrls() {
 }
 
 /**
- * Create a GitHub PR using the GitHub CLI
- * @param {string} title - PR title
- * @param {string} description - PR description
- * @returns {Promise<Object>} Result of PR creation
+ * Check if GitHub CLI is installed and authenticated
+ * @returns {boolean} Whether GitHub CLI is ready to use
  */
-async function createGitHubPR(title, description) {
-  let branch;
+function checkGitHubAuth() {
   try {
-    // Check if GitHub CLI is installed
+    // Check if gh is installed
     executeCommand('gh --version', { stdio: 'pipe' });
     
-    // Get current branch
-    branch = execSync('git branch --show-current', { encoding: 'utf8' }).trim();
-    
-    // Create full description
-    const fullDescription = `${description}\n\n## Changes\n- Tested with preview deployment\n- Ready for review`;
-    
-    // Create PR command
-    const createPrCommand = `gh pr create --base main --head ${branch} --title "${title}" --body "${fullDescription}"`;
-    
-    // Execute command
-    executeCommand(createPrCommand, { 
-      stdio: 'inherit',
-      cwd: rootDir
-    });
-    
-    // Get PR URL
-    const prUrl = execSync('gh pr view --json url -q .url', { encoding: 'utf8' }).trim();
-    
-    // Open PR in browser
-    logger.info('Opening PR in your browser...');
-    executeCommand('gh pr view --web', { 
-      stdio: 'inherit',
-      cwd: rootDir
-    });
-    
-    return {
-      success: true,
-      url: prUrl
-    };
+    // Check if user is authenticated
+    const authStatus = executeCommand('gh auth status', { stdio: 'pipe' });
+    return authStatus && authStatus.includes('Logged in to');
   } catch (error) {
-    // Fallback to instructions if GitHub CLI is not available
-    logger.warn('GitHub CLI not available or error creating PR.');
-    logger.info('\nPlease create a PR manually:');
-    logger.info('1. Go to: https://github.com/yourusername/time-tracking-2.0/pull/new/main');
-    logger.info(`2. Select your branch: ${branch || 'your-feature-branch'}`);
-    logger.info(`3. Use title: ${title}`);
-    logger.info('4. Add preview URLs to the description');
-    logger.info('5. Submit the PR');
-    
-    return {
-      success: false,
-      error: error.message
-    };
+    logger.error('GitHub CLI error:', error.message);
+    logger.info('To fix: Install GitHub CLI and authenticate with `gh auth login`');
+    return false;
   }
 }
 
 /**
- * Main function to create the PR
+ * Creates a GitHub PR using the GitHub CLI
+ * 
+ * @param {string} title - PR title
+ * @param {string} body - PR description
+ * @returns {Promise<boolean>} - Success status
+ */
+async function createGitHubPR(title, body) {
+  try {
+    logger.info('Creating PR on GitHub...');
+    
+    // Verify authentication
+    if (!checkGitHubAuth()) {
+      throw new Error('GitHub authentication required');
+    }
+    
+    // Push changes to remote
+    logger.info('Pushing changes to remote...');
+    if (!options.skipPush) {
+      const branch = executeCommand('git branch --show-current', { encoding: 'utf8' }).trim();
+      executeCommand(`git push -u origin ${branch}`, { stdio: 'inherit' });
+    }
+    
+    // Create PR using GitHub CLI
+    logger.info('Creating pull request...');
+    const result = executeCommand(
+      `gh pr create --title "${title}" --body "${body.replace(/"/g, '\\"')}"`, 
+      { stdio: 'pipe' }
+    );
+    
+    // Extract PR URL from result
+    const prUrl = result.match(/(https:\/\/github\.com\/.*\/pull\/\d+)/);
+    if (prUrl && prUrl[1]) {
+      logger.success(`PR created successfully: ${prUrl[1]}`);
+      
+      // Open PR in browser if not in CI
+      if (!process.env.CI) {
+        executeCommand(`gh pr view --web`, { stdio: 'pipe' });
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    logger.error('Failed to create PR:', error.message);
+    
+    if (error.message.includes('authentication')) {
+      logger.info('Run `gh auth login` to authenticate with GitHub');
+    } else if (error.message.includes('push')) {
+      logger.info('Failed to push to remote. Check your network connection and GitHub access.');
+    } else {
+      logger.info('You can create the PR manually through the GitHub web interface.');
+    }
+    
+    return false;
+  }
+}
+
+/**
+ * Main PR creation function
  */
 async function createPR() {
-  const state = getWorkflowState();
   const startTime = Date.now();
   
   try {
-    // Initialize state and monitoring
-    state.initialize();
+    // Initialize monitoring
     performanceMonitor.startOperation('create-pr');
     progressTracker.initProgress(4, 'Pull Request Creation');
     
@@ -389,120 +405,92 @@ async function createPR() {
       showHelp();
       return 0;
     }
-
-    logger.sectionHeader('Creating Pull Request' + (options.test ? ' (TEST MODE)' : '') + (options.dryRun ? ' (DRY RUN)' : ''));
     
-    // Get current branch
-    progressTracker.startStep('Branch Validation');
-    logger.info('Getting current branch...');
-    const branch = execSync('git branch --show-current', { encoding: 'utf8' }).trim();
-    logger.success(`Current branch: ${branch}`);
+    // Verify requirements
+    progressTracker.updateProgress(1, 'Verifying requirements');
     
-    // Check if we're on main branch
-    if (branch === 'main' || branch === 'master') {
-      if (!options.force) {
-        throw new Error('You are on the main branch. PRs should be created from feature branches.');
-      } else {
-        logger.warn('Creating PR from main branch because --force was specified.');
+    // Check if title is provided
+    if (!title && !options.test && !options.dryRun) {
+      logger.error('PR title is required. Use --test or --dry-run to skip this check.');
+      logger.info('Usage: node scripts/create-pr.js "Your PR title" "Optional description"');
+      return 1;
+    }
+    
+    // Ensure we're on a feature branch
+    const currentBranch = executeCommand('git branch --show-current', { encoding: 'utf8' }).trim();
+    if (!currentBranch) {
+      logger.error('Could not determine current branch.');
+      return 1;
+    }
+    
+    if ((currentBranch === 'main' || currentBranch === 'master') && !options.force) {
+      logger.error(`Cannot create PR from ${currentBranch} branch. Switch to a feature branch first or use --force.`);
+      return 1;
+    }
+    
+    // Check for uncommitted changes
+    progressTracker.updateProgress(2, 'Checking for uncommitted changes');
+    if (options.autoCommit) {
+      const hasChanges = executeCommand('git status --porcelain', { encoding: 'utf8' }).trim();
+      if (hasChanges) {
+        logger.info('Auto-committing changes...');
+        executeCommand('git add .', { stdio: 'inherit' });
+        executeCommand(`git commit -m "Auto-commit for PR: ${title || 'Updates'}"`, { stdio: 'inherit' });
       }
     }
-    progressTracker.completeStep(true, 'Branch validation passed');
     
-    // Make sure we have latest changes committed
-    progressTracker.startStep('Git State Check');
-    logger.info('Checking for uncommitted changes...');
-    const status = execSync('git status --porcelain', { encoding: 'utf8' }).trim();
-    if (status) {
-      logger.warn('You have uncommitted changes:');
-      console.log(status);
-      
-      // Handle temp file changes
-      const changes = status.split('\n');
-      const tempFileChanges = changes.filter(change => {
-        if (!change.startsWith('D')) return false;
-        const filename = change.substring(2).trim();
-        return filename === '.env.build' || 
-               filename === 'preview-dashboard.html' || 
-               filename.startsWith('temp/');
-      });
-      
-      if (tempFileChanges.length > 0) {
-        logger.info('Detected temporary file tracking changes from gitignore updates.');
-        
-        if (tempFileChanges.length !== changes.length) {
-          logger.info('Will auto-commit only the temporary file changes, leaving other changes untouched.');
-          
-          if (!options.dryRun && !options.test) {
-            try {
-              for (const change of tempFileChanges) {
-                const filename = change.substring(2).trim();
-                execSync(`git add -u "${filename}"`, { stdio: 'pipe' });
-              }
-              
-              execSync(`git commit -m "chore: Remove temporary files from Git tracking"`, { stdio: 'inherit' });
-              logger.success('Temporary file changes committed automatically.');
-              logger.info('Note: You still have other uncommitted changes that need handling.');
-            } catch (error) {
-              throw new Error(`Failed to commit temporary files: ${error.message}`);
-            }
-          }
-        }
-      }
-      
-      if (!options.autoCommit) {
-        throw new Error('You have uncommitted changes. Use --auto-commit to commit them automatically.');
-      }
-    }
-    progressTracker.completeStep(true, 'Git state validated');
-    
-    // Check for preview URLs
-    progressTracker.startStep('Preview URL Check');
+    // Get preview URLs if needed
+    progressTracker.updateProgress(3, 'Checking for preview URLs');
     if (!options.skipUrlCheck) {
       const previewUrls = await getPreviewUrls();
-      if (!previewUrls || Object.keys(previewUrls).length === 0) {
-        throw new Error('No preview URLs found. Please run the workflow first to generate previews.');
+      if (Object.keys(previewUrls).length > 0) {
+        logger.success('Found preview URLs:');
+        for (const [key, url] of Object.entries(previewUrls)) {
+          logger.info(`  ${key}: ${url}`);
+        }
+        
+        // Add preview URLs to description if not already present
+        if (prDescription && !prDescription.includes('preview') && !prDescription.includes('Preview')) {
+          const urlsText = Object.entries(previewUrls)
+            .map(([key, url]) => `- ${key}: ${url}`)
+            .join('\n');
+          prDescription += `\n\nPreview URLs:\n${urlsText}`;
+        }
+      } else {
+        logger.warn('No preview URLs found. Consider running a preview deployment first.');
       }
-      logger.success('Preview URLs found:', previewUrls);
-    } else {
-      logger.info('Skipping preview URL check as requested');
     }
-    progressTracker.completeStep(true, 'Preview URLs validated');
     
-    // Create the PR
-    progressTracker.startStep('PR Creation');
-    if (!options.dryRun && !options.test) {
-      const prResult = await createGitHubPR(title, description);
-      if (!prResult.success) {
-        throw new Error(`Failed to create PR: ${prResult.error}`);
-      }
-      logger.success('Pull request created successfully!');
-      logger.info(`PR URL: ${prResult.url}`);
-    } else {
-      logger.info('DRY RUN: Would create PR with:');
-      logger.info(`Title: ${title}`);
-      logger.info(`Description: ${description}`);
+    // Create PR
+    progressTracker.updateProgress(4, 'Creating pull request');
+    if (options.dryRun) {
+      logger.info(`DRY RUN: Would create PR with title: "${title || 'No Title'}"`);
+      logger.info(`DRY RUN: Description: "${prDescription || 'No Description'}"`);
+      
+      progressTracker.finishProgress(true, 'Dry run completed successfully');
+      logger.success('PR creation simulation completed successfully');
+      return 0;
     }
-    progressTracker.completeStep(true, 'PR created successfully');
+    
+    if (options.test) {
+      logger.info('TEST MODE: All checks passed, but PR will not be created.');
+      
+      progressTracker.finishProgress(true, 'Test completed successfully');
+      logger.success('PR creation test completed successfully');
+      return 0;
+    }
+    
+    // Actually create the PR
+    const success = await createGitHubPR(title, prDescription || '');
     
     // Complete PR creation
     const duration = Date.now() - startTime;
-    state.complete({
-      success: true,
-      duration,
-      metrics: performanceMonitor.getPerformanceSummary()
-    });
     
-    progressTracker.finishProgress(true, 'PR creation completed successfully');
-    logger.success(`PR creation completed in ${formatDuration(duration)}`);
-    return 0;
-
+    progressTracker.finishProgress(success, success ? 'PR created successfully' : 'PR creation failed');
+    logger.info(`PR creation ${success ? 'completed' : 'failed'} in ${formatDuration(duration)}`);
+    return success ? 0 : 1;
   } catch (error) {
     const duration = Date.now() - startTime;
-    state.complete({
-      success: false,
-      duration,
-      error: error.message
-    });
     
     progressTracker.finishProgress(false, `PR creation failed: ${error.message}`);
     logger.error('PR creation failed:', error.message);
@@ -515,6 +503,8 @@ async function createPR() {
     }
     
     return 1;
+  } finally {
+    performanceMonitor.endOperation('create-pr');
   }
 }
 

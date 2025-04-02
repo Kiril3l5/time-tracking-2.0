@@ -18,6 +18,7 @@ import { setTimeout } from 'timers/promises';
 import { cleanupChannels } from './firebase/channel-cleanup.js';
 import { runAllAdvancedChecks } from './workflow/advanced-checker.js';
 import { verifyAllAuth } from './auth/auth-manager.js';
+import readline from 'readline';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -111,23 +112,24 @@ class Workflow {
   }
 
   /**
-   * Prompt user for input
+   * Prompt user for input, properly waiting for ENTER keypress
    * @param {string} prompt - The prompt message
    * @param {string} defaultValue - Default value if user just presses enter
    * @returns {Promise<string>} User's input
    */
   async promptUser(prompt, defaultValue = '') {
     return new Promise((resolve) => {
-      process.stdin.resume();
-      process.stdin.setEncoding('utf8');
+      // Create a readline interface for better input handling
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
       
-      // Write the prompt
-      process.stdout.write(prompt);
-      
-      process.stdin.once('data', (data) => {
-        process.stdin.pause();
-        const response = data.trim();
-        resolve(response || defaultValue);
+      // Show prompt with default value if provided
+      rl.question(`${prompt}`, (answer) => {
+        rl.close();
+        // Return user input or default value if empty
+        resolve(answer.trim() || defaultValue);
       });
     });
   }
@@ -872,7 +874,9 @@ class Workflow {
         );
 
         if (choice === '1') {
-          const commitResult = await commitChanges(currentBranch, this.promptUser);
+          const commitResult = await commitChanges(currentBranch, (prompt, defaultValue) => 
+            this.promptUser(prompt, defaultValue)
+          );
           if (!commitResult.success) {
             logger.error('Failed to commit changes:', commitResult.error);
             return;
@@ -891,33 +895,52 @@ class Workflow {
 
       if (createPr === '1') {
         // Get PR title and description
-        const defaultTitle = `Updates from ${currentBranch} with preview`;
+        const defaultTitle = `Updates from ${currentBranch}`;
         const title = await this.promptUser(
-          `\nEnter PR title (${defaultTitle}): `,
+          `\nEnter PR title [${defaultTitle}]: `,
           defaultTitle
         );
 
-        const description = `Preview URLs:\n` +
-          `Hours: ${this.previewUrls.hours}\n` +
-          `Admin: ${this.previewUrls.admin}`;
+        const description = this.previewUrls && this.previewUrls.hours && this.previewUrls.admin ?
+          `Preview URLs:\n- Hours: ${this.previewUrls.hours}\n- Admin: ${this.previewUrls.admin}` :
+          'Preview deployment';
 
         logger.info('\nCreating PR...');
         
-        // Use the create-pr script
-        const { execSync } = await import('child_process');
-        try {
-          execSync(`node scripts/create-pr.js "${title}" "${description}"`, { stdio: 'inherit' });
-          logger.success('Pull request created successfully!');
-        } catch (error) {
-          logger.error('Failed to create PR:', error.message);
-          logger.info('\nYou can create the PR manually:');
-          logger.info('1. Go to GitHub and create a new PR');
-          logger.info(`2. Use title: ${title}`);
-          logger.info('3. Copy the preview URLs into the description');
-        }
+        // Use child_process for better control
+        const { spawn } = await import('child_process');
+        
+        // Create a process for create-pr.js
+        const createPrProcess = spawn('node', [
+          'scripts/create-pr.js',
+          title,
+          description
+        ], {
+          stdio: 'inherit', // Show output directly to the console
+          shell: true
+        });
+
+        // Wait for the process to complete
+        await new Promise((resolve, reject) => {
+          createPrProcess.on('close', (code) => {
+            if (code === 0) {
+              logger.success('Pull request created successfully!');
+              resolve();
+            } else {
+              logger.error(`PR creation failed with code ${code}`);
+              reject(new Error(`PR creation process exited with code ${code}`));
+            }
+          });
+          
+          createPrProcess.on('error', (err) => {
+            logger.error('PR creation error:', err.message);
+            reject(err);
+          });
+        });
       }
     } catch (error) {
       logger.error('Error handling branch options:', error.message);
+      logger.info('\nYou can create a PR manually using GitHub\'s web interface.');
     }
   }
 
