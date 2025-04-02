@@ -19,6 +19,59 @@ import { execSync } from 'child_process';
 import { setTimeout, clearTimeout } from 'timers';
 
 /**
+ * A wrapper around the logger that respects silent mode
+ */
+class SilentableLogger {
+  constructor(baseLogger, options = {}) {
+    this.baseLogger = baseLogger;
+    this.silent = options.silent || false;
+  }
+  
+  setSilent(silent) {
+    this.silent = silent;
+  }
+  
+  info(message, ...args) {
+    if (!this.silent) {
+      this.baseLogger.info(message, ...args);
+    }
+  }
+  
+  success(message, ...args) {
+    if (!this.silent) {
+      this.baseLogger.success(message, ...args);
+    }
+  }
+  
+  warn(message, ...args) {
+    if (!this.silent) {
+      this.baseLogger.warn(message, ...args);
+    }
+  }
+  
+  error(message, ...args) {
+    if (!this.silent) {
+      this.baseLogger.error(message, ...args);
+    }
+  }
+  
+  debug(message, ...args) {
+    if (!this.silent) {
+      this.baseLogger.debug(message, ...args);
+    }
+  }
+  
+  sectionHeader(message) {
+    if (!this.silent) {
+      this.baseLogger.sectionHeader(message);
+    }
+  }
+}
+
+// Create a wrapper for the logger
+const silentLogger = new SilentableLogger(logger);
+
+/**
  * Create a timeout promise with clean resource management
  * @param {number} ms - Timeout in milliseconds
  * @param {string} operation - Name of the operation for error message
@@ -56,12 +109,15 @@ function createTimeout(ms, operation) {
  * @returns {Promise<any>} - Result of the operation or fallback value if timeout
  */
 async function runWithTimeout(operation, timeoutMs, operationName, fallbackValue, options = {}) {
+  // Set silent mode for this operation
+  silentLogger.setSilent(options.silentMode || false);
+  
   // Allow overriding the timeout from options
   const customTimeout = options.timeout && options.timeout[operationName.toLowerCase().replace(/\s+/g, '')];
   const effectiveTimeout = customTimeout || timeoutMs;
   
   if (options.verbose && !options.silentMode) {
-    logger.debug(`Running '${operationName}' with ${effectiveTimeout/1000}s timeout`);
+    silentLogger.debug(`Running '${operationName}' with ${effectiveTimeout/1000}s timeout`);
   }
   
   const timeout = createTimeout(effectiveTimeout, operationName);
@@ -77,7 +133,7 @@ async function runWithTimeout(operation, timeoutMs, operationName, fallbackValue
     if (error.isTimeout) {
       // Return fallback value on timeout
       if (!options.silentMode) {
-        logger.error(`${operationName} timed out after ${effectiveTimeout/1000} seconds`);
+        silentLogger.error(`${operationName} timed out after ${effectiveTimeout/1000} seconds`);
       }
       return {
         ...fallbackValue,
@@ -99,9 +155,10 @@ async function runWithTimeout(operation, timeoutMs, operationName, fallbackValue
 export async function runBundleSizeCheck(options = {}) {
   const { verbose = false, silentMode = false } = options;
   
-  if (!silentMode) {
-    logger.info("Running bundle size analysis...");
-  }
+  // Update silent mode setting
+  silentLogger.setSilent(silentMode);
+  
+  silentLogger.info("Running bundle size analysis...");
   
   try {
     // Try to use the module function
@@ -121,9 +178,7 @@ export async function runBundleSizeCheck(options = {}) {
       );
       
       if (result.sizeIncrease && result.sizeIncrease > 10) {
-        if (!silentMode) {
-          logger.warn(`Bundle size increased by ${result.sizeIncrease}% compared to the previous build.`);
-        }
+        silentLogger.warn(`Bundle size increased by ${result.sizeIncrease}% compared to the previous build.`);
         return { 
           success: false, 
           data: result,
@@ -132,15 +187,11 @@ export async function runBundleSizeCheck(options = {}) {
         };
       }
       
-      if (!silentMode) {
-        logger.success("Bundle size check passed.");
-      }
+      silentLogger.success("Bundle size check passed.");
       return { success: true, data: result };
     } else {
       // Fallback to command line
-      if (!silentMode) {
-        logger.info("Using command line fallback for bundle size check");
-      }
+      silentLogger.info("Using command line fallback for bundle size check");
       execSync('pnpm run analyze-bundle', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.bundlesize || 60000 
@@ -148,9 +199,7 @@ export async function runBundleSizeCheck(options = {}) {
       return { success: true };
     }
   } catch (error) {
-    if (!silentMode) {
-      logger.error("Bundle size check failed:", error);
-    }
+    silentLogger.error("Bundle size check failed:", error);
     return { 
       success: false, 
       error: error.message 
@@ -166,9 +215,10 @@ export async function runBundleSizeCheck(options = {}) {
 export async function runDeadCodeCheck(options = {}) {
   const { verbose = false, silentMode = false } = options;
   
-  if (!silentMode) {
-    logger.info("Running dead code detection...");
-  }
+  // Update silent mode setting
+  silentLogger.setSilent(silentMode);
+  
+  silentLogger.info("Running dead code detection...");
   
   try {
     // Try to use the module function
@@ -187,9 +237,7 @@ export async function runDeadCodeCheck(options = {}) {
       
       const deadCodeCount = result.totalFiles || 0;
       if (deadCodeCount > 0) {
-        if (!silentMode) {
-          logger.warn(`Found ${deadCodeCount} files with potentially unused code.`);
-        }
+        silentLogger.warn(`Found ${deadCodeCount} files with potentially unused code.`);
         return { 
           success: false, 
           data: result,
@@ -198,15 +246,11 @@ export async function runDeadCodeCheck(options = {}) {
         };
       }
       
-      if (!silentMode) {
-        logger.success("No dead code found.");
-      }
+      silentLogger.success("No dead code found.");
       return { success: true, data: result };
     } else {
       // Fallback to command line
-      if (!silentMode) {
-        logger.info("Using command line fallback for dead code check");
-      }
+      silentLogger.info("Using command line fallback for dead code check");
       execSync('pnpm run detect-deadcode', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.deadcode || 45000 
@@ -214,9 +258,7 @@ export async function runDeadCodeCheck(options = {}) {
       return { success: true };
     }
   } catch (error) {
-    if (!silentMode) {
-      logger.warn(`Dead code check error: ${error.message}`);
-    }
+    silentLogger.warn(`Dead code check error: ${error.message}`);
     return { 
       success: false, 
       error: error.message 
@@ -232,9 +274,10 @@ export async function runDeadCodeCheck(options = {}) {
 export async function runDocsQualityCheck(options = {}) {
   const { verbose = false, silentMode = false } = options;
   
-  if (!silentMode) {
-    logger.info("Checking documentation quality...");
-  }
+  // Update silent mode setting
+  silentLogger.setSilent(silentMode);
+  
+  silentLogger.info("Checking documentation quality...");
   
   try {
     // Try to use the module function
@@ -253,9 +296,7 @@ export async function runDocsQualityCheck(options = {}) {
       
       const issuesCount = result.totalIssues || 0;
       if (issuesCount > 0) {
-        if (!silentMode) {
-          logger.warn(`Found ${issuesCount} documentation quality issues.`);
-        }
+        silentLogger.warn(`Found ${issuesCount} documentation quality issues.`);
         return { 
           success: false, 
           data: result,
@@ -264,15 +305,11 @@ export async function runDocsQualityCheck(options = {}) {
         };
       }
       
-      if (!silentMode) {
-        logger.success("Documentation quality check passed.");
-      }
+      silentLogger.success("Documentation quality check passed.");
       return { success: true, data: result };
     } else {
       // Fallback to command line
-      if (!silentMode) {
-        logger.info("Using command line fallback for documentation quality check");
-      }
+      silentLogger.info("Using command line fallback for documentation quality check");
       execSync('pnpm run check-docs', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.docsquality || 30000 
@@ -280,9 +317,7 @@ export async function runDocsQualityCheck(options = {}) {
       return { success: true };
     }
   } catch (error) {
-    if (!silentMode) {
-      logger.warn(`Documentation quality check error: ${error.message}`);
-    }
+    silentLogger.warn(`Documentation quality check error: ${error.message}`);
     return { 
       success: false, 
       error: error.message 
@@ -298,9 +333,10 @@ export async function runDocsQualityCheck(options = {}) {
 export async function runDocsFreshnessCheck(options = {}) {
   const { verbose = false, silentMode = false } = options;
   
-  if (!silentMode) {
-    logger.info("Checking documentation freshness...");
-  }
+  // Update silent mode setting
+  silentLogger.setSilent(silentMode);
+  
+  silentLogger.info("Checking documentation freshness...");
   
   try {
     // Try to use the module function with timeout
@@ -319,9 +355,7 @@ export async function runDocsFreshnessCheck(options = {}) {
       
       const staleDocsCount = result.staleDocuments?.length || 0;
       if (staleDocsCount > 0) {
-        if (!silentMode) {
-          logger.warn(`Found ${staleDocsCount} stale documentation files.`);
-        }
+        silentLogger.warn(`Found ${staleDocsCount} stale documentation files.`);
         return { 
           success: false, 
           data: result,
@@ -330,15 +364,11 @@ export async function runDocsFreshnessCheck(options = {}) {
         };
       }
       
-      if (!silentMode) {
-        logger.success("Documentation freshness check passed.");
-      }
+      silentLogger.success("Documentation freshness check passed.");
       return { success: true, data: result };
     } else {
       // Fallback to command line
-      if (!silentMode) {
-        logger.info("Using command line fallback for documentation freshness check");
-      }
+      silentLogger.info("Using command line fallback for documentation freshness check");
       execSync('pnpm run docs:freshness', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.docsfreshness || 30000 
@@ -346,9 +376,7 @@ export async function runDocsFreshnessCheck(options = {}) {
       return { success: true };
     }
   } catch (error) {
-    if (!silentMode) {
-      logger.warn(`Documentation freshness check error: ${error.message}`);
-    }
+    silentLogger.warn(`Documentation freshness check error: ${error.message}`);
     return { 
       success: false, 
       error: error.message 
@@ -364,9 +392,10 @@ export async function runDocsFreshnessCheck(options = {}) {
 export async function runAdvancedTypeScriptCheck(options = {}) {
   const { verbose = false, silentMode = false } = options;
   
-  if (!silentMode) {
-    logger.info("Running advanced TypeScript check...");
-  }
+  // Update silent mode setting
+  silentLogger.setSilent(silentMode);
+  
+  silentLogger.info("Running advanced TypeScript check...");
   
   try {
     // Try to use the module function
@@ -384,9 +413,7 @@ export async function runAdvancedTypeScriptCheck(options = {}) {
       );
       
       if (!result.success) {
-        if (!silentMode) {
-          logger.warn(`TypeScript check failed with ${result.errors?.length || 0} errors.`);
-        }
+        silentLogger.warn(`TypeScript check failed with ${result.errors?.length || 0} errors.`);
         return { 
           success: false, 
           data: result,
@@ -395,15 +422,11 @@ export async function runAdvancedTypeScriptCheck(options = {}) {
         };
       }
       
-      if (!silentMode) {
-        logger.success("TypeScript check passed.");
-      }
+      silentLogger.success("TypeScript check passed.");
       return { success: true, data: result };
     } else {
       // Fallback to command line
-      if (!silentMode) {
-        logger.info("Using command line fallback for TypeScript check");
-      }
+      silentLogger.info("Using command line fallback for TypeScript check");
       execSync('pnpm run workflow:typecheck', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.typecheck || 45000 
@@ -411,9 +434,7 @@ export async function runAdvancedTypeScriptCheck(options = {}) {
       return { success: true };
     }
   } catch (error) {
-    if (!silentMode) {
-      logger.error(`TypeScript check error: ${error.message}`);
-    }
+    silentLogger.error(`TypeScript check error: ${error.message}`);
     return { 
       success: false, 
       error: error.message 
@@ -429,9 +450,10 @@ export async function runAdvancedTypeScriptCheck(options = {}) {
 export async function runAdvancedLintCheck(options = {}) {
   const { verbose = false, silentMode = false } = options;
   
-  if (!silentMode) {
-    logger.info("Running advanced ESLint check...");
-  }
+  // Update silent mode setting
+  silentLogger.setSilent(silentMode);
+  
+  silentLogger.info("Running advanced ESLint check...");
   
   try {
     // Try to use the module function
@@ -449,9 +471,7 @@ export async function runAdvancedLintCheck(options = {}) {
       );
       
       if (!result.success) {
-        if (!silentMode) {
-          logger.warn(`ESLint check failed with ${result.errorCount || 0} errors.`);
-        }
+        silentLogger.warn(`ESLint check failed with ${result.errorCount || 0} errors.`);
         return { 
           success: false, 
           data: result,
@@ -460,15 +480,11 @@ export async function runAdvancedLintCheck(options = {}) {
         };
       }
       
-      if (!silentMode) {
-        logger.success("ESLint check passed.");
-      }
+      silentLogger.success("ESLint check passed.");
       return { success: true, data: result };
     } else {
       // Fallback to command line
-      if (!silentMode) {
-        logger.info("Using command line fallback for ESLint check");
-      }
+      silentLogger.info("Using command line fallback for ESLint check");
       execSync('pnpm run lint', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.lint || 45000 
@@ -476,9 +492,7 @@ export async function runAdvancedLintCheck(options = {}) {
       return { success: true };
     }
   } catch (error) {
-    if (!silentMode) {
-      logger.warn(`ESLint check error: ${error.message}`);
-    }
+    silentLogger.warn(`ESLint check error: ${error.message}`);
     return { 
       success: false, 
       error: error.message 
@@ -494,9 +508,10 @@ export async function runAdvancedLintCheck(options = {}) {
 export async function runWorkflowValidationCheck(options = {}) {
   const { verbose = false, silentMode = false } = options;
   
-  if (!silentMode) {
-    logger.info("Running workflow validation...");
-  }
+  // Update silent mode setting
+  silentLogger.setSilent(silentMode);
+  
+  silentLogger.info("Running workflow validation...");
   
   try {
     // Try to use the module function
@@ -514,9 +529,7 @@ export async function runWorkflowValidationCheck(options = {}) {
       );
       
       if (!result.success) {
-        if (!silentMode) {
-          logger.warn(`Workflow validation failed with ${result.issues?.length || 0} issues.`);
-        }
+        silentLogger.warn(`Workflow validation failed with ${result.issues?.length || 0} issues.`);
         return { 
           success: false, 
           data: result,
@@ -525,15 +538,11 @@ export async function runWorkflowValidationCheck(options = {}) {
         };
       }
       
-      if (!silentMode) {
-        logger.success("Workflow validation passed.");
-      }
+      silentLogger.success("Workflow validation passed.");
       return { success: true, data: result };
     } else {
       // Fallback to command line
-      if (!silentMode) {
-        logger.info("Using command line fallback for workflow validation");
-      }
+      silentLogger.info("Using command line fallback for workflow validation");
       execSync('pnpm run workflow:validate', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.workflowvalidation || 30000 
@@ -541,9 +550,7 @@ export async function runWorkflowValidationCheck(options = {}) {
       return { success: true };
     }
   } catch (error) {
-    if (!silentMode) {
-      logger.warn(`Workflow validation error: ${error.message}`);
-    }
+    silentLogger.warn(`Workflow validation error: ${error.message}`);
     return { 
       success: false, 
       error: error.message 
@@ -559,9 +566,10 @@ export async function runWorkflowValidationCheck(options = {}) {
 export async function runProjectHealthCheck(options = {}) {
   const { verbose = false, silentMode = false } = options;
   
-  if (!silentMode) {
-    logger.info("Running project health checks...");
-  }
+  // Update silent mode setting
+  silentLogger.setSilent(silentMode);
+  
+  silentLogger.info("Running project health checks...");
   
   try {
     // Try to use the module function
@@ -579,9 +587,7 @@ export async function runProjectHealthCheck(options = {}) {
       );
       
       if (!result.success) {
-        if (!silentMode) {
-          logger.warn(`Health checks found ${result.issues?.length || 0} issues.`);
-        }
+        silentLogger.warn(`Health checks found ${result.issues?.length || 0} issues.`);
         return { 
           success: false, 
           data: result,
@@ -590,24 +596,18 @@ export async function runProjectHealthCheck(options = {}) {
         };
       }
       
-      if (!silentMode) {
-        logger.success("Health checks passed.");
-      }
+      silentLogger.success("Health checks passed.");
       return { success: true, data: result };
     } else {
       // Health checks are critical, so no fallback
-      if (!silentMode) {
-        logger.error("Health checker module not available");
-      }
+      silentLogger.error("Health checker module not available");
       return { 
         success: false, 
         error: "Health checker module not available" 
       };
     }
   } catch (error) {
-    if (!silentMode) {
-      logger.error(`Health check error: ${error.message}`);
-    }
+    silentLogger.error(`Health check error: ${error.message}`);
     return { 
       success: false, 
       error: error.message 
@@ -627,6 +627,9 @@ export async function runAllAdvancedChecks(options = {}) {
     ...restOptions
   } = options;
   
+  // Set silent mode for the logger
+  silentLogger.setSilent(silentMode);
+  
   // Initialize results object with default values
   const results = {
     bundleSize: { success: true, skipped: false },
@@ -641,9 +644,7 @@ export async function runAllAdvancedChecks(options = {}) {
   
   // Skip if requested
   if (options.skipAdvancedChecks) {
-    if (!silentMode) {
-      logger.info("Skipping advanced checks as requested.");
-    }
+    silentLogger.info("Skipping advanced checks as requested.");
     
     // Mark all checks as skipped
     Object.keys(results).forEach(key => {
@@ -657,9 +658,7 @@ export async function runAllAdvancedChecks(options = {}) {
     };
   }
   
-  if (!silentMode) {
-    logger.info("Running comprehensive code quality checks...");
-  }
+  silentLogger.info("Running comprehensive code quality checks...");
   
   // Run health checks first since they're more fundamental
   if (!options.skipHealthCheck) {
@@ -674,9 +673,7 @@ export async function runAllAdvancedChecks(options = {}) {
         results.health = { success: false, error: "Health check returned no result" };
       }
     } catch (error) {
-      if (!silentMode) {
-        logger.error(`Health check error: ${error.message}`);
-      }
+      silentLogger.error(`Health check error: ${error.message}`);
       results.health = { 
         success: false, 
         error: error.message,
@@ -684,9 +681,7 @@ export async function runAllAdvancedChecks(options = {}) {
       };
     }
   } else {
-    if (!silentMode) {
-      logger.info("Skipping health checks as requested.");
-    }
+    silentLogger.info("Skipping health checks as requested.");
     results.health = { success: true, skipped: true };
   }
   
@@ -702,15 +697,11 @@ export async function runAllAdvancedChecks(options = {}) {
         results.typescript = { success: false, error: "TypeScript check returned no result" };
       }
     } catch (error) {
-      if (!silentMode) {
-        logger.error(`TypeScript check error: ${error.message}`);
-      }
+      silentLogger.error(`TypeScript check error: ${error.message}`);
       results.typescript = { success: false, error: error.message };
     }
   } else {
-    if (!silentMode) {
-      logger.info("Skipping TypeScript check as requested.");
-    }
+    silentLogger.info("Skipping TypeScript check as requested.");
     results.typescript = { success: true, skipped: true };
   }
   
@@ -726,9 +717,7 @@ export async function runAllAdvancedChecks(options = {}) {
         results.lint = { success: false, error: "Lint check returned no result" };
       }
     } catch (error) {
-      if (!silentMode) {
-        logger.error(`Lint check error: ${error.message}`);
-      }
+      silentLogger.error(`Lint check error: ${error.message}`);
       results.lint = { 
         success: false, 
         error: error.message,
@@ -736,9 +725,7 @@ export async function runAllAdvancedChecks(options = {}) {
       };
     }
   } else {
-    if (!silentMode) {
-      logger.info("Skipping ESLint check as requested.");
-    }
+    silentLogger.info("Skipping ESLint check as requested.");
     results.lint = { success: true, skipped: true };
   }
   
@@ -754,15 +741,11 @@ export async function runAllAdvancedChecks(options = {}) {
         results.workflowValidation = { success: false, error: "Workflow validation returned no result" };
       }
     } catch (error) {
-      if (!silentMode) {
-        logger.error(`Workflow validation error: ${error.message}`);
-      }
+      silentLogger.error(`Workflow validation error: ${error.message}`);
       results.workflowValidation = { success: false, error: error.message, warning: true };
     }
   } else {
-    if (!silentMode) {
-      logger.info("Skipping workflow validation as requested.");
-    }
+    silentLogger.info("Skipping workflow validation as requested.");
     results.workflowValidation = { success: true, skipped: true };
   }
   
@@ -778,15 +761,11 @@ export async function runAllAdvancedChecks(options = {}) {
         results.bundleSize = { success: false, error: "Bundle size check returned no result" };
       }
     } catch (error) {
-      if (!silentMode) {
-        logger.error(`Bundle size check error: ${error.message}`);
-      }
+      silentLogger.error(`Bundle size check error: ${error.message}`);
       results.bundleSize = { success: false, error: error.message, warning: true };
     }
   } else {
-    if (!silentMode) {
-      logger.info("Skipping bundle size check as requested.");
-    }
+    silentLogger.info("Skipping bundle size check as requested.");
     results.bundleSize = { success: true, skipped: true };
   }
   
@@ -802,15 +781,11 @@ export async function runAllAdvancedChecks(options = {}) {
         results.deadCode = { success: false, error: "Dead code check returned no result" };
       }
     } catch (error) {
-      if (!silentMode) {
-        logger.error(`Dead code check error: ${error.message}`);
-      }
+      silentLogger.error(`Dead code check error: ${error.message}`);
       results.deadCode = { success: false, error: error.message, warning: true };
     }
   } else {
-    if (!silentMode) {
-      logger.info("Skipping dead code check as requested.");
-    }
+    silentLogger.info("Skipping dead code check as requested.");
     results.deadCode = { success: true, skipped: true };
   }
   
@@ -826,15 +801,11 @@ export async function runAllAdvancedChecks(options = {}) {
         results.docsQuality = { success: false, error: "Docs quality check returned no result" };
       }
     } catch (error) {
-      if (!silentMode) {
-        logger.error(`Docs quality check error: ${error.message}`);
-      }
+      silentLogger.error(`Docs quality check error: ${error.message}`);
       results.docsQuality = { success: false, error: error.message, warning: true };
     }
   } else {
-    if (!silentMode) {
-      logger.info("Skipping documentation quality check as requested.");
-    }
+    silentLogger.info("Skipping documentation quality check as requested.");
     results.docsQuality = { success: true, skipped: true };
   }
   
@@ -850,15 +821,11 @@ export async function runAllAdvancedChecks(options = {}) {
         results.docsFreshness = { success: false, error: "Docs freshness check returned no result" };
       }
     } catch (error) {
-      if (!silentMode) {
-        logger.error(`Docs freshness check error: ${error.message}`);
-      }
+      silentLogger.error(`Docs freshness check error: ${error.message}`);
       results.docsFreshness = { success: false, error: error.message, warning: true };
     }
   } else {
-    if (!silentMode) {
-      logger.info("Skipping documentation freshness check as requested.");
-    }
+    silentLogger.info("Skipping documentation freshness check as requested.");
     results.docsFreshness = { success: true, skipped: true };
   }
   
@@ -870,10 +837,10 @@ export async function runAllAdvancedChecks(options = {}) {
       message: result.message || result.error || `Warning in ${key} check`
     }));
   
-  if (warnings.length > 0 && options.promptFn && !silentMode) {
-    logger.warn("The following warnings were found in quality checks:");
+  if (warnings.length > 0 && options.promptFn) {
+    silentLogger.warn("The following warnings were found in quality checks:");
     warnings.forEach(({key, message}, index) => {
-      logger.warn(`${index + 1}. [${key}] ${message}`);
+      silentLogger.warn(`${index + 1}. [${key}] ${message}`);
     });
     
     try {
@@ -883,7 +850,7 @@ export async function runAllAdvancedChecks(options = {}) {
       );
       
       if (shouldContinue.toLowerCase() === 'n') {
-        logger.info("Exiting workflow due to quality check warnings.");
+        silentLogger.info("Exiting workflow due to quality check warnings.");
         return { 
           success: false, 
           results,
@@ -891,9 +858,7 @@ export async function runAllAdvancedChecks(options = {}) {
         };
       }
     } catch (error) {
-      if (!silentMode) {
-        logger.warn(`Warning prompt failed: ${error.message}. Continuing.`);
-      }
+      silentLogger.warn(`Warning prompt failed: ${error.message}. Continuing.`);
     }
   }
   
@@ -910,10 +875,10 @@ export async function runAllAdvancedChecks(options = {}) {
     
   const hasCriticalErrors = criticalErrors.length > 0;
   
-  if (hasCriticalErrors && options.promptFn && !silentMode) {
-    logger.error("Critical errors found in quality checks:");
+  if (hasCriticalErrors && options.promptFn) {
+    silentLogger.error("Critical errors found in quality checks:");
     criticalErrors.forEach(({key, message}, index) => {
-      logger.error(`${index + 1}. [${key}] ${message}`);
+      silentLogger.error(`${index + 1}. [${key}] ${message}`);
     });
     
     try {
@@ -923,7 +888,7 @@ export async function runAllAdvancedChecks(options = {}) {
       );
       
       if (shouldContinue.toLowerCase() !== 'y') {
-        logger.info("Exiting workflow due to critical quality check errors.");
+        silentLogger.info("Exiting workflow due to critical quality check errors.");
         return { 
           success: false, 
           results,
@@ -931,15 +896,11 @@ export async function runAllAdvancedChecks(options = {}) {
         };
       }
     } catch (error) {
-      if (!silentMode) {
-        logger.warn(`Error prompt failed: ${error.message}. Continuing.`);
-      }
+      silentLogger.warn(`Error prompt failed: ${error.message}. Continuing.`);
     }
   }
   
-  if (!silentMode) {
-    logger.success("Quality checks complete!");
-  }
+  silentLogger.success("Quality checks complete!");
   
   return {
     success: !hasCriticalErrors || options.ignoreAdvancedFailures,

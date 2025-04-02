@@ -268,6 +268,34 @@ export class PerformanceMonitor {
       )
     ]);
   }
+
+  /**
+   * Measure elapsed time for a step
+   * @param {string} stepName - Name of the step to measure
+   * @returns {number} Duration in milliseconds
+   */
+  measure(stepName) {
+    if (!stepName) {
+      // If no step name is provided, measure total time since start
+      if (!this.metrics.startTime) {
+        return 0; // Not started
+      }
+      return Date.now() - this.metrics.startTime;
+    }
+    
+    // If the step exists, return its duration
+    if (this.metrics.steps[stepName]) {
+      if (this.metrics.steps[stepName].startTime) {
+        // If the step is still running, calculate current duration
+        return Date.now() - this.metrics.steps[stepName].startTime;
+      }
+      // If the step is complete, return stored duration
+      return this.metrics.steps[stepName].duration;
+    }
+    
+    // Step doesn't exist
+    return 0;
+  }
 }
 
 // Create and export a singleton instance
