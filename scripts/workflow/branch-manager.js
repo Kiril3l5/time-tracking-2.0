@@ -252,18 +252,19 @@ export async function commitChanges(branchName, promptFn) {
     } else if (branchName.startsWith('chore/')) {
       suggestedMessage = `chore: ${suggestedMessage}`;
     }
-  } catch (error) {
-    suggestedMessage = 'Update project files';
-  }
-  
-  const commitMessage = await promptFn("Enter commit message", suggestedMessage);
-  
-  try {
-    logger.info("Committing changes...");
-    execSync('git add .');
-    execSync(`git commit -m "${commitMessage}"`, { stdio: 'inherit' });
-    logger.success("Changes committed successfully.");
     
+    // Get commit message from user
+    const commitMessage = await promptFn(`Enter commit message`, suggestedMessage);
+    if (!commitMessage) {
+      logger.error("Commit message is required.");
+      return { success: false };
+    }
+    
+    // Stage and commit changes
+    execSync('git add .', { stdio: 'inherit' });
+    execSync(`git commit -m "${commitMessage}"`, { stdio: 'inherit' });
+    
+    logger.success("Changes committed successfully!");
     return { success: true, message: commitMessage };
   } catch (error) {
     logger.error(`Failed to commit changes: ${error.message}`);

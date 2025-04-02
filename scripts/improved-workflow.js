@@ -6,7 +6,7 @@ import { dirname, join } from 'path';
 import fs from 'fs';
 import { logger } from './core/logger.js';
 import { commandRunner } from './core/command-runner.js';
-import { getCurrentBranch, hasUncommittedChanges } from './workflow/branch-manager.js';
+import { getCurrentBranch, hasUncommittedChanges, commitChanges } from './workflow/branch-manager.js';
 import { QualityChecker } from './workflow/quality-checker.js';
 import { PackageCoordinator } from './workflow/package-coordinator.js';
 import { deployPackage, createChannelId } from './workflow/deployment-manager.js';
@@ -108,6 +108,28 @@ class Workflow {
     if (this.logger && this.logger.setVerbose) {
       this.logger.setVerbose(this.options.verbose);
     }
+  }
+
+  /**
+   * Prompt user for input
+   * @param {string} prompt - The prompt message
+   * @param {string} defaultValue - Default value if user just presses enter
+   * @returns {Promise<string>} User's input
+   */
+  async promptUser(prompt, defaultValue = '') {
+    return new Promise((resolve) => {
+      process.stdin.resume();
+      process.stdin.setEncoding('utf8');
+      
+      // Write the prompt
+      process.stdout.write(prompt);
+      
+      process.stdin.once('data', (data) => {
+        process.stdin.pause();
+        const response = data.trim();
+        resolve(response || defaultValue);
+      });
+    });
   }
 
   /**
@@ -832,66 +854,70 @@ class Workflow {
    */
   async handleBranchOptions() {
     try {
-      const currentBranch = await getCurrentBranch();
-      
-      // Show branch options only if not on main branch
-      if (currentBranch && currentBranch !== 'main' && currentBranch !== 'master') {
-        this.logger.sectionHeader('Branch Management - After Preview');
+      const currentBranch = getCurrentBranch();
+      if (!currentBranch) {
+        throw new Error('Could not determine current branch');
+      }
+
+      // Check for uncommitted changes
+      if (hasUncommittedChanges()) {
+        logger.info('\nYou have uncommitted changes.');
         
-        // Check for uncommitted changes
-        const hasChanges = await hasUncommittedChanges();
-        
-        if (hasChanges) {
-          this.logger.info('You have uncommitted changes.');
-          
-          // Offer commit option
-          const shouldCommit = await this.commandRunner.promptWorkflowOptions(
-            'Now that you\'ve seen the preview, would you like to commit these changes?',
-            ['Yes, commit changes', 'No, keep changes uncommitted']
-          );
-          
-          if (shouldCommit === '1') {
-            // Get commit message
-            const message = await this.commandRunner.promptText(
-              'Enter commit message',
-              `Update project files with preview: ${this.previewUrls?.channelId || 'preview'}`
-            );
-            
-            // Commit changes
-            await this.commandRunner.runCommandAsync('git add .', { stdio: 'pipe' });
-            await this.commandRunner.runCommandAsync(`git commit -m "${message}"`, { stdio: 'pipe' });
-            this.logger.success('Changes committed successfully.');
-          }
-        }
-        
-        // Offer PR creation option
-        const createPr = await this.commandRunner.promptWorkflowOptions(
-          'Would you like to create a pull request with your preview URLs?',
-          ['Yes, create PR', 'No, I\'ll do it later']
+        const choice = await this.promptUser(
+          'Would you like to commit these changes?\n' +
+          '1. Yes, commit changes\n' +
+          '2. No, keep changes uncommitted\n\n' +
+          'Enter your choice (1-2): ',
+          '1'
         );
-        
-        if (createPr === '1') {
-          const title = await this.commandRunner.promptText(
-            'Enter PR title',
-            `Updates from ${currentBranch} with preview`
-          );
-          
-          // Create PR
-          this.logger.info('Creating PR...');
-          try {
-            await this.commandRunner.runCommandAsync(
-              `node scripts/create-pr.js "${title}" "Preview URLs:\\nHours: ${this.previewUrls.hours}\\nAdmin: ${this.previewUrls.admin}"`,
-              { stdio: 'inherit' }
-            );
-          } catch (error) {
-            this.logger.warn(`PR creation error: ${error.message}`);
-            this.logger.info('You can manually create a PR later using the create-pr.js script.');
+
+        if (choice === '1') {
+          const commitResult = await commitChanges(currentBranch, this.promptUser);
+          if (!commitResult.success) {
+            logger.error('Failed to commit changes:', commitResult.error);
+            return;
           }
         }
       }
+
+      // Ask about creating a PR
+      const createPr = await this.promptUser(
+        '\nWould you like to create a pull request with your preview URLs?\n' +
+        '1. Yes, create PR\n' +
+        '2. No, I\'ll do it later\n\n' +
+        'Enter your choice (1-2): ',
+        '1'
+      );
+
+      if (createPr === '1') {
+        // Get PR title and description
+        const defaultTitle = `Updates from ${currentBranch} with preview`;
+        const title = await this.promptUser(
+          `\nEnter PR title (${defaultTitle}): `,
+          defaultTitle
+        );
+
+        const description = `Preview URLs:\n` +
+          `Hours: ${this.previewUrls.hours}\n` +
+          `Admin: ${this.previewUrls.admin}`;
+
+        logger.info('\nCreating PR...');
+        
+        // Use the create-pr script
+        const { execSync } = await import('child_process');
+        try {
+          execSync(`node scripts/create-pr.js "${title}" "${description}"`, { stdio: 'inherit' });
+          logger.success('Pull request created successfully!');
+        } catch (error) {
+          logger.error('Failed to create PR:', error.message);
+          logger.info('\nYou can create the PR manually:');
+          logger.info('1. Go to GitHub and create a new PR');
+          logger.info(`2. Use title: ${title}`);
+          logger.info('3. Copy the preview URLs into the description');
+        }
+      }
     } catch (error) {
-      this.logger.warn(`Branch management options failed: ${error.message}`);
-      this.logger.info('You can manually commit and create a PR if needed.');
+      logger.error('Error handling branch options:', error.message);
     }
   }
 

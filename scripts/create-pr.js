@@ -35,7 +35,7 @@ import { logger } from './core/logger.js';
 import { workflowState } from './workflow/workflow-state.js';
 import { progressTracker } from './core/progress-tracker.js';
 import { performanceMonitor } from './core/performance-monitor.js';
-import { handleError, ValidationError, GitError } from './core/error-handler.js';
+import { handleError, ValidationError, WorkflowError } from './core/error-handler.js';
 
 // Get the root directory
 const __filename = fileURLToPath(import.meta.url);
@@ -510,8 +510,8 @@ async function createPR() {
     // Handle different error types
     if (error instanceof ValidationError) {
       logger.error('Validation error:', error.message);
-    } else if (error instanceof GitError) {
-      logger.error('Git error:', error.message);
+    } else if (error instanceof WorkflowError) {
+      logger.error('Workflow error:', error.message);
     }
     
     return 1;
