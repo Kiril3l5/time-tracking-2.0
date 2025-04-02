@@ -19,6 +19,8 @@ import { cleanupChannels } from './firebase/channel-cleanup.js';
 import { runAllAdvancedChecks } from './workflow/advanced-checker.js';
 import { verifyAllAuth } from './auth/auth-manager.js';
 import { createPR } from './github/pr-manager.js';
+import getWorkflowState from './workflow/workflow-state.js';
+import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -961,72 +963,63 @@ class Workflow {
         throw new Error('Could not determine current branch');
       }
 
+      // Show status of all uncommitted files
+      logger.info('\nChecking git status:');
+      await commandRunner.runCommand('git status --short', { stdio: 'inherit' });
+
       // Check for uncommitted changes
       if (hasUncommittedChanges()) {
         logger.info('\nYou have uncommitted changes.');
         
         const choice = await commandRunner.promptWorkflowOptions(
           'Would you like to commit these changes?',
-          ['Yes, commit changes', 'No, keep changes uncommitted']
+          ['Yes, commit ALL changes', 'No, keep changes uncommitted']
         );
 
         if (choice === '1') {
-          // Use the branch-manager's commitChanges function
-          const commitResult = await commitChanges(currentBranch, (prompt, defaultValue) => 
-            commandRunner.promptText(prompt, defaultValue)
-          );
-          
-          if (!commitResult.success) {
-            logger.error('Failed to commit changes:', commitResult.error);
-            return;
+          // Use execSync directly to avoid commandRunner null reference issues
+          try {
+            // Check git status before adding changes
+            logger.info('Checking git status before adding changes...');
+            const beforeStatus = execSync('git status --porcelain', { encoding: 'utf8' }).trim();
+            logger.info('Files to be added:');
+            logger.info(beforeStatus);
+            
+            // Check for firebase-deploy.yml specifically
+            if (beforeStatus.includes('firebase-deploy.yml')) {
+              logger.info('firebase-deploy.yml is detected in git status');
+            } else {
+              logger.info('firebase-deploy.yml is NOT detected in git status');
+            }
+            
+            logger.info('Adding all changes...');
+            execSync('git add --all', { stdio: 'inherit' });
+            
+            // Check git status after adding changes
+            const afterStatus = execSync('git status --porcelain', { encoding: 'utf8' }).trim();
+            logger.info('Files still uncommitted after git add --all:');
+            logger.info(afterStatus);
+            
+            // Use the branch-manager's commitChanges function which now has all files staged
+            const commitResult = await commitChanges(currentBranch, (prompt, defaultValue) => 
+              commandRunner.promptText(prompt, defaultValue)
+            );
+            
+            logger.success(`Changes pushed to branch: ${currentBranch}`);
+            logger.info('GitHub Actions will run automatically on this push.');
+            logger.info('You can manually create a PR when ready on GitHub.');
+          } catch (error) {
+            logger.error('Error pushing to remote:', error.message);
+            logger.info(`You can manually push with: git push -u origin ${currentBranch}`);
           }
-          
-          logger.success('Changes committed successfully.');
-          
-          // Push changes to remote
-          logger.info('Pushing changes to remote...');
-          const pushResult = await commandRunner.runCommand(
-            `git push -u origin ${currentBranch}`,
-            { stdio: 'inherit' }
-          );
-          
-          if (!pushResult.success) {
-            logger.error('Failed to push to remote:', pushResult.error);
-            return;
-          }
-          
-          logger.success(`Changes pushed to branch: ${currentBranch}`);
-          logger.info('GitHub Actions will run automatically on this push.');
-          logger.info('You can manually create a PR when ready on GitHub.');
-        }
-      } else {
-        // No uncommitted changes, ask if user wants to push
-        const pushChoice = await commandRunner.promptWorkflowOptions(
-          '\nWould you like to push your committed changes to remote?',
-          ['Yes, push changes', 'No, I\'ll do it later']
-        );
-        
-        if (pushChoice === '1') {
-          // Push changes to remote
-          logger.info('Pushing changes to remote...');
-          const pushResult = await commandRunner.runCommand(
-            `git push -u origin ${currentBranch}`,
-            { stdio: 'inherit' }
-          );
-          
-          if (!pushResult.success) {
-            logger.error('Failed to push to remote:', pushResult.error);
-            return;
-          }
-          
-          logger.success(`Changes pushed to branch: ${currentBranch}`);
-          logger.info('GitHub Actions will run automatically on this push.');
-          logger.info('You can manually create a PR when ready on GitHub.');
         }
       }
     } catch (error) {
       logger.error('Error handling branch options:', error.message);
-      logger.info('You can manually commit and push using the git command line.');
+      logger.info('You can manually commit and push using the git command line:');
+      logger.info('1. git add .');
+      logger.info('2. git commit -m "Your message"');
+      logger.info('3. git push -u origin YOUR_BRANCH_NAME');
     }
   }
 }

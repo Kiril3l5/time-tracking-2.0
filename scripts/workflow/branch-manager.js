@@ -7,6 +7,7 @@
 import { execSync } from 'child_process';
 import { logger } from '../core/logger.js';
 import { commandRunner } from '../core/command-runner.js';
+import fs from 'fs';
 
 /**
  * Check if a branch is a feature branch
@@ -308,6 +309,9 @@ export async function commitChanges(branchName, promptFn) {
   }
   
   logger.info("You have uncommitted changes.");
+  
+  // Show detailed status including all files
+  logger.info("Files to be committed:");
   execSync('git status --short', { stdio: 'inherit' });
   
   const shouldCommit = await promptFn("Would you like to commit these changes? (Y/n)", "Y");
@@ -316,6 +320,30 @@ export async function commitChanges(branchName, promptFn) {
   }
   
   try {
+    // Always add ALL files first - this is critical to avoid missing files
+    logger.info("Adding all changes...");
+    execSync('git add --all', { stdio: 'inherit' });
+    
+    // Explicitly check for GitHub workflow files and add them if they exist
+    const workflowsDir = '.github/workflows';
+    if (fs.existsSync(workflowsDir)) {
+      logger.info("Adding GitHub workflow files...");
+      
+      // Specifically add firebase-deploy.yml if it exists
+      const firebaseDeployFile = `${workflowsDir}/firebase-deploy.yml`;
+      if (fs.existsSync(firebaseDeployFile)) {
+        logger.info("Explicitly adding firebase-deploy.yml...");
+        execSync(`git add "${firebaseDeployFile}"`, { stdio: 'inherit' });
+      }
+      
+      // Add all files in the workflows directory
+      execSync(`git add "${workflowsDir}/"`, { stdio: 'inherit' });
+    }
+    
+    // Verify what's been staged
+    logger.info("Staged files:");
+    execSync('git status --short', { stdio: 'inherit' });
+    
     // Get last edited files for smart commit message
     const lastEditedFiles = getLastEditedFiles();
     
@@ -329,9 +357,8 @@ export async function commitChanges(branchName, promptFn) {
       return { success: false };
     }
     
-    // Stage and commit changes
+    // Commit all staged changes
     logger.info("Committing changes...");
-    execSync('git add .', { stdio: 'inherit' });
     execSync(`git commit -m "${commitMessage.replace(/"/g, '\\"')}"`, { stdio: 'inherit' });
     
     // Verify commit actually happened
@@ -340,7 +367,13 @@ export async function commitChanges(branchName, promptFn) {
       logger.warn("Commit operation may not have completed successfully.");
     }
     
-    logger.success("Changes committed successfully!");
+    // Check if we still have uncommitted changes
+    if (hasUncommittedChanges()) {
+      logger.warn("Some changes were not committed. You may need to run 'git add .' manually.");
+    } else {
+      logger.success("All changes committed successfully!");
+    }
+    
     return { success: true, message: commitMessage };
   } catch (error) {
     logger.error(`Failed to commit changes: ${error.message}`);
