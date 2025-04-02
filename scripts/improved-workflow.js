@@ -18,7 +18,7 @@ import { setTimeout } from 'timers/promises';
 import { cleanupChannels } from './firebase/channel-cleanup.js';
 import { runAllAdvancedChecks } from './workflow/advanced-checker.js';
 import { verifyAllAuth } from './auth/auth-manager.js';
-import readline from 'readline';
+import { createPR } from './github/pr-manager.js';
 import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -110,29 +110,6 @@ class Workflow {
     if (this.logger && this.logger.setVerbose) {
       this.logger.setVerbose(this.options.verbose);
     }
-  }
-
-  /**
-   * Prompt user for input, properly waiting for ENTER keypress
-   * @param {string} prompt - The prompt message
-   * @param {string} defaultValue - Default value if user just presses enter
-   * @returns {Promise<string>} User's input
-   */
-  async promptUser(prompt, defaultValue = '') {
-    return new Promise((resolve) => {
-      // Create a readline interface for better input handling
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout
-      });
-      
-      // Show prompt with default value if provided
-      rl.question(`${prompt}`, (answer) => {
-        rl.close();
-        // Return user input or default value if empty
-        resolve(answer.trim() || defaultValue);
-      });
-    });
   }
 
   /**
@@ -274,39 +251,6 @@ class Workflow {
       if (this.options.verbose && error.stack) {
         this.logger.error('\nStack Trace:');
         this.logger.error(error.stack);
-      }
-      
-      // Try to generate a minimal dashboard with the error info
-      try {
-        if (this.workflowSteps && this.workflowSteps.length > 0) {
-          const _failureReport = await generateReport({
-            timestamp: new Date().toISOString(),
-            preview: this.previewUrls,
-            workflow: {
-              options: this.options,
-              git: {
-                branch: await getCurrentBranch(),
-              },
-              steps: this.workflowSteps
-            },
-            warnings: this.workflowWarnings || [],
-            errors: [{ message: error.message, stack: error.stack }],
-            advancedChecks: this.advancedCheckResults
-          });
-          this.logger.info('Error dashboard generated - check your browser');
-        }
-      } catch (e) {
-        // If dashboard generation fails, provide minimal troubleshooting info
-        this.logger.info('\n▶ Troubleshooting:');
-        this.logger.info('• Try running with --verbose flag for more details');
-        this.logger.info('• Check the logs in temp/logs/ for complete information');
-        
-        // Show preview URLs if available (might be useful even if other parts failed)
-        if (this.previewUrls) {
-          this.logger.info('\nPreview URLs:');
-          this.logger.info(`Hours App: ${this.previewUrls.hours || 'Not available'}`);
-          this.logger.info(`Admin App: ${this.previewUrls.admin || 'Not available'}`);
-        }
       }
       
       process.exit(1);
@@ -853,133 +797,6 @@ class Workflow {
   }
 
   /**
-   * Handle branch options after seeing preview
-   */
-  async handleBranchOptions() {
-    try {
-      const currentBranch = getCurrentBranch();
-      if (!currentBranch) {
-        throw new Error('Could not determine current branch');
-      }
-
-      // Check for uncommitted changes
-      if (hasUncommittedChanges()) {
-        logger.info('\nYou have uncommitted changes.');
-        
-        const choice = await this.promptUser(
-          'Would you like to commit these changes?\n' +
-          '1. Yes, commit changes\n' +
-          '2. No, keep changes uncommitted\n\n' +
-          'Enter your choice (1-2): ',
-          '1'
-        );
-
-        if (choice === '1') {
-          const commitResult = await commitChanges(currentBranch, (prompt, defaultValue) => 
-            this.promptUser(prompt, defaultValue)
-          );
-          if (!commitResult.success) {
-            logger.error('Failed to commit changes:', commitResult.error);
-            return;
-          }
-        }
-      }
-
-      // Ask about creating a PR
-      const createPr = await this.promptUser(
-        '\nWould you like to create a pull request with your preview URLs?\n' +
-        '1. Yes, create PR\n' +
-        '2. No, I\'ll do it later\n\n' +
-        'Enter your choice (1-2): ',
-        '1'
-      );
-
-      if (createPr === '1') {
-        // Get PR title and description
-        const defaultTitle = `Updates from ${currentBranch}`;
-        const title = await this.promptUser(
-          `\nEnter PR title [${defaultTitle}]: `,
-          defaultTitle
-        );
-
-        const description = this.previewUrls && this.previewUrls.hours && this.previewUrls.admin ?
-          `Preview URLs:\n- Hours: ${this.previewUrls.hours}\n- Admin: ${this.previewUrls.admin}` :
-          'Preview deployment';
-
-        logger.info('\nCreating PR...');
-        
-        // DIRECT GITHUB CLI INTEGRATION - no child process
-        try {
-          // Verify GitHub CLI
-          try {
-            execSync('gh --version', { stdio: 'pipe' });
-          } catch (error) {
-            throw new Error('GitHub CLI not installed. Please install it from https://cli.github.com/');
-          }
-          
-          // Check auth status
-          try {
-            const authStatus = execSync('gh auth status', { stdio: 'pipe', encoding: 'utf8' });
-            if (!authStatus.includes('Logged in to')) {
-              throw new Error('Not authenticated with GitHub. Run: gh auth login');
-            }
-          } catch (error) {
-            throw new Error(`GitHub authentication required: ${error.message}`);
-          }
-          
-          // Push to remote
-          logger.info(`Pushing branch '${currentBranch}' to remote...`);
-          try {
-            execSync(`git push -u origin ${currentBranch}`, { stdio: 'inherit' });
-          } catch (error) {
-            if (error.message.includes('Permission to')) {
-              throw new Error('Permission denied. Check your GitHub access rights.');
-            } else {
-              throw new Error(`Failed to push to remote: ${error.message}`);
-            }
-          }
-          
-          // Create PR
-          logger.info('Creating pull request...');
-          // Escape quotes in title and description
-          const safeTitle = title.replace(/"/g, '\\"');
-          const safeDescription = description.replace(/"/g, '\\"');
-          
-          const result = execSync(
-            `gh pr create --title "${safeTitle}" --body "${safeDescription}"`, 
-            { stdio: 'pipe', encoding: 'utf8' }
-          );
-          
-          // Find PR URL in result
-          const prUrl = result.match(/(https:\/\/github\.com\/.*\/pull\/\d+)/);
-          if (prUrl && prUrl[1]) {
-            logger.success(`PR created successfully: ${prUrl[1]}`);
-            
-            // Open in browser
-            try {
-              execSync('gh pr view --web', { stdio: 'pipe' });
-            } catch (err) {
-              // Ignore browser open errors
-            }
-          } else {
-            logger.success('PR created successfully!');
-          }
-        } catch (error) {
-          logger.error(`Failed to create PR: ${error.message}`);
-          logger.info('\nYou can create a PR manually:');
-          logger.info('1. Go to GitHub and create a new PR');
-          logger.info(`2. Use branch: ${currentBranch}`);
-          logger.info(`3. With title: ${title}`);
-          logger.info('4. Include the preview URLs in your description');
-        }
-      }
-    } catch (error) {
-      logger.error('Error handling branch options:', error.message);
-      logger.info('\nYou can create a PR manually using GitHub\'s web interface.');
-    }
-  }
-
-  /**
    * Results Phase
    */
   async generateResults() {
@@ -1132,6 +949,116 @@ class Workflow {
           warnings: this.workflowWarnings
         }
       };
+    }
+  }
+
+  /**
+   * Handle branch options after seeing preview
+   */
+  async handleBranchOptions() {
+    try {
+      const currentBranch = getCurrentBranch();
+      if (!currentBranch) {
+        throw new Error('Could not determine current branch');
+      }
+
+      // Check for uncommitted changes
+      if (hasUncommittedChanges()) {
+        logger.info('\nYou have uncommitted changes.');
+        
+        // Use commandRunner for proper input handling
+        const choice = await commandRunner.promptWorkflowOptions(
+          'Would you like to commit these changes?',
+          ['Yes, commit changes', 'No, keep changes uncommitted']
+        );
+
+        if (choice === '1') {
+          logger.info('Committing changes...');
+          
+          // Get commit message suggestion based on branch name
+          const branchName = currentBranch.replace(/^(feature\/|fix\/|bugfix\/|docs\/|chore\/)/, '');
+          const suggestedMessage = branchName
+            .split('-')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+          
+          // Use commandRunner for proper input handling
+          const commitMessage = await commandRunner.promptText(
+            'Enter commit message',
+            suggestedMessage
+          );
+          
+          // Commit changes
+          const stageResult = await commandRunner.runCommandAsync('git add .', { stdio: 'inherit' });
+          if (!stageResult.success) {
+            logger.error('Failed to stage changes:', stageResult.error);
+            return;
+          }
+          
+          const commitResult = await commandRunner.runCommandAsync(`git commit -m "${commitMessage}"`, { stdio: 'inherit' });
+          if (!commitResult.success) {
+            logger.error('Failed to commit changes:', commitResult.error);
+            return;
+          }
+          
+          logger.success('Changes committed successfully.');
+        }
+      }
+
+      // Ask about creating a PR
+      // Use commandRunner for proper input handling
+      const createPrChoice = await commandRunner.promptWorkflowOptions(
+        '\nWould you like to create a pull request with your preview URLs?',
+        ['Yes, create PR', 'No, I\'ll do it later']
+      );
+
+      if (createPrChoice === '1') {
+        // Use commandRunner for proper input handling
+        const defaultTitle = `Updates from ${currentBranch}`;
+        const title = await commandRunner.promptText(
+          'Enter PR title',
+          defaultTitle
+        );
+
+        const description = this.previewUrls && this.previewUrls.hours && this.previewUrls.admin ?
+          `Preview URLs:\n- Hours: ${this.previewUrls.hours}\n- Admin: ${this.previewUrls.admin}` :
+          'Preview deployment';
+
+        logger.info('\nCreating PR...');
+        
+        // Push changes to remote
+        logger.info(`Pushing changes to remote...`);
+        const pushResult = await commandRunner.runCommandAsync(`git push -u origin ${currentBranch}`, { stdio: 'inherit' });
+        if (!pushResult.success) {
+          logger.error('Failed to push to remote:', pushResult.error);
+          return;
+        }
+        
+        // Use PR manager for PR creation instead of direct CLI
+        const prResult = await createPR({
+          title,
+          body: description,
+          baseBranch: 'main',
+          headBranch: currentBranch
+        });
+        
+        if (prResult.success) {
+          logger.success(`PR created successfully: ${prResult.prUrl}`);
+          
+          // Open the PR in browser
+          await commandRunner.runCommandAsync('gh pr view --web', { stdio: 'pipe' });
+        } else {
+          logger.error('Failed to create PR:', prResult.error);
+          logger.info('\nYou can create a PR manually:');
+          logger.info('1. Go to GitHub and create a new PR');
+          logger.info(`2. Use branch: ${currentBranch}`);
+          logger.info(`3. With title: ${title}`);
+          logger.info('4. Include the preview URLs in your description');
+        }
+      }
+    } catch (error) {
+      logger.error('Error handling branch options:', error.message);
+      logger.info('\nYou can create a PR manually using GitHub\'s web interface.');
     }
   }
 }

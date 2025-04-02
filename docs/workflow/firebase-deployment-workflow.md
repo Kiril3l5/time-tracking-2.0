@@ -194,6 +194,13 @@ The deployment workflow has received several optimizations:
    - Improved examples
    - Better error resolution guidance
 
+8. **Firebase Configuration Management**
+   - Environment variables used for secure configuration handling
+   - Separation of development and production configurations
+   - GitHub Actions secrets for sensitive Firebase credentials
+   - Automatic injection of Firebase configuration during CI/CD builds
+   - Consistent configuration between local, preview, and production environments
+
 ## Testing and Authentication Architecture
 
 The deployment workflow uses Google Cloud Workload Identity Federation for secure authentication:
@@ -204,6 +211,54 @@ The deployment workflow uses Google Cloud Workload Identity Federation for secur
    - Provides short-lived, scoped access tokens
    - Restricts access to specific repositories
    - Applies principle of least privilege
+
+## Firebase Configuration Management
+
+The deployment workflow uses environment variables to securely manage Firebase configuration:
+
+1. **Local Development**: 
+   - Configuration stored in `.env` files (not committed to Git)
+   - Example configuration provided in `.env.example`
+   - Local environment variables loaded by Vite during development and build
+
+2. **CI/CD Deployments**:
+   - Firebase configuration stored as GitHub repository secrets:
+     - `FIREBASE_API_KEY`
+     - `FIREBASE_AUTH_DOMAIN`
+     - `FIREBASE_PROJECT_ID`
+     - `FIREBASE_STORAGE_BUCKET`
+     - `FIREBASE_MESSAGING_SENDER_ID`
+     - `FIREBASE_APP_ID`
+     - `FIREBASE_MEASUREMENT_ID`
+   - GitHub Actions automatically injects these secrets as environment variables during build
+   - Same configuration used for both PR previews and production deployments
+
+3. **Configuration Access in Code**:
+   - Firebase configuration accessed via `import.meta.env` variables
+   - Vite replaces these variables at build time
+   - Runtime configuration validation prevents missing configuration errors
+
+To set up Firebase configuration in GitHub:
+
+1. Go to your repository settings: `Settings > Secrets and variables > Actions`
+2. Add each Firebase configuration value as a repository secret
+3. Ensure the workflow YAML file has the environment variable section for each deployment step
+
+```yaml
+# Example from the workflow
+- name: Build packages
+  env:
+    VITE_FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+    VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+    VITE_FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+    VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+    VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+    VITE_FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+    VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
+    VITE_USE_FIREBASE_EMULATOR: "false"
+  run: |
+    pnpm run build:all
+```
 
 ## Preview Channel Management
 
@@ -257,17 +312,41 @@ If you encounter issues with the deployment workflow:
      pnpm run preview --skip-bundle-analysis
      ```
 
+3. **Firebase Configuration Errors**:
+   - Error: `Missing Firebase configuration: apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId`
+   - Solution: 
+     - For local development: Check that your `.env` file exists with all required Firebase variables
+     - For CI/CD: Verify GitHub secrets are correctly set up
+     - For production: Ensure env variables are passed to the build step in workflow YAML
+
+   ```bash
+   # Verify local environment variables
+   cat .env | grep VITE_FIREBASE
+
+   # Check GitHub workflow file for proper env configuration
+   cat .github/workflows/firebase-deploy.yml
+   ```
+
+   The Firebase configuration is accessed at build time, not runtime. If you see this error in a deployed app, it means the environment variables weren't available during the build process.
+
 ### CI/CD Issues
 
-1. **Authentication Failures**:
-   - Verify Workload Identity Federation setup
-   - Check service account permissions
-   - Ensure GitHub repository is configured correctly
+1. **CI/CD Authentication Issues**:
+   - If GitHub Actions can't authenticate with Firebase, check your Workload Identity configuration
+   - Check Google Cloud IAM permissions
+   - Review service account roles
 
-2. **Build or Test Failures**:
-   - Check GitHub Actions logs
-   - Test locally with the same Node.js version
-   - Verify package.json scripts match CI configuration
+2. **Firebase Configuration in CI/CD**:
+   - If deployment fails with "Missing Firebase configuration" or shows a blank white screen:
+     - Verify that GitHub Secrets are properly set up (case-sensitive)
+     - Ensure all build steps include the necessary environment variables
+     - Check workflow logs to see if environment variables were passed correctly
+   - Common mistake: Adding environment variables to the deploy step but forgetting the build step
+
+3. **Preview Deployment Failures**:
+   - If preview channels fail but production works, check if branch-specific environment variables are different
+   - Check Firebase Hosting logs for errors
+   - Verify channel permissions
 
 ## Best Practices
 

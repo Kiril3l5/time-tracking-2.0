@@ -6,7 +6,7 @@
 
 import { logger } from '../core/logger.js';
 import { commandRunner } from '../core/command-runner.js';
-import { workflowState } from '../workflow/workflow-state.js';
+import getWorkflowState from '../workflow/workflow-state.js';
 import { setTimeout } from 'timers/promises';
 
 /**
@@ -65,6 +65,7 @@ export async function createPR(options) {
         const prUrl = result.stdout.trim();
         
         // Update workflow state
+        const workflowState = getWorkflowState();
         workflowState.updateState({
           prUrl,
           prStatus: 'created'
@@ -130,6 +131,7 @@ export async function updatePR(options) {
     }
 
     // Update workflow state
+    const workflowState = getWorkflowState();
     workflowState.updateState({
       prStatus: 'updated'
     });
@@ -171,6 +173,7 @@ export async function checkPRStatus(prNumber) {
     const status = JSON.parse(result.stdout);
 
     // Update workflow state
+    const workflowState = getWorkflowState();
     workflowState.updateState({
       prStatus: status.state,
       prMergeable: status.mergeable,
@@ -234,6 +237,7 @@ export async function mergePR(options) {
     }
 
     // Update workflow state
+    const workflowState = getWorkflowState();
     workflowState.updateState({
       prStatus: 'merged'
     });
