@@ -19,6 +19,7 @@ import { cleanupChannels } from './firebase/channel-cleanup.js';
 import { runAllAdvancedChecks } from './workflow/advanced-checker.js';
 import { verifyAllAuth } from './auth/auth-manager.js';
 import readline from 'readline';
+import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -907,36 +908,70 @@ class Workflow {
 
         logger.info('\nCreating PR...');
         
-        // Use child_process for better control
-        const { spawn } = await import('child_process');
-        
-        // Create a process for create-pr.js
-        const createPrProcess = spawn('node', [
-          'scripts/create-pr.js',
-          title,
-          description
-        ], {
-          stdio: 'inherit', // Show output directly to the console
-          shell: true
-        });
-
-        // Wait for the process to complete
-        await new Promise((resolve, reject) => {
-          createPrProcess.on('close', (code) => {
-            if (code === 0) {
-              logger.success('Pull request created successfully!');
-              resolve();
-            } else {
-              logger.error(`PR creation failed with code ${code}`);
-              reject(new Error(`PR creation process exited with code ${code}`));
-            }
-          });
+        // DIRECT GITHUB CLI INTEGRATION - no child process
+        try {
+          // Verify GitHub CLI
+          try {
+            execSync('gh --version', { stdio: 'pipe' });
+          } catch (error) {
+            throw new Error('GitHub CLI not installed. Please install it from https://cli.github.com/');
+          }
           
-          createPrProcess.on('error', (err) => {
-            logger.error('PR creation error:', err.message);
-            reject(err);
-          });
-        });
+          // Check auth status
+          try {
+            const authStatus = execSync('gh auth status', { stdio: 'pipe', encoding: 'utf8' });
+            if (!authStatus.includes('Logged in to')) {
+              throw new Error('Not authenticated with GitHub. Run: gh auth login');
+            }
+          } catch (error) {
+            throw new Error(`GitHub authentication required: ${error.message}`);
+          }
+          
+          // Push to remote
+          logger.info(`Pushing branch '${currentBranch}' to remote...`);
+          try {
+            execSync(`git push -u origin ${currentBranch}`, { stdio: 'inherit' });
+          } catch (error) {
+            if (error.message.includes('Permission to')) {
+              throw new Error('Permission denied. Check your GitHub access rights.');
+            } else {
+              throw new Error(`Failed to push to remote: ${error.message}`);
+            }
+          }
+          
+          // Create PR
+          logger.info('Creating pull request...');
+          // Escape quotes in title and description
+          const safeTitle = title.replace(/"/g, '\\"');
+          const safeDescription = description.replace(/"/g, '\\"');
+          
+          const result = execSync(
+            `gh pr create --title "${safeTitle}" --body "${safeDescription}"`, 
+            { stdio: 'pipe', encoding: 'utf8' }
+          );
+          
+          // Find PR URL in result
+          const prUrl = result.match(/(https:\/\/github\.com\/.*\/pull\/\d+)/);
+          if (prUrl && prUrl[1]) {
+            logger.success(`PR created successfully: ${prUrl[1]}`);
+            
+            // Open in browser
+            try {
+              execSync('gh pr view --web', { stdio: 'pipe' });
+            } catch (err) {
+              // Ignore browser open errors
+            }
+          } else {
+            logger.success('PR created successfully!');
+          }
+        } catch (error) {
+          logger.error(`Failed to create PR: ${error.message}`);
+          logger.info('\nYou can create a PR manually:');
+          logger.info('1. Go to GitHub and create a new PR');
+          logger.info(`2. Use branch: ${currentBranch}`);
+          logger.info(`3. With title: ${title}`);
+          logger.info('4. Include the preview URLs in your description');
+        }
       }
     } catch (error) {
       logger.error('Error handling branch options:', error.message);

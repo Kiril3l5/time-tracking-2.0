@@ -343,47 +343,118 @@ async function createGitHubPR(title, body) {
   try {
     logger.info('Creating PR on GitHub...');
     
-    // Verify authentication
-    if (!checkGitHubAuth()) {
-      throw new Error('GitHub authentication required');
+    // Verify GitHub CLI is installed
+    try {
+      executeCommand('gh --version', { stdio: 'pipe' });
+    } catch (error) {
+      throw new Error(`GitHub CLI not installed. Please install it first: npm install -g gh or go to https://cli.github.com/`);
     }
     
-    // Push changes to remote
-    logger.info('Pushing changes to remote...');
+    // Check authentication status
+    try {
+      const authStatus = executeCommand('gh auth status', { stdio: 'pipe' });
+      if (!authStatus || !authStatus.includes('Logged in to')) {
+        throw new Error('Not authenticated with GitHub. Run: gh auth login');
+      }
+    } catch (error) {
+      throw new Error(`GitHub authentication required. Run: gh auth login (${error.message})`);
+    }
+    
+    // Get current branch
+    const branch = executeCommand('git branch --show-current', { encoding: 'utf8' }).trim();
+    if (!branch) {
+      throw new Error('Could not determine current branch');
+    }
+    
+    // Push changes to remote if not skipped
     if (!options.skipPush) {
-      const branch = executeCommand('git branch --show-current', { encoding: 'utf8' }).trim();
-      executeCommand(`git push -u origin ${branch}`, { stdio: 'inherit' });
-    }
-    
-    // Create PR using GitHub CLI
-    logger.info('Creating pull request...');
-    const result = executeCommand(
-      `gh pr create --title "${title}" --body "${body.replace(/"/g, '\\"')}"`, 
-      { stdio: 'pipe' }
-    );
-    
-    // Extract PR URL from result
-    const prUrl = result.match(/(https:\/\/github\.com\/.*\/pull\/\d+)/);
-    if (prUrl && prUrl[1]) {
-      logger.success(`PR created successfully: ${prUrl[1]}`);
-      
-      // Open PR in browser if not in CI
-      if (!process.env.CI) {
-        executeCommand(`gh pr view --web`, { stdio: 'pipe' });
+      logger.info(`Pushing branch '${branch}' to remote...`);
+      try {
+        executeCommand(`git push -u origin ${branch}`, { stdio: 'inherit' });
+      } catch (error) {
+        if (error.message.includes('remote: Permission to')) {
+          throw new Error(`Permission denied pushing to remote. Check your GitHub access rights.`);
+        } else if (error.message.includes('fatal: could not read Username')) {
+          throw new Error(`Git credentials not stored. Run 'gh auth login' to authenticate.`);
+        } else {
+          throw new Error(`Failed to push to remote: ${error.message}`);
+        }
       }
     }
     
-    return true;
+    // Create the PR using GitHub CLI
+    logger.info('Creating pull request...');
+    try {
+      // Escape any quotes in the title/body to prevent command injection
+      const safeTitle = title.replace(/"/g, '\\"');
+      const safeBody = body.replace(/"/g, '\\"');
+      
+      // Run the PR creation command
+      const result = executeCommand(
+        `gh pr create --title "${safeTitle}" --body "${safeBody}"`, 
+        { stdio: 'pipe' }
+      );
+      
+      // Extract PR URL from result
+      const prUrl = result.match(/(https:\/\/github\.com\/.*\/pull\/\d+)/);
+      if (prUrl && prUrl[1]) {
+        logger.success(`PR created successfully: ${prUrl[1]}`);
+        
+        // Open the PR in browser if not in CI
+        if (!process.env.CI) {
+          try {
+            executeCommand(`gh pr view --web`, { stdio: 'pipe' });
+            logger.info('Opened PR in browser');
+          } catch (error) {
+            logger.warn(`Could not open PR in browser: ${error.message}`);
+          }
+        }
+        
+        return true;
+      } else {
+        logger.warn('PR created but could not extract URL from response');
+        return true;
+      }
+    } catch (error) {
+      if (error.message.includes('already exists')) {
+        logger.info('PR already exists for this branch');
+        try {
+          executeCommand(`gh pr view --web`, { stdio: 'pipe' });
+          logger.info('Opened existing PR in browser');
+        } catch (err) {
+          logger.warn(`Could not open existing PR: ${err.message}`);
+        }
+        return true;
+      } else {
+        throw new Error(`Failed to create PR: ${error.message}`);
+      }
+    }
   } catch (error) {
-    logger.error('Failed to create PR:', error.message);
+    logger.error(`PR creation failed: ${error.message}`);
     
+    // Provide helpful guidance based on the error
     if (error.message.includes('authentication')) {
       logger.info('Run `gh auth login` to authenticate with GitHub');
+    } else if (error.message.includes('Permission denied')) {
+      logger.info('Check your GitHub access rights for this repository');
     } else if (error.message.includes('push')) {
-      logger.info('Failed to push to remote. Check your network connection and GitHub access.');
-    } else {
-      logger.info('You can create the PR manually through the GitHub web interface.');
+      logger.info('Try running: git push -u origin <your-branch-name>');
+    } 
+    
+    // Try to get branch name for manual instructions
+    let branchName = "<your-branch-name>";
+    try {
+      branchName = executeCommand('git branch --show-current', { encoding: 'utf8' }).trim() || branchName;
+    } catch (err) {
+      // Silently handle errors getting branch name
     }
+    
+    logger.info('\nAlternatively, you can create a PR manually through GitHub\'s web interface:');
+    logger.info(`1. Go to your repository on GitHub and create a new PR`);
+    logger.info(`2. Select branch: "${branchName}"`);
+    logger.info(`3. Enter title: "${title}"`);
+    logger.info('4. Enter your description with preview URLs');
+    logger.info('5. Click "Create pull request"');
     
     return false;
   }
@@ -396,8 +467,7 @@ async function createPR() {
   const startTime = Date.now();
   
   try {
-    // Initialize monitoring
-    performanceMonitor.startOperation('create-pr');
+    // Initialize progress tracking only
     progressTracker.initProgress(4, 'Pull Request Creation');
     
     // Show help and exit if requested
@@ -503,25 +573,7 @@ async function createPR() {
     }
     
     return 1;
-  } finally {
-    performanceMonitor.endOperation('create-pr');
   }
-}
-
-/**
- * Simple function to get user input
- * @returns {Promise<string>} User input
- */
-function getUserInput(prompt, defaultValue) {
-  return new Promise((resolve) => {
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-    process.stdin.once('data', (data) => {
-      process.stdin.pause();
-      const response = data.trim();
-      resolve(response || defaultValue);
-    });
-  });
 }
 
 // Run the main function
