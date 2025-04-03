@@ -380,22 +380,103 @@ export async function commitChanges(branchName, promptFn) {
       // Check if branch exists on remote
       const remoteBranchExists = execSync(`git ls-remote --heads origin ${branchName}`, { encoding: 'utf8' }).trim();
       
+      // Get local commit hash for verification
+      const localCommitHash = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+      logger.debug(`Local commit hash: ${localCommitHash}`);
+      
       if (remoteBranchExists) {
         // Branch exists on remote, do a regular push
+        logger.info(`Branch ${branchName} exists on remote, pushing changes...`);
         execSync(`git push origin ${branchName}`, { stdio: 'inherit' });
       } else {
         // Branch doesn't exist on remote, set upstream
+        logger.info(`Branch ${branchName} is new, setting upstream...`);
         execSync(`git push -u origin ${branchName}`, { stdio: 'inherit' });
       }
       
-      logger.success(`Changes pushed to remote branch: ${branchName}`);
+      // Verify push was successful by checking if the local commit exists on remote
+      logger.info("Verifying push was successful...");
+      try {
+        // Pull the latest remote refs
+        execSync('git fetch origin', { stdio: 'pipe' });
+        
+        // Get the remote hash after push
+        const remoteCommitHash = execSync(`git rev-parse origin/${branchName}`, { encoding: 'utf8' }).trim();
+        logger.debug(`Remote commit hash: ${remoteCommitHash}`);
+        
+        if (localCommitHash === remoteCommitHash) {
+          logger.success(`Push verification successful - commit ${localCommitHash.substring(0, 7)} is on GitHub`);
+        } else {
+          logger.warn(`Push verification failed - local and remote commits don't match`);
+          logger.info("Trying push with verbose output...");
+          
+          // Try again with more verbose output
+          execSync(`git push -v origin ${branchName}`, { stdio: 'inherit' });
+          
+          // Check again
+          const retryRemoteHash = execSync(`git rev-parse origin/${branchName}`, { encoding: 'utf8' }).trim();
+          
+          if (localCommitHash === retryRemoteHash) {
+            logger.success(`Second push attempt successful - commit ${localCommitHash.substring(0, 7)} is on GitHub`);
+          } else {
+            throw new Error("Changes were committed but could not be pushed to GitHub");
+          }
+        }
+        
+        // Check if GitHub Actions workflow exists in the repo
+        const workflowDir = '.github/workflows';
+        if (fs.existsSync(workflowDir)) {
+          logger.info("GitHub Actions workflows detected - checking for trigger events...");
+          
+          // List workflow files
+          const workflows = fs.readdirSync(workflowDir)
+            .filter(file => file.endsWith('.yml') || file.endsWith('.yaml'));
+          
+          if (workflows.length > 0) {
+            logger.info(`Found ${workflows.length} workflow files: ${workflows.join(', ')}`);
+          } else {
+            logger.warn("No workflow files found in .github/workflows");
+          }
+        }
+        
+        // Check recent GitHub activity to see if workflow was triggered
+        try {
+          logger.info("Checking for recently triggered GitHub Actions...");
+          // Using git command to avoid third party dependencies
+          const repoUrl = execSync('git remote get-url origin', { encoding: 'utf8' }).trim()
+            .replace('git@github.com:', 'https://github.com/')
+            .replace(/\.git$/, '');
+          
+          logger.info(`GitHub repo URL: ${repoUrl}`);
+          logger.info(`Check GitHub Actions at: ${repoUrl}/actions`);
+        } catch (actionsError) {
+          logger.debug(`Error checking GitHub Actions: ${actionsError.message}`);
+        }
+        
+        logger.success(`Changes pushed to remote branch: ${branchName}`);
+        return { success: true, message: commitMessage, pushed: true };
+      } catch (verifyError) {
+        logger.error(`Push verification failed: ${verifyError.message}`);
+        logger.warn("Changes may not have been pushed to GitHub properly");
+        logger.info(`Please check manually and run: git push -v origin ${branchName}`);
+        
+        return { 
+          success: true, 
+          message: commitMessage, 
+          pushed: false,
+          pushError: `Push verification failed: ${verifyError.message}`
+        };
+      }
     } catch (pushError) {
       logger.error(`Failed to push changes: ${pushError.message}`);
       logger.info(`You can manually push with: git push -u origin ${branchName}`);
-      return { success: true, message: commitMessage, pushError: pushError.message };
+      return { 
+        success: true, 
+        message: commitMessage, 
+        pushed: false,
+        pushError: pushError.message 
+      };
     }
-    
-    return { success: true, message: commitMessage, pushed: true };
   } catch (error) {
     logger.error(`Failed to commit changes: ${error.message}`);
     return { success: false, error: error.message };

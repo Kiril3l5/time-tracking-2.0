@@ -1031,13 +1031,58 @@ class Workflow {
             if (commitResult.pushed) {
               logger.success(`Changes pushed to branch: ${currentBranch}`);
               logger.info('GitHub Actions will run automatically on this push.');
-              logger.info('You can manually create a PR when ready on GitHub.');
+              
+              // Additional verification for GitHub Actions
+              try {
+                logger.info("\nVerifying GitHub Actions workflow:");
+                
+                // Wait briefly to allow GitHub to register the push
+                await setTimeout(2000);
+                
+                // Get the repo URL for the actions link
+                const repoUrl = execSync('git remote get-url origin', { encoding: 'utf8' }).trim()
+                  .replace('git@github.com:', 'https://github.com/')
+                  .replace(/\.git$/, '');
+                
+                const actionsUrl = `${repoUrl}/actions`;
+                
+                // Check for workflow files
+                const workflowDir = '.github/workflows';
+                if (fs.existsSync(workflowDir)) {
+                  const workflows = fs.readdirSync(workflowDir)
+                    .filter(file => file.endsWith('.yml') || file.endsWith('.yaml'));
+                    
+                  if (workflows.length > 0) {
+                    logger.info(`✓ Found ${workflows.length} GitHub workflow files: ${workflows.join(', ')}`);
+                    logger.info(`✓ GitHub should be processing your push now.`);
+                    logger.info(`➤ Check workflow status at: ${actionsUrl}`);
+                  } else {
+                    logger.warn(`⚠ No workflow files found in .github/workflows`);
+                    logger.info(`➤ You may need to create workflow files to trigger GitHub Actions.`);
+                  }
+                } else {
+                  logger.warn(`⚠ No .github/workflows directory found`);
+                  logger.info(`➤ GitHub Actions requires workflow files to be defined.`);
+                  logger.info(`➤ Create .github/workflows/your-workflow.yml to enable CI/CD.`);
+                }
+                
+                logger.info(`You can manually create a PR when ready on GitHub at: ${repoUrl}/pull/new/${currentBranch}`);
+              } catch (verifyError) {
+                logger.debug(`Error during GitHub Actions verification: ${verifyError.message}`);
+              }
             } else if (commitResult.pushError) {
               logger.error(`Error pushing to remote: ${commitResult.pushError}`);
-              logger.info(`You can manually push with: git push -u origin ${currentBranch}`);
+              logger.info(`To manually push, run: git push -v -u origin ${currentBranch}`);
+              
+              // Suggest troubleshooting steps
+              logger.info('\nTroubleshooting steps:');
+              logger.info('1. Check your internet connection');
+              logger.info('2. Verify you have write access to the repository');
+              logger.info('3. Check if the remote repository exists: git remote -v');
+              logger.info('4. Try with verbose output: git push -v -u origin ' + currentBranch);
             } else {
               logger.success(`Changes committed but not pushed to branch: ${currentBranch}`);
-              logger.info(`You can manually push with: git push -u origin ${currentBranch}`);
+              logger.info(`To push the changes, run: git push -u origin ${currentBranch}`);
             }
           } catch (error) {
             logger.error('Error committing changes:', error.message);
