@@ -164,6 +164,7 @@
     "@vitest/coverage-v8": "^1.6.1",
     "@vitest/ui": "^1.6.1",
     "autoprefixer": "^10.4.21",
+    "date-fns": "^4.1.0",
     "eslint": "^8.57.1",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-jest-dom": "^5.1.0",
@@ -185,14 +186,14 @@
     "vite-plugin-static-copy": "^2.3.0",
     "vitest": "^0.34.6",
     "zod": "^3.24.2",
-    "zustand": "^5.0.3",
-    "date-fns": "^4.1.0"
+    "zustand": "^5.0.3"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
     "firebase": "^11.4.0",
     "immer": "^10.1.1",
     "node-fetch": "^3.3.2",
+    "open": "^10.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   }

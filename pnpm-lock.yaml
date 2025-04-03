@@ -20,6 +20,9 @@ importers:
       node-fetch:
         specifier: ^3.3.2
         version: 3.3.2
+      open:
+        specifier: ^10.1.0
+        version: 10.1.0
       react:
         specifier: ^19.0.0
         version: 19.0.0

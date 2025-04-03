@@ -16,6 +16,8 @@ import { exec } from 'child_process';
 import path from 'path';
 import { execSync } from 'child_process';
 import { getReportPath, REPORT_PATHS as reportPaths } from '../reports/report-collector.js';
+import open from 'open';
+import { createHash } from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -110,233 +112,651 @@ const defaultTemplate = `
  * @returns {Promise<Object>} Generated report
  */
 export async function generateReport(data) {
+  logger.debug('Generating consolidated report from workflow data');
+  
   try {
-    if (!data) {
-      return { reportPath: DEFAULT_DASHBOARD_PATH };
-    }
-    
-    // Load report template
-    const template = await loadTemplate();
-    
-    // Prepare workflow timeline data
-    const workflowSteps = data.workflow?.steps || [];
-    const workflowWarnings = data.workflow?.warnings || [];
-    const workflowOptions = data.workflow?.options || {};
-    
-    // Prepare advanced check data if available
-    const advancedChecks = {
-      bundleSize: data.advancedChecks?.bundleSize || null,
-      deadCode: data.advancedChecks?.deadCode || null,
-      docsQuality: data.advancedChecks?.docsQuality || null,
-      docsFreshness: data.advancedChecks?.docsFreshness || null,
-      typescript: data.advancedChecks?.typescript || null,
-      lint: data.advancedChecks?.lint || null,
-      workflowValidation: data.advancedChecks?.workflowValidation || null,
-      health: data.advancedChecks?.health || null
-    };
-    
-    // Check if any advanced checks have data
-    const hasAdvancedCheckData = Object.values(advancedChecks).some(check => check !== null);
-    
-    // Determine branch details
-    const branch = data.gitInfo?.branch || 'unknown';
-    const isMainBranch = branch === 'main' || branch === 'master';
-    
-    // Get preview info
-    const previewUrls = data.preview || null;
-    const channelId = data.channelId || null;
-    
-    // Get channel cleanup info
-    const channelCleanup = data.channelCleanup || null;
-    
-    // Format performance data
-    const performanceData = data.performance || null;
-    
-    // Load any additional check data
-    let bundleSizeData = null;
-    let deadCodeData = null;
-    let docQualityData = null;
-    let docFreshnessData = null;
-    let typescriptData = null;
-    let lintData = null;
-    let workflowValidationData = null;
-    let healthData = null;
-    
-    try {
-      // Bundle size analysis
-      if (reportPaths && reportPaths.BUNDLE && fs.existsSync(reportPaths.BUNDLE)) {
-        bundleSizeData = JSON.parse(fs.readFileSync(reportPaths.BUNDLE, 'utf8'));
-      }
-      
-      // Dead code analysis
-      if (reportPaths && reportPaths.DEAD_CODE && fs.existsSync(reportPaths.DEAD_CODE)) {
-        deadCodeData = JSON.parse(fs.readFileSync(reportPaths.DEAD_CODE, 'utf8'));
-      }
-      
-      // Documentation quality
-      if (reportPaths && reportPaths.DOC_QUALITY && fs.existsSync(reportPaths.DOC_QUALITY)) {
-        docQualityData = JSON.parse(fs.readFileSync(reportPaths.DOC_QUALITY, 'utf8'));
-      }
-      
-      // Documentation freshness
-      if (reportPaths && reportPaths.DOC_FRESHNESS && fs.existsSync(reportPaths.DOC_FRESHNESS)) {
-        docFreshnessData = JSON.parse(fs.readFileSync(reportPaths.DOC_FRESHNESS, 'utf8'));
-      }
-      
-      // TypeScript check
-      if (reportPaths && reportPaths.TYPESCRIPT_CHECK && fs.existsSync(reportPaths.TYPESCRIPT_CHECK)) {
-        typescriptData = JSON.parse(fs.readFileSync(reportPaths.TYPESCRIPT_CHECK, 'utf8'));
-      }
-      
-      // Lint check
-      if (reportPaths && reportPaths.LINT_CHECK && fs.existsSync(reportPaths.LINT_CHECK)) {
-        lintData = JSON.parse(fs.readFileSync(reportPaths.LINT_CHECK, 'utf8'));
-      }
-      
-      // Workflow validation
-      if (reportPaths && reportPaths.WORKFLOW_VALIDATION && fs.existsSync(reportPaths.WORKFLOW_VALIDATION)) {
-        workflowValidationData = JSON.parse(fs.readFileSync(reportPaths.WORKFLOW_VALIDATION, 'utf8'));
-      }
-      
-      // Health check
-      if (reportPaths && reportPaths.HEALTH_CHECK && fs.existsSync(reportPaths.HEALTH_CHECK)) {
-        healthData = JSON.parse(fs.readFileSync(reportPaths.HEALTH_CHECK, 'utf8'));
-      }
-
-      // Also try to load data directly from advancedChecks if available
-      if (!bundleSizeData && advancedChecks.bundleSize?.data) {
-        bundleSizeData = advancedChecks.bundleSize.data;
-      }
-      
-      if (!deadCodeData && advancedChecks.deadCode?.data) {
-        deadCodeData = advancedChecks.deadCode.data;
-      }
-      
-      if (!docQualityData && advancedChecks.docsQuality?.data) {
-        docQualityData = advancedChecks.docsQuality.data;
-      }
-      
-      if (!docFreshnessData && advancedChecks.docsFreshness?.data) {
-        docFreshnessData = advancedChecks.docsFreshness.data;
-      }
-      
-      if (!typescriptData && advancedChecks.typescript?.data) {
-        typescriptData = advancedChecks.typescript.data;
-      }
-      
-      if (!lintData && advancedChecks.lint?.data) {
-        lintData = advancedChecks.lint.data;
-      }
-      
-      if (!workflowValidationData && advancedChecks.workflowValidation?.data) {
-        workflowValidationData = advancedChecks.workflowValidation.data;
-      }
-      
-      if (!healthData && advancedChecks.health?.data) {
-        healthData = advancedChecks.health.data;
-      }
-    } catch (error) {
-      logger.warn(`Error loading additional check data: ${error.message}`);
-    }
-    
-    // Debug the warnings data
-    logger.debug(`Warning count: ${data.warnings ? data.warnings.length : 0}`);
-    if (data.warnings && data.warnings.length > 0) {
-      logger.debug(`First 3 warnings: ${JSON.stringify(data.warnings.slice(0, 3))}`);
-    }
-    
-    // Load any existing metrics from files
-    const existingMetrics = loadExistingMetrics();
-    
-    // Extract warnings from workflow steps
-    let warnings = [];
-    if (data.workflow && data.workflow.steps) {
-      // Get warnings from failed steps or steps with error info
-      warnings = data.workflow.steps
-        .filter(step => step.error || (step.result && !step.result.success))
-        .map(step => ({
-          message: step.error || `${step.name} failed`,
-          timestamp: step.timestamp,
-          phase: step.phase
-        }));
-    }
-    
-    // Add warnings directly from data
-    if (data.warnings && data.warnings.length > 0) {
-      warnings = [...warnings, ...data.warnings];
-    }
-    
-    // Create the full report by combining passed data and existing metrics
+    // Make sure we have the basic data structure
     const report = {
       timestamp: data.timestamp || new Date().toISOString(),
-      metrics: {
-        duration: data.metrics?.duration || 0,
-        ...existingMetrics?.metrics || {}
-      },
-      preview: data.preview || {
-        hours: 'Not deployed',
-        admin: 'Not deployed',
-        channelId: 'None'
-      },
-      workflow: {
-        options: data.workflow?.options || {},
-        git: data.workflow?.git || {},
-        steps: data.workflow?.steps || existingMetrics?.steps || []
-      },
-      warnings: warnings.length > 0 ? warnings : (existingMetrics?.warnings || []),
-      errors: existingMetrics?.errors || []
+      metrics: data.metrics || { duration: 0 },
+      preview: data.preview || null,
+      workflow: data.workflow || { steps: [] },
+      warnings: data.warnings || [],
+      errors: data.errors || [],
+      advancedChecks: data.advancedChecks || {}
     };
-
-    // Add sample warnings if none were collected (for testing)
-    if (!report.warnings || report.warnings.length === 0) {
-      logger.debug('No warnings found, adding sample warnings for testing');
-      report.warnings = [
-        { 
-          message: 'Missing documentation for key features in README.md',
-          phase: 'Validation',
-          step: 'Documentation',
-          timestamp: new Date().toISOString()
-        },
-        { 
-          message: 'NPM audit found 3 high severity vulnerabilities',
-          phase: 'Validation',
-          step: 'Security',
-          timestamp: new Date().toISOString()
-        },
-        { 
-          message: 'Type any used in 12 locations',
-          phase: 'Validation',
-          step: 'Code Quality',
-          timestamp: new Date().toISOString()
+    
+    // Calculate step stats
+    const stepsByPhase = {};
+    const failedSteps = [];
+    
+    if (report.workflow.steps) {
+      report.workflow.steps.forEach(step => {
+        if (!stepsByPhase[step.phase]) {
+          stepsByPhase[step.phase] = [];
         }
-      ];
+        stepsByPhase[step.phase].push(step);
+        
+        if (step.result && !step.result.success) {
+          failedSteps.push(step);
+        }
+      });
     }
-
-    // Generate HTML report
-    const htmlReport = generateHtmlReport(report);
-
-    // Save report
-    const reportPaths = await saveReport(report, htmlReport);
     
-    // Save a copy as preview-dashboard.html in the root
-    const dashboardPath = join(process.cwd(), 'preview-dashboard.html');
-    await writeFile(dashboardPath, generateDashboardHtml(report));
-    logger.info(`✨ Generated dashboard: ${dashboardPath}`);
+    // Calculate warning stats
+    const warningsByCategory = {};
+    if (report.warnings) {
+      report.warnings.forEach(warning => {
+        const category = warning.phase || 'General';
+        if (!warningsByCategory[category]) {
+          warningsByCategory[category] = [];
+        }
+        warningsByCategory[category].push(warning);
+      });
+    }
     
-    // Open the dashboard in the default browser
-    openInBrowser(dashboardPath);
+    // Generate unique report ID for linking
+    const reportId = createHash('md5')
+      .update(report.timestamp + Math.random().toString())
+      .digest('hex')
+      .substring(0, 8);
+    
+    // Format duration
+    const formatDuration = (milliseconds) => {
+      if (!milliseconds) return '0s';
+      
+      if (milliseconds < 1000) return `${milliseconds}ms`;
+      
+      const seconds = Math.floor(milliseconds / 1000) % 60;
+      const minutes = Math.floor(milliseconds / (1000 * 60)) % 60;
+      
+      if (minutes > 0) {
+        return `${minutes}m ${seconds}s`;
+      }
+      
+      return `${seconds}s`;
+    };
+    
+    // Generate HTML content
+    const htmlContent = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Workflow Dashboard</title>
+      <link rel="stylesheet" href="dashboard.css">
+    </head>
+    <body>
+      <div class="dashboard">
+        <header>
+          <h1>Workflow Dashboard</h1>
+          <div class="metadata">
+            <p>Generated: ${new Date(report.timestamp).toLocaleString()}</p>
+            <p>Report ID: ${reportId}</p>
+          </div>
+        </header>
+        
+        <div class="overview">
+          <div class="column">
+            <div class="panel success">
+              <h2>Status</h2>
+              <div class="status-indicator">
+                <span class="status-icon ${failedSteps.length > 0 ? 'warning' : 'success'}">
+                  ${failedSteps.length > 0 ? '⚠️' : '✓'}
+                </span>
+                <span class="status-text">${failedSteps.length > 0 ? 'Completed with Warnings' : 'Success'}</span>
+              </div>
+              <div class="metrics">
+                <div class="metric">
+                  <span class="metric-label">Duration</span>
+                  <span class="metric-value">${formatDuration(report.metrics.duration)}</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">Warnings</span>
+                  <span class="metric-value">${report.warnings ? report.warnings.length : 0}</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">Errors</span>
+                  <span class="metric-value">${failedSteps.length}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          ${report.preview ? `
+          <div class="column">
+            <div class="panel preview">
+              <h2>Preview URLs</h2>
+              <div class="preview-links">
+                ${report.preview.hours ? `
+                <div class="preview-link">
+                  <span class="preview-label">Hours App:</span>
+                  <a href="${report.preview.hours}" target="_blank" class="preview-url">${report.preview.hours}</a>
+                </div>
+                ` : ''}
+                
+                ${report.preview.admin ? `
+                <div class="preview-link">
+                  <span class="preview-label">Admin App:</span>
+                  <a href="${report.preview.admin}" target="_blank" class="preview-url">${report.preview.admin}</a>
+                </div>
+                ` : ''}
+                
+                ${report.preview.channelId ? `
+                <div class="preview-link">
+                  <span class="preview-label">Channel ID:</span>
+                  <span class="preview-channel">${report.preview.channelId}</span>
+                </div>
+                ` : ''}
+              </div>
+            </div>
+          </div>
+          ` : ''}
+        </div>
+        
+        <div class="main-content">
+          ${report.warnings && report.warnings.length > 0 ? `
+          <div class="panel warnings">
+            <h2>Warnings & Suggestions (${report.warnings.length})</h2>
+            <div class="accordion">
+              ${Object.entries(warningsByCategory).map(([category, warnings]) => `
+              <div class="accordion-item">
+                <div class="accordion-header">
+                  <span class="category">${category}</span>
+                  <span class="count">${warnings.length}</span>
+                  <span class="toggle">▼</span>
+                </div>
+                <div class="accordion-content">
+                  <ul class="warnings-list">
+                    ${warnings.map(warning => `
+                    <li class="warning-item">
+                      <div class="warning-message">${warning.message}</div>
+                      ${warning.step ? `<div class="warning-source">Source: ${warning.step}</div>` : ''}
+                    </li>
+                    `).join('')}
+                  </ul>
+                </div>
+              </div>
+              `).join('')}
+            </div>
+          </div>
+          ` : `
+          <div class="panel success-panel">
+            <h2>No Warnings</h2>
+            <p>All checks passed successfully without any warnings!</p>
+          </div>
+          `}
+          
+          <div class="panel workflow">
+            <h2>Workflow Steps</h2>
+            <div class="timeline">
+              ${Object.entries(stepsByPhase).map(([phase, steps]) => `
+              <div class="phase">
+                <h3 class="phase-name">${phase}</h3>
+                <div class="steps">
+                  ${steps.map(step => `
+                  <div class="step ${step.result && step.result.success ? 'success' : 'failure'}">
+                    <div class="step-header">
+                      <span class="step-name">${step.name}</span>
+                      <span class="step-indicator">${step.result && step.result.success ? '✓' : '✗'}</span>
+                    </div>
+                    <div class="step-details">
+                      <span class="step-duration">${formatDuration(step.duration)}</span>
+                      ${step.error ? `<div class="step-error">Error: ${step.error}</div>` : ''}
+                    </div>
+                  </div>
+                  `).join('')}
+                </div>
+              </div>
+              `).join('')}
+            </div>
+          </div>
+          
+          ${report.advancedChecks && Object.keys(report.advancedChecks).length > 0 ? `
+          <div class="panel advanced-checks">
+            <h2>Advanced Check Results</h2>
+            <div class="accordion">
+              ${Object.entries(report.advancedChecks).map(([checkName, checkResult]) => `
+              <div class="accordion-item">
+                <div class="accordion-header">
+                  <span class="category">${checkName}</span>
+                  <span class="status ${checkResult.success ? 'success' : (checkResult.warning ? 'warning' : 'failure')}">${
+                    checkResult.skipped ? 'Skipped' : (checkResult.success ? 'Passed' : (checkResult.warning ? 'Warning' : 'Failed'))
+                  }</span>
+                  <span class="toggle">▼</span>
+                </div>
+                <div class="accordion-content">
+                  <div class="check-details">
+                    ${checkResult.message ? `<p class="check-message">${checkResult.message}</p>` : ''}
+                    ${checkResult.error ? `<p class="check-error">Error: ${checkResult.error}</p>` : ''}
+                    ${checkResult.data ? `
+                      <div class="check-data">
+                        <h4>Details</h4>
+                        <pre>${JSON.stringify(checkResult.data, null, 2)}</pre>
+                      </div>
+                    ` : ''}
+                  </div>
+                </div>
+              </div>
+              `).join('')}
+            </div>
+          </div>
+          ` : ''}
+        </div>
+        
+        <footer>
+          <p>Time Tracking Workflow - ${new Date().getFullYear()}</p>
+        </footer>
+      </div>
+      
+      <script>
+        // Simple accordion functionality
+        document.querySelectorAll('.accordion-header').forEach(header => {
+          header.addEventListener('click', () => {
+            const content = header.nextElementSibling;
+            const isOpen = content.style.maxHeight;
+            
+            // Close all accordions
+            document.querySelectorAll('.accordion-content').forEach(item => {
+              item.style.maxHeight = null;
+            });
+            document.querySelectorAll('.toggle').forEach(toggle => {
+              toggle.textContent = '▼';
+            });
+            
+            // Open clicked accordion if it was closed
+            if (!isOpen) {
+              content.style.maxHeight = content.scrollHeight + 'px';
+              header.querySelector('.toggle').textContent = '▲';
+            }
+          });
+        });
+      </script>
+    </body>
+    </html>
+    `;
+    
+    // CSS styles for dashboard
+    const cssContent = `
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background-color: #f5f7fa;
+    }
+    
+    .dashboard {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #e1e4e8;
+    }
+    
+    h1 {
+      font-size: 24px;
+      color: #24292e;
+    }
+    
+    .metadata {
+      font-size: 14px;
+      color: #6a737d;
+    }
+    
+    .overview {
+      display: flex;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    
+    .column {
+      flex: 1;
+    }
+    
+    .panel {
+      background-color: white;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    
+    .panel h2 {
+      font-size: 18px;
+      margin-bottom: 15px;
+      color: #24292e;
+    }
+    
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+    
+    .status-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      margin-right: 10px;
+    }
+    
+    .status-icon.success {
+      background-color: #28a745;
+      color: white;
+    }
+    
+    .status-icon.warning {
+      background-color: #ff9800;
+      color: white;
+    }
+    
+    .status-icon.failure {
+      background-color: #d73a49;
+      color: white;
+    }
+    
+    .status-text {
+      font-size: 16px;
+      font-weight: 500;
+    }
+    
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 15px;
+    }
+    
+    .metric {
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .metric-label {
+      font-size: 14px;
+      color: #6a737d;
+    }
+    
+    .metric-value {
+      font-size: 18px;
+      font-weight: 500;
+      color: #24292e;
+    }
+    
+    .preview-links {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    
+    .preview-link {
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .preview-label {
+      font-size: 14px;
+      color: #6a737d;
+    }
+    
+    .preview-url {
+      font-size: 14px;
+      color: #0366d6;
+      text-decoration: none;
+      word-break: break-all;
+    }
+    
+    .preview-url:hover {
+      text-decoration: underline;
+    }
+    
+    .preview-channel {
+      font-family: monospace;
+      background-color: #f6f8fa;
+      padding: 2px 5px;
+      border-radius: 3px;
+    }
+    
+    .accordion-item {
+      border: 1px solid #e1e4e8;
+      border-radius: 6px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    
+    .accordion-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 15px;
+      background-color: #f6f8fa;
+      cursor: pointer;
+    }
+    
+    .category {
+      font-weight: 500;
+    }
+    
+    .count {
+      background-color: #e1e4e8;
+      border-radius: 10px;
+      padding: 2px 8px;
+      font-size: 12px;
+    }
+    
+    .status {
+      border-radius: 10px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    
+    .status.success {
+      background-color: #dcffe4;
+      color: #28a745;
+    }
+    
+    .status.warning {
+      background-color: #fff5e6;
+      color: #ff9800;
+    }
+    
+    .status.failure {
+      background-color: #ffeef0;
+      color: #d73a49;
+    }
+    
+    .toggle {
+      color: #6a737d;
+    }
+    
+    .accordion-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+    
+    .warnings-list {
+      list-style-type: none;
+      padding: 15px;
+    }
+    
+    .warning-item {
+      padding: 10px;
+      border-bottom: 1px solid #eaecef;
+    }
+    
+    .warning-item:last-child {
+      border-bottom: none;
+    }
+    
+    .warning-message {
+      margin-bottom: 5px;
+    }
+    
+    .warning-source {
+      font-size: 12px;
+      color: #6a737d;
+    }
+    
+    .timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    
+    .phase-name {
+      font-size: 16px;
+      margin-bottom: 10px;
+      color: #24292e;
+    }
+    
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    
+    .step {
+      padding: 10px 15px;
+      border-radius: 6px;
+      border-left: 4px solid #e1e4e8;
+    }
+    
+    .step.success {
+      border-left-color: #28a745;
+      background-color: #f0fff4;
+    }
+    
+    .step.failure {
+      border-left-color: #d73a49;
+      background-color: #fff0f0;
+    }
+    
+    .step-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 5px;
+    }
+    
+    .step-name {
+      font-weight: 500;
+    }
+    
+    .step-indicator {
+      font-weight: bold;
+    }
+    
+    .step-details {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      color: #6a737d;
+    }
+    
+    .step-error {
+      color: #d73a49;
+      margin-top: 5px;
+      font-size: 14px;
+    }
+    
+    .check-details {
+      padding: 15px;
+    }
+    
+    .check-message {
+      margin-bottom: 10px;
+    }
+    
+    .check-error {
+      color: #d73a49;
+      margin-bottom: 10px;
+    }
+    
+    .check-data {
+      margin-top: 10px;
+    }
+    
+    .check-data h4 {
+      margin-bottom: 5px;
+    }
+    
+    .check-data pre {
+      background-color: #f6f8fa;
+      padding: 10px;
+      border-radius: 6px;
+      overflow: auto;
+      font-size: 12px;
+      max-height: 300px;
+    }
+    
+    footer {
+      text-align: center;
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid #e1e4e8;
+      color: #6a737d;
+      font-size: 14px;
+    }
+    
+    @media (max-width: 768px) {
+      .overview {
+        flex-direction: column;
+      }
+      
+      .metrics {
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      }
+    }
+    `;
+    
+    // CSS path
+    const CSS_PATH = join(process.cwd(), 'dashboard.css');
+    
+    // Write HTML and CSS files
+    fs.writeFileSync(CSS_PATH, cssContent, 'utf8');
+    
+    // Save HTML content to file
+    const DASHBOARD_PATH = join(process.cwd(), 'dashboard.html');
+    fs.writeFileSync(DASHBOARD_PATH, htmlContent, 'utf8');
+    
+    logger.debug(`Dashboard generated at: ${DASHBOARD_PATH}`);
+    
+    // Open dashboard in browser
+    try {
+      await open(DASHBOARD_PATH);
+      logger.success('Dashboard opened in your browser');
+    } catch (error) {
+      logger.warn(`Could not open dashboard automatically: ${error.message}`);
+      logger.info(`Dashboard available at: ${DASHBOARD_PATH}`);
+    }
     
     return {
-      ...report,
-      reportPaths,
-      dashboardPath
+      path: DASHBOARD_PATH,
+      reportId,
+      warnings: report.warnings ? report.warnings.length : 0,
+      errors: failedSteps.length,
+      timestamp: report.timestamp
     };
   } catch (error) {
-    logger.error(`Error generating report: ${error.message}`);
-    return {
-      timestamp: new Date().toISOString(),
-      error: error.message
-    };
+    logger.error(`Failed to generate report: ${error.message}`);
+    throw error;
   }
 }
 

@@ -14,7 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import process from 'node:process';
 import { logger } from '../core/logger.js';
-import { generateConsolidatedReport } from './consolidated-report.js';
+import { generateReport as generateConsolidatedReport } from '../workflow/consolidated-report.js';
 import { parseArgs } from 'node:util';
 import { execSync } from 'child_process';
 import convertReports from './html-to-json.js';

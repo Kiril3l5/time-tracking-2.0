@@ -7,7 +7,7 @@ import fs from 'fs';
 import { logger } from './core/logger.js';
 import { commandRunner } from './core/command-runner.js';
 import { getCurrentBranch, hasUncommittedChanges, commitChanges } from './workflow/branch-manager.js';
-import { QualityChecker } from './workflow/quality-checker.js';
+import { QualityChecker } from './checks/quality-checker.js';
 import { PackageCoordinator } from './workflow/package-coordinator.js';
 import { deployPackage, createChannelId } from './workflow/deployment-manager.js';
 import progressTracker from './core/progress-tracker.js';
@@ -389,49 +389,6 @@ class Workflow {
           });
         }
         
-        // Run documentation quality checks to collect warnings
-        const docStartTime = Date.now();
-        this.logger.info('Checking documentation quality...');
-        try {
-          // Add documentation warnings directly
-          // Since analyzeDocumentation was removed, we'll use hard-coded warnings
-          [
-            'Missing documentation for key features in README.md',
-            'Installation instructions incomplete in setup docs',
-            'API documentation outdated for user management endpoints',
-            'Missing JSDoc comments in auth module files',
-            'Component API documentation missing for DataTable'
-          ].forEach(warning => {
-            this.recordWarning(warning, 'Validation', 'Documentation');
-          });
-          
-          // Add security warnings
-          [
-            'NPM audit found 3 high severity vulnerabilities',
-            'Authentication token storage needs review',
-            'API rate limiting not implemented'
-          ].forEach(warning => {
-            this.recordWarning(warning, 'Validation', 'Security');
-          });
-          
-          // Add code quality warnings
-          [
-            'Unused imports in src/components/Dashboard.tsx',
-            'Duplicate code found in utility functions',
-            'Console.log statements found in production code',
-            "Type 'any' used in 12 locations"
-          ].forEach(warning => {
-            this.recordWarning(warning, 'Validation', 'Code Quality');
-          });
-          
-          this.recordWorkflowStep('Documentation Check', 'Validation', true, Date.now() - docStartTime);
-        } catch (error) {
-          // Just record as warning, don't fail the workflow
-          this.logger.warn(`Documentation check issue: ${error.message}`);
-          this.recordWarning(`Documentation check issue: ${error.message}`, 'Validation', 'Documentation');
-          this.recordWorkflowStep('Documentation Check', 'Validation', false, Date.now() - docStartTime, 'Non-critical issue');
-        }
-        
         // Run advanced checks with more detailed analysis
         this.logger.info("Running advanced checks...");
         
@@ -475,49 +432,115 @@ class Workflow {
             });
           }
           
-          // Get health check results from the advanced check results
-          const healthResult = (advancedResult.results || {}).health;
+          // Process documentation quality results
+          if (this.advancedCheckResults.docsQuality && 
+              this.advancedCheckResults.docsQuality.data && 
+              this.advancedCheckResults.docsQuality.data.issues) {
+            const issues = this.advancedCheckResults.docsQuality.data.issues;
+            issues.forEach(issue => {
+              this.recordWarning(
+                `Documentation issue: ${issue.message} (${issue.file})`, 
+                'Validation', 
+                'Documentation'
+              );
+            });
+          }
           
-          // Record health check warnings
-          if (healthResult && healthResult.data) {
-            // Process environment warnings
-            if (healthResult.data.stats && healthResult.data.stats.environment) {
-              const { missingVars, invalidConfigs } = healthResult.data.stats.environment;
-              
-              if (missingVars && missingVars.length > 0) {
-                missingVars.forEach(varName => {
-                  this.recordWarning(
-                    `Missing environment variable: ${varName}`, 
-                    'Validation', 
-                    'Environment'
-                  );
-                });
-              }
-              
-              if (invalidConfigs && invalidConfigs.length > 0) {
-                invalidConfigs.forEach(config => {
-                  this.recordWarning(
-                    `Invalid configuration: ${config}`, 
-                    'Validation', 
-                    'Environment'
-                  );
-                });
-              }
-            }
+          // Process documentation freshness results
+          if (this.advancedCheckResults.docsFreshness && 
+              this.advancedCheckResults.docsFreshness.data && 
+              this.advancedCheckResults.docsFreshness.data.staleDocuments) {
+            const staleDocuments = this.advancedCheckResults.docsFreshness.data.staleDocuments;
+            staleDocuments.forEach(doc => {
+              this.recordWarning(
+                `Stale documentation: ${doc.file} (last updated ${doc.lastUpdated})`, 
+                'Validation', 
+                'Documentation'
+              );
+            });
+          }
+          
+          // Process security information
+          if (this.advancedCheckResults.health && 
+              this.advancedCheckResults.health.data && 
+              this.advancedCheckResults.health.data.stats && 
+              this.advancedCheckResults.health.data.stats.security) {
+            const security = this.advancedCheckResults.health.data.stats.security;
             
-            // Process security warnings
-            if (healthResult.data.stats && healthResult.data.stats.security &&
-                healthResult.data.stats.security.vulnerabilities) {
-              const { vulnerabilities } = healthResult.data.stats.security;
-              
-              if (vulnerabilities.total > 0) {
+            if (security.vulnerabilities && security.vulnerabilities.details) {
+              security.vulnerabilities.details.forEach(vuln => {
                 this.recordWarning(
-                  `Found ${vulnerabilities.total} security vulnerabilities (${vulnerabilities.critical} critical, ${vulnerabilities.high} high)`, 
+                  `Security vulnerability: ${vuln.package} (${vuln.severity}) - ${vuln.description}`, 
                   'Validation', 
                   'Security'
                 );
-              }
+              });
             }
+            
+            if (security.issues) {
+              security.issues.forEach(issue => {
+                this.recordWarning(
+                  `Security issue: ${issue.message}`, 
+                  'Validation', 
+                  'Security'
+                );
+              });
+            }
+          }
+          
+          // Process code quality issues from lint and TypeScript checks
+          if (this.advancedCheckResults.lint && 
+              this.advancedCheckResults.lint.data && 
+              this.advancedCheckResults.lint.data.issues) {
+            const lintIssues = this.advancedCheckResults.lint.data.issues;
+            lintIssues.forEach(issue => {
+              this.recordWarning(
+                `Lint issue: ${issue.message} (${issue.file}:${issue.line})`, 
+                'Validation', 
+                'Code Quality'
+              );
+            });
+          }
+          
+          if (this.advancedCheckResults.typescript && 
+              this.advancedCheckResults.typescript.data && 
+              this.advancedCheckResults.typescript.data.errors) {
+            const tsIssues = this.advancedCheckResults.typescript.data.errors;
+            tsIssues.forEach(issue => {
+              this.recordWarning(
+                `TypeScript issue: ${issue.message} (${issue.file}:${issue.line})`, 
+                'Validation', 
+                'Code Quality'
+              );
+            });
+          }
+          
+          // Process dead code results
+          if (this.advancedCheckResults.deadCode && 
+              this.advancedCheckResults.deadCode.data && 
+              this.advancedCheckResults.deadCode.data.files) {
+            const deadCodeFiles = this.advancedCheckResults.deadCode.data.files;
+            deadCodeFiles.forEach(file => {
+              this.recordWarning(
+                `Potentially unused code in ${file.path} (confidence: ${file.confidence}%)`, 
+                'Validation', 
+                'Code Quality'
+              );
+            });
+          }
+          
+          // Process bundle size issues
+          if (this.advancedCheckResults.bundleSize && 
+              this.advancedCheckResults.bundleSize.data && 
+              this.advancedCheckResults.bundleSize.data.issues) {
+            const bundleIssues = this.advancedCheckResults.bundleSize.data.issues;
+            bundleIssues.forEach(issue => {
+              this.recordWarning(
+                `Bundle size issue: ${issue.message}`, 
+                'Validation', 
+                'Code Quality'
+              );
+            });
           }
           
           // Record advanced check step
