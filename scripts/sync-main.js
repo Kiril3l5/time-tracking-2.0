@@ -5,6 +5,7 @@
  * 
  * This script synchronizes your local main branch with the remote repository.
  * It handles uncommitted changes by offering to commit or stash them.
+ * It can also create a new feature branch after syncing.
  * 
  * Usage:
  *   node scripts/sync-main.js
@@ -16,10 +17,13 @@ import { execSync } from 'child_process';
 import readline from 'readline';
 import process from 'process';
 import { logger } from './core/logger.js';
-import { workflowState } from './workflow/workflow-state.js';
+import getWorkflowState from './workflow/workflow-state.js';
 import { progressTracker } from './core/progress-tracker.js';
 import { performanceMonitor } from './core/performance-monitor.js';
-import { errorHandler } from './core/error-handler.js';
+import errorHandler from './core/error-handler.js';
+
+// Get the workflowState singleton
+const workflowState = getWorkflowState();
 
 // Create readline interface for user input
 const rl = readline.createInterface({
@@ -92,16 +96,66 @@ function getCurrentBranch() {
 }
 
 /**
+ * Create a new feature branch
+ * @param {string} branchName - Name for the new branch (without prefix)
+ * @returns {boolean} - Success status
+ */
+function createFeatureBranch(branchName) {
+  try {
+    // Make sure we're on main branch first
+    const currentBranch = getCurrentBranch();
+    if (currentBranch !== 'main' && currentBranch !== 'master') {
+      logger.info(`Switching to main branch first...`);
+      const checkoutResult = executeCommand('git checkout main');
+      if (!checkoutResult.success) {
+        throw new Error("Failed to switch to main branch");
+      }
+    }
+    
+    // Make sure main is up to date
+    logger.info("Updating main branch from remote...");
+    const pullResult = executeCommand('git pull origin main');
+    if (!pullResult.success) {
+      throw new Error("Failed to update main branch");
+    }
+    
+    // Format branch name
+    const formattedName = branchName.trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-');
+    
+    const fullBranchName = formattedName.startsWith('feature/') ? 
+      formattedName : `feature/${formattedName}`;
+    
+    // Create and checkout new branch
+    logger.info(`Creating new branch: ${fullBranchName}`);
+    const branchResult = executeCommand(`git checkout -b ${fullBranchName}`);
+    
+    if (!branchResult.success) {
+      throw new Error(`Failed to create branch: ${fullBranchName}`);
+    }
+    
+    logger.success(`Created and switched to branch: ${fullBranchName}`);
+    return true;
+  } catch (error) {
+    logger.error(`Failed to create feature branch: ${error.message}`);
+    return false;
+  }
+}
+
+/**
  * Main function to sync the main branch
  */
 async function syncMainBranch() {
-  const state = workflowState.getInstance();
+  const state = workflowState;
   const startTime = Date.now();
   
   try {
     // Initialize state and monitoring
-    state.startOperation('sync-main');
-    performanceMonitor.startOperation('sync-main');
+    state.initialize({ operation: 'sync-main' });
+    performanceMonitor.start();
     progressTracker.initProgress(4, 'Main Branch Sync');
     
     logger.sectionHeader('SYNCING MAIN BRANCH');
@@ -119,6 +173,17 @@ async function syncMainBranch() {
       if (result.success) {
         progressTracker.completeStep(true, 'Main branch updated successfully');
         logger.success("Main branch updated successfully!");
+        
+        // If on main branch, ask if they want to create a feature branch
+        const createFeature = await prompt("Would you like to create a new feature branch? (y/N): ");
+        if (createFeature.toLowerCase() === 'y') {
+          const branchName = await prompt("Enter feature branch name: ");
+          if (branchName.trim()) {
+            createFeatureBranch(branchName);
+          } else {
+            logger.warn("No branch name provided, skipping feature branch creation");
+          }
+        }
       } else {
         progressTracker.completeStep(false, 'Failed to update main branch');
         logger.error("Failed to update main branch. Please check for errors above.");
@@ -186,22 +251,48 @@ async function syncMainBranch() {
     }
     progressTracker.completeStep(true, 'Main branch updated');
     
-    // Ask if they want to go back to the previous branch
-    progressTracker.startStep('Branch Switch');
-    const goBackToBranch = await prompt(`Would you like to switch back to '${currentBranch}'? (Y/n): `);
-    if (goBackToBranch.toLowerCase() !== 'n') {
-      const switchBackResult = executeCommand(`git checkout ${currentBranch}`);
-      if (switchBackResult.success) {
-        logger.success(`Switched back to branch: ${currentBranch}`);
+    // Ask if they want to create a feature branch or go back to previous branch
+    progressTracker.startStep('Branch Management');
+    const createBranch = await prompt("Would you like to create a new feature branch? (y/N): ");
+    
+    if (createBranch.toLowerCase() === 'y') {
+      // Create a new feature branch
+      const branchName = await prompt("Enter feature branch name: ");
+      if (branchName.trim()) {
+        createFeatureBranch(branchName);
+        progressTracker.completeStep(true, `Created feature branch: feature/${branchName}`);
       } else {
-        throw new Error(`Failed to switch back to branch: ${currentBranch}`);
+        logger.warn("No branch name provided, returning to original branch");
+        // Fall back to returning to the original branch
+        if (currentBranch !== 'main' && currentBranch !== 'master') {
+          const switchBackResult = executeCommand(`git checkout ${currentBranch}`);
+          if (switchBackResult.success) {
+            logger.success(`Switched back to branch: ${currentBranch}`);
+          } else {
+            throw new Error(`Failed to switch back to branch: ${currentBranch}`);
+          }
+        }
+        progressTracker.completeStep(true, 'Returned to original branch');
       }
+    } else if (currentBranch !== 'main' && currentBranch !== 'master') {
+      // If they don't want a new branch, ask if they want to go back
+      const goBackToBranch = await prompt(`Would you like to switch back to '${currentBranch}'? (Y/n): `);
+      if (goBackToBranch.toLowerCase() !== 'n') {
+        const switchBackResult = executeCommand(`git checkout ${currentBranch}`);
+        if (switchBackResult.success) {
+          logger.success(`Switched back to branch: ${currentBranch}`);
+        } else {
+          throw new Error(`Failed to switch back to branch: ${currentBranch}`);
+        }
+      }
+      progressTracker.completeStep(true, 'Branch switch completed');
+    } else {
+      progressTracker.completeStep(true, 'Stayed on main branch');
     }
-    progressTracker.completeStep(true, 'Branch switch completed');
     
     // Complete sync
     const duration = Date.now() - startTime;
-    state.completeOperation('sync-main', {
+    state.complete({
       success: true,
       duration,
       metrics: performanceMonitor.getPerformanceSummary()
@@ -209,19 +300,23 @@ async function syncMainBranch() {
     
     progressTracker.finishProgress(true, 'Main branch sync completed successfully');
     logger.sectionHeader('NEXT STEPS');
-    logger.info(`Current branch: ${goBackToBranch.toLowerCase() !== 'n' ? currentBranch : 'main'}`);
-    logger.info("What would you like to do next?");
-    logger.info("1. Continue development on current branch");
-    logger.info("2. Start a new feature with: pnpm run workflow:new");
-    logger.info("3. Run the complete workflow: pnpm run workflow");
+    
+    const finalBranch = getCurrentBranch();
+    logger.info(`Current branch: ${finalBranch}`);
+    
+    if (finalBranch === 'main' || finalBranch === 'master') {
+      logger.info("What would you like to do next?");
+      logger.info("1. Create a new feature branch with: pnpm run workflow:new");
+      logger.info("2. Run the complete workflow: pnpm run workflow");
+    } else {
+      logger.info("What would you like to do next?");
+      logger.info("1. Continue development on current branch");
+      logger.info("2. Run the complete workflow: pnpm run workflow");
+    }
     
   } catch (error) {
     const duration = Date.now() - startTime;
-    state.completeOperation('sync-main', {
-      success: false,
-      duration,
-      error: error.message
-    });
+    state.fail(error);
     
     progressTracker.finishProgress(false, `Main branch sync failed: ${error.message}`);
     logger.error("Failed to sync main branch:", error.message);
