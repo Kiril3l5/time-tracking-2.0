@@ -1,8 +1,8 @@
 // Create this file with this content
-import { initializeApp } from 'firebase/app';
-import { getFirestore, connectFirestoreEmulator, enableIndexedDbPersistence } from 'firebase/firestore';
-import { getAuth, connectAuthEmulator } from 'firebase/auth';
-import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
+import { initializeApp, FirebaseApp } from 'firebase/app';
+import { getFirestore, connectFirestoreEmulator, enableIndexedDbPersistence, Firestore } from 'firebase/firestore';
+import { getAuth, connectAuthEmulator, Auth } from 'firebase/auth';
+import { getFunctions, connectFunctionsEmulator, Functions } from 'firebase/functions';
 
 // Type-safe environment variable access
 interface FirebaseConfig {
@@ -119,12 +119,22 @@ const getFirebaseConfig = (): FirebaseConfig => {
 };
 
 // Initialize Firebase with error handling
-let app, db, auth, functions;
+let app: FirebaseApp | null = null;
+let db: Firestore | null = null;
+let auth: Auth | null = null;
+let functions: Functions | null = null;
+
+// Initialization status flag
+let isInitialized = false;
+
 try {
   app = initializeApp(getFirebaseConfig());
   db = getFirestore(app);
   auth = getAuth(app);
   functions = getFunctions(app);
+  
+  // Set initialization flag
+  isInitialized = true;
   
   // Configure Firestore for offline persistence
   // This should be called as early as possible in your app
@@ -174,6 +184,39 @@ try {
   db = null;
   auth = null;
   functions = null;
+  
+  // Set initialization flag
+  isInitialized = false;
 }
 
+// Safe accessor functions to ensure Firebase services are initialized
+export function getFirebaseApp(): FirebaseApp {
+  if (!app || !isInitialized) {
+    throw new Error('Firebase app has not been initialized');
+  }
+  return app;
+}
+
+export function getFirestoreDb(): Firestore {
+  if (!db || !isInitialized) {
+    throw new Error('Firestore has not been initialized');
+  }
+  return db;
+}
+
+export function getFirebaseAuth(): Auth {
+  if (!auth || !isInitialized) {
+    throw new Error('Firebase auth has not been initialized');
+  }
+  return auth;
+}
+
+export function getFirebaseFunctions(): Functions {
+  if (!functions || !isInitialized) {
+    throw new Error('Firebase functions have not been initialized');
+  }
+  return functions;
+}
+
+// Export raw objects for backward compatibility
 export { app, db, auth, functions };

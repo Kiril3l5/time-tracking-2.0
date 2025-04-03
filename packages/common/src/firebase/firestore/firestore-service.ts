@@ -18,9 +18,10 @@ import {
   QuerySnapshot,
   where,
   SnapshotOptions,
-  DocumentSnapshot
+  DocumentSnapshot,
+  QueryDocumentSnapshot
 } from 'firebase/firestore';
-import { db } from '../core/firebase';
+import { getFirestoreDb } from '../core/firebase';
 import { TimeEntry, User, Company, UserStats } from '../../types/firestore';
 
 // Type-safe collection references with converters
@@ -31,7 +32,7 @@ function createCollection<T extends DocumentData>(
   collectionName: string,
   converter: FirestoreDataConverter<T>
 ) {
-  return collection(db, collectionName).withConverter(converter);
+  return collection(getFirestoreDb(), collectionName).withConverter(converter);
 }
 
 // Date converter to handle Firestore timestamps
@@ -322,3 +323,22 @@ export const userStatsService = {
     return subscribeToDocument(userStatsCollection, userId, callback);
   },
 };
+
+// Create a typed collection reference
+export function getTypedCollection<T>(
+  collectionName: string, 
+  converter: FirestoreDataConverter<T> = {
+    toFirestore: (data: T) => data as DocumentData,
+    fromFirestore: (snapshot: QueryDocumentSnapshot) => snapshot.data() as T
+  }
+) {
+  return collection(getFirestoreDb(), collectionName).withConverter(converter);
+}
+
+// Update all other occurrences of db in this file to use getFirestoreDb()
+export function getCollection<T>(collectionName: string) {
+  return collection(getFirestoreDb(), collectionName).withConverter({
+    toFirestore: (data: T) => data as DocumentData,
+    fromFirestore: (snapshot: QueryDocumentSnapshot) => snapshot.data() as T
+  });
+}

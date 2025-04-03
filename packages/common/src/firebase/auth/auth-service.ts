@@ -13,7 +13,10 @@ import {
   inMemoryPersistence,
   getIdTokenResult,
 } from 'firebase/auth';
-import { auth, db } from '../core/firebase';
+import {
+  getFirebaseAuth,
+  getFirestoreDb
+} from '../core/firebase';
 import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
 import { UserProfile, User as FirestoreUser } from '../../types/firestore';
 
@@ -22,15 +25,15 @@ const REMEMBER_ME_KEY = 'time_tracking_remember_me';
 const LAST_USER_KEY = 'time_tracking_last_user';
 
 // Set persistence level - controls how long the user stays logged in
-export const setPersistenceLevel = async (level: 'local' | 'session' | 'none'): Promise<void> => {
+export function setPersistenceLevel(level: 'LOCAL' | 'SESSION' | 'NONE' = 'LOCAL') {
   const persistenceMap = {
-    local: browserLocalPersistence,    // Persists even when window/browser is closed
-    session: browserSessionPersistence, // Persists only in current tab/window
-    none: inMemoryPersistence,         // No persistence, lost on refresh
+    'LOCAL': browserLocalPersistence,
+    'SESSION': browserSessionPersistence,
+    'NONE': inMemoryPersistence
   };
   
-  return setPersistence(auth, persistenceMap[level]);
-};
+  return setPersistence(getFirebaseAuth(), persistenceMap[level]);
+}
 
 // Store the remembered user details
 export const setRememberedUser = (email: string, rememberMe: boolean): void => {
@@ -70,38 +73,44 @@ export const getLastUser = (): string | null => {
 
 // Login with email and password
 export const login = async (
-  email: string, 
-  password: string, 
-  rememberMe: boolean = false
+  email: string,
+  password: string,
+  rememberMe = false,
+  persistenceLevel: 'LOCAL' | 'SESSION' | 'NONE' = 'SESSION'
 ): Promise<UserCredential> => {
-  // Set persistence based on remember me
-  const persistenceLevel = rememberMe ? 'local' : 'session';
-  await setPersistenceLevel(persistenceLevel);
-  
-  // Perform login
-  const userCredential = await signInWithEmailAndPassword(auth, email, password);
-  
-  // Save remember me preference
-  setRememberedUser(email, rememberMe);
-  
-  // Record last login timestamp
-  if (userCredential.user) {
-    await updateDoc(doc(db, 'users', userCredential.user.uid), {
-      lastLoginAt: new Date().toISOString(),
-    });
+  try {
+    // Set the persistence level based on remember me
+    const level = rememberMe ? 'LOCAL' : persistenceLevel;
+    await setPersistenceLevel(level);
+    
+    // Perform login
+    const userCredential = await signInWithEmailAndPassword(getFirebaseAuth(), email, password);
+    
+    // Save remember me preference
+    setRememberedUser(email, rememberMe);
+    
+    // Record last login timestamp
+    if (userCredential.user) {
+      await updateDoc(doc(getFirestoreDb(), 'users', userCredential.user.uid), {
+        lastLoginAt: new Date().toISOString(),
+      });
+    }
+    
+    return userCredential;
+  } catch (error) {
+    console.error('Login failed', error);
+    throw error;
   }
-  
-  return userCredential;
 };
 
 // Sign out
 export const signOut = async (): Promise<void> => {
-  return firebaseSignOut(auth);
+  return firebaseSignOut(getFirebaseAuth());
 };
 
 // Send password reset email
 export const sendPasswordResetEmail = async (email: string): Promise<void> => {
-  return firebaseSendPasswordResetEmail(auth, email);
+  return firebaseSendPasswordResetEmail(getFirebaseAuth(), email);
 };
 
 // Register new user with email, password, and profile data
@@ -111,7 +120,7 @@ export const register = async (
   userData: Omit<FirestoreUser, 'id' | 'createdAt' | 'updatedAt'>
 ): Promise<UserCredential> => {
   // Create the user account
-  const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+  const userCredential = await createUserWithEmailAndPassword(getFirebaseAuth(), email, password);
   const user = userCredential.user;
 
   // Add user data to Firestore
@@ -136,7 +145,7 @@ export const register = async (
   };
 
   // Create user document
-  await setDoc(doc(db, 'users', user.uid), newUserData);
+  await setDoc(doc(getFirestoreDb(), 'users', user.uid), newUserData);
 
   // Create user profile
   const userProfile: UserProfile = {
@@ -148,19 +157,19 @@ export const register = async (
   };
 
   // Create user profile document
-  await setDoc(doc(db, 'userProfiles', user.uid), userProfile);
+  await setDoc(doc(getFirestoreDb(), 'userProfiles', user.uid), userProfile);
 
   return userCredential;
 };
 
 // Get current authenticated user
 export const getCurrentUser = (): User | null => {
-  return auth.currentUser;
+  return getFirebaseAuth().currentUser;
 };
 
 // Get user profile data from Firestore
 export const getUserProfile = async (userId: string): Promise<UserProfile | null> => {
-  const userDoc = await getDoc(doc(db, 'userProfiles', userId));
+  const userDoc = await getDoc(doc(getFirestoreDb(), 'userProfiles', userId));
 
   if (userDoc.exists()) {
     return userDoc.data() as UserProfile;
@@ -200,7 +209,7 @@ export const storeCredential = async (userId: string, credential: string): Promi
     localStorage.setItem(`biometric_cred_${userId}`, credential);
     
     // Update user profile to indicate biometric is enabled
-    await updateDoc(doc(db, 'userProfiles', userId), {
+    await updateDoc(doc(getFirestoreDb(), 'userProfiles', userId), {
       'preferences.biometricEnabled': true,
       updatedAt: new Date().toISOString(),
     });
@@ -226,7 +235,7 @@ export const getStoredCredential = async (userId: string): Promise<string | null
 
 // Auth state observer
 export const onAuthChange = (callback: (user: User | null) => void) => {
-  return onAuthStateChanged(auth, callback);
+  return onAuthStateChanged(getFirebaseAuth(), callback);
 };
 
 // Check if biometric authentication is available
@@ -266,7 +275,7 @@ export const authenticateWithBiometric = async (userId: string): Promise<UserCre
     
     // For now, we'll just get the user's email and log them in automatically
     // This is NOT secure and is just for demonstration
-    const userDoc = await getDoc(doc(db, 'users', userId));
+    const userDoc = await getDoc(doc(getFirestoreDb(), 'users', userId));
     if (!userDoc.exists()) {
       throw new Error('User not found');
     }
