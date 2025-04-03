@@ -14,7 +14,7 @@ import {
   QueryConstraint,
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
-import { db } from '../../firebase/core/firebase';
+import { getFirestoreDb } from '../../firebase/core/firebase';
 import { TimeEntry } from '../../types/firestore';
 import { createMetadata, updateMetadata } from '../metadata';
 
@@ -36,7 +36,7 @@ export const timeEntriesApi = {
       throw new Error('Users can only create time entries for themselves');
     }
 
-    const docRef = await addDoc(collection(db, COLLECTION), {
+    const docRef = await addDoc(collection(getFirestoreDb(), COLLECTION), {
       ...entry,
       // Add metadata for security auditing
       ...createMetadata(currentUser),
@@ -50,7 +50,7 @@ export const timeEntriesApi = {
    * Get a time entry by ID
    */
   async getById(id: string): Promise<TimeEntry | null> {
-    const docRef = doc(db, COLLECTION, id);
+    const docRef = doc(getFirestoreDb(), COLLECTION, id);
     const docSnap = await getDoc(docRef);
 
     if (!docSnap.exists()) return null;
@@ -65,7 +65,7 @@ export const timeEntriesApi = {
    * Update a time entry
    */
   async update(id: string, data: Partial<TimeEntry>, currentUser: User): Promise<void> {
-    const docRef = doc(db, COLLECTION, id);
+    const docRef = doc(getFirestoreDb(), COLLECTION, id);
     const docSnap = await getDoc(docRef);
 
     if (!docSnap.exists()) {
@@ -93,7 +93,7 @@ export const timeEntriesApi = {
    * Delete a time entry (soft delete)
    */
   async softDelete(id: string, currentUser: User): Promise<void> {
-    const docRef = doc(db, COLLECTION, id);
+    const docRef = doc(getFirestoreDb(), COLLECTION, id);
 
     await updateDoc(docRef, {
       isDeleted: true,
@@ -107,7 +107,7 @@ export const timeEntriesApi = {
    * Note: This is blocked by Firestore rules, but we keep it for admin tools
    */
   async hardDelete(id: string): Promise<void> {
-    await deleteDoc(doc(db, 'timeEntries', id));
+    await deleteDoc(doc(getFirestoreDb(), 'timeEntries', id));
   },
 
   /**
@@ -126,7 +126,7 @@ export const timeEntriesApi = {
       orderBy('date', 'asc'),
     ];
 
-    const q = query(collection(db, COLLECTION), ...constraints);
+    const q = query(collection(getFirestoreDb(), COLLECTION), ...constraints);
     const querySnapshot = await getDocs(q);
 
     return querySnapshot.docs.map(
@@ -155,7 +155,7 @@ export const timeEntriesApi = {
       orderBy('date', 'asc'),
     ];
 
-    const q = query(collection(db, COLLECTION), ...constraints);
+    const q = query(collection(getFirestoreDb(), COLLECTION), ...constraints);
 
     return onSnapshot(q, snapshot => {
       const entries = snapshot.docs.map(
@@ -174,7 +174,7 @@ export const timeEntriesApi = {
 /**
  * Collection reference for time entries
  */
-const timeEntriesCollection = collection(db, 'timeEntries');
+const timeEntriesCollection = collection(getFirestoreDb(), 'timeEntries');
 
 /**
  * Get all time entries with optional filters

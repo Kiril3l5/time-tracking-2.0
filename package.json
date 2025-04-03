@@ -16,6 +16,7 @@
     "deploy:hours": "firebase deploy --only hosting:hours",
     "app:deploy": "node scripts/deploy.js",
     "app:deploy:test": "node scripts/preview.js",
+    "verify:firebase-config": "node scripts/verify-firebase-config.js",
     "build:all": "pnpm run build:common && pnpm run build:admin && pnpm run build:hours",
     "build:common": "cd packages/common && pnpm run build",
     "build:admin": "cd packages/admin && pnpm run build",

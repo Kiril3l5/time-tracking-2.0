@@ -1,10 +1,13 @@
+/**
+ * Firebase Performance Monitoring module
+ */
 import { getPerformance, trace } from 'firebase/performance';
-import { app } from '../core/firebase';
+import { getFirebaseApp } from '../core/firebase';
 
 /**
  * Initialize Firebase Performance Monitoring
  */
-export const performance = getPerformance(app);
+export const performance = getPerformance(getFirebaseApp());
 
 /**
  * Create a custom trace for measuring performance

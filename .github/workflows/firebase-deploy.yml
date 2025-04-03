@@ -115,7 +115,24 @@ jobs:
           VITE_USE_FIREBASE_EMULATOR: "false"
         run: |
           pnpm add -g firebase-tools
-          firebase deploy --only hosting,firestore:rules
+          
+          # Verify built files exist and have proper content
+          echo "Verifying build artifacts..."
+          if [ ! -d "packages/hours/dist" ] || [ ! -d "packages/admin/dist" ]; then
+            echo "Error: Build directories not found! Deployment will fail."
+            exit 1
+          fi
+          
+          # Check if Firebase config is properly embedded in the built files
+          echo "Checking for Firebase configuration in built files..."
+          if ! grep -q "firebaseApp" packages/hours/dist/assets/*.js || ! grep -q "firebaseApp" packages/admin/dist/assets/*.js; then
+            echo "Warning: Firebase configuration may not be properly embedded in built files."
+            echo "This could cause the 'Missing Firebase configuration' error."
+          fi
+          
+          # Deploy with explicit project specification
+          echo "Deploying to Firebase..."
+          firebase deploy --only hosting,firestore:rules --project=${{ secrets.FIREBASE_PROJECT_ID }}
       
       # Preview deployment for pull requests - using the same authentication
       # Creates a PR-specific channel that can be used for review
