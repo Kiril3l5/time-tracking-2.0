@@ -2,11 +2,16 @@ name: Firebase Deployment
 
 # This workflow handles both production deployments and pull request preview deployments
 # - For main branch pushes: Deploys to production Firebase hosting
+# - For feature branch pushes: Only runs linting and tests (no deployment)
 # - For pull requests: Creates preview deployments with PR-specific channels
 
 on:
   push:
-    branches: ["main"]
+    branches: 
+      - "main"
+      - "feature/**"
+      - "fix/**"
+      - "bugfix/**"
   pull_request:
     branches: ["main"]
 
@@ -49,7 +54,18 @@ jobs:
       - name: Test
         run: pnpm run test
       
+      # For feature branches, we only want to validate with lint and tests
+      # No need to build or deploy since that's done locally by improved-workflow.js
+      - name: Feature Branch Validation
+        if: github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/feature/') || startsWith(github.ref, 'refs/heads/fix/') || startsWith(github.ref, 'refs/heads/bugfix/'))
+        run: |
+          echo "Feature branch validation complete! ✅"
+          echo "This is a feature branch push, so we're only running linting and tests."
+          echo "You've already deployed to Firebase locally using improved-workflow.js."
+      
+      # Only perform builds and deployments for main branch and PRs
       - name: Project Cleanup
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         run: |
           echo "Performing project cleanup before build..."
           # Set CI environment variable to ensure proper cleanup behavior
@@ -59,6 +75,7 @@ jobs:
           echo "Cleanup completed."
       
       - name: Build packages
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         env:
           VITE_FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
@@ -77,6 +94,7 @@ jobs:
       
       # Authentication for any GitHub action (both main branch and PRs)
       - name: Authenticate to Google Cloud
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         id: auth
         uses: google-github-actions/auth@v1
         with:
