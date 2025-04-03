@@ -1028,12 +1028,20 @@ class Workflow {
               commandRunner.promptText(prompt, defaultValue)
             );
             
-            logger.success(`Changes pushed to branch: ${currentBranch}`);
-            logger.info('GitHub Actions will run automatically on this push.');
-            logger.info('You can manually create a PR when ready on GitHub.');
+            if (commitResult.pushed) {
+              logger.success(`Changes pushed to branch: ${currentBranch}`);
+              logger.info('GitHub Actions will run automatically on this push.');
+              logger.info('You can manually create a PR when ready on GitHub.');
+            } else if (commitResult.pushError) {
+              logger.error(`Error pushing to remote: ${commitResult.pushError}`);
+              logger.info(`You can manually push with: git push -u origin ${currentBranch}`);
+            } else {
+              logger.success(`Changes committed but not pushed to branch: ${currentBranch}`);
+              logger.info(`You can manually push with: git push -u origin ${currentBranch}`);
+            }
           } catch (error) {
-            logger.error('Error pushing to remote:', error.message);
-            logger.info(`You can manually push with: git push -u origin ${currentBranch}`);
+            logger.error('Error committing changes:', error.message);
+            logger.info(`You can manually commit and push using the git command line.`);
           }
         }
       }

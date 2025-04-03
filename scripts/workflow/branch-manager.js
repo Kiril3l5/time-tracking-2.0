@@ -374,7 +374,28 @@ export async function commitChanges(branchName, promptFn) {
       logger.success("All changes committed successfully!");
     }
     
-    return { success: true, message: commitMessage };
+    // Push changes to remote repository
+    logger.info("Pushing changes to remote repository...");
+    try {
+      // Check if branch exists on remote
+      const remoteBranchExists = execSync(`git ls-remote --heads origin ${branchName}`, { encoding: 'utf8' }).trim();
+      
+      if (remoteBranchExists) {
+        // Branch exists on remote, do a regular push
+        execSync(`git push origin ${branchName}`, { stdio: 'inherit' });
+      } else {
+        // Branch doesn't exist on remote, set upstream
+        execSync(`git push -u origin ${branchName}`, { stdio: 'inherit' });
+      }
+      
+      logger.success(`Changes pushed to remote branch: ${branchName}`);
+    } catch (pushError) {
+      logger.error(`Failed to push changes: ${pushError.message}`);
+      logger.info(`You can manually push with: git push -u origin ${branchName}`);
+      return { success: true, message: commitMessage, pushError: pushError.message };
+    }
+    
+    return { success: true, message: commitMessage, pushed: true };
   } catch (error) {
     logger.error(`Failed to commit changes: ${error.message}`);
     return { success: false, error: error.message };

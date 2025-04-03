@@ -23,6 +23,9 @@ npm run workflow
 
 # Using pnpm
 pnpm run workflow
+
+# Direct execution
+node scripts/improved-workflow.js
 ```
 
 ### Workflow Options
@@ -41,6 +44,17 @@ pnpm run workflow --skip-deploy
 
 # Verbose mode (more detailed output)
 pnpm run workflow --verbose
+
+# Skip specific advanced checks
+pnpm run workflow --skip-bundle-check
+pnpm run workflow --skip-dead-code
+pnpm run workflow --skip-docs-check
+pnpm run workflow --skip-docs-freshness
+pnpm run workflow --skip-workflow-validation
+pnpm run workflow --skip-health-check
+
+# Skip all advanced checks
+pnpm run workflow --skip-advanced-checks
 ```
 
 ## Workflow Phases
@@ -62,6 +76,8 @@ The workflow progresses through five distinct phases:
   - Documentation quality
   - Dead code detection
   - Security vulnerabilities
+  - Bundle size analysis
+  - Health checks
 
 ### 3. Build Phase
 - Cleans previous build artifacts with platform-specific commands (Windows/Unix)
@@ -77,7 +93,7 @@ The workflow progresses through five distinct phases:
 - Provides preview URLs for both apps
 
 ### 5. Results Phase
-- Cleans up old preview channels (maintaining only the 5 most recent)
+- Cleans up old preview channels (maintaining only the most recent ones based on configuration)
 - Generates a comprehensive dashboard
 - Displays warnings and suggestions for improvement
 - Provides options for branch/commit management
@@ -103,71 +119,75 @@ A comprehensive list of potential issues categorized by:
 - Phase (Setup, Validation, Build, Deploy, Results)
 - Type (Documentation, Security, Code Quality, etc.)
 
-Each warning includes a specific suggestion for how to fix the issue.
+Each warning includes specific information about the issue and the affected file/component.
+
+### Advanced Check Results
+Detailed results from advanced checks, including:
+- Bundle size analysis
+- Dead code detection
+- Documentation quality and freshness
+- TypeScript and lint issues
+- Project health evaluation
 
 ### Workflow Settings
 Shows the configuration used for this run, including:
 - Command-line options
 - Git branch information
+- Environment information
 
 ## Channel Cleanup
 
 The workflow automatically manages Firebase preview channels:
 
-- Maintains only the 5 most recent preview channels
+- Keeps the most recent channels based on configuration (default is 5)
+- Removes channels older than a specified number of days (default is 7)
 - Deletes older channels to stay within Firebase hosting limits
 - Shows cleanup status in the dashboard
 
-## Understanding Warning Categories
+## Configuration System
 
-The dashboard groups warnings into several categories:
+The workflow uses a hierarchical configuration system:
 
-### Documentation
-- Missing or incomplete README files
-- Missing JSDoc comments
-- Broken links in documentation
-- Incomplete API documentation
+1. **Default Configuration**: Basic settings defined in code
+2. **Firebase Configuration**: Settings from .firebaserc and firebase.json
+3. **Environment Variables**: Override settings with environment variables
+4. **Command Line Options**: Override settings with command-line flags
 
-### Security
-- Dependencies with vulnerabilities
-- Authentication issues
-- Missing security configurations
+Key configurations include:
 
-### Code Quality
-- Unused imports/exports
-- Unnecessary type annotations
-- Console.log statements in production code
-- Type 'any' usage
+```
+# Firebase Configuration
+FIREBASE_PROJECT_ID - Firebase project ID
+FIREBASE_SITE - Site name for hosting
 
-### Environment
-- Missing environment variables
-- Invalid configuration settings
+# Preview Configuration
+PREVIEW_PREFIX - Prefix for preview channel names (default: 'preview-')
+PREVIEW_EXPIRE_DAYS - Days until preview channels expire (default: 7)
+PREVIEW_KEEP_COUNT - Number of channels to keep (default: 5)
 
-## After Workflow Completion
+# Build Configuration
+BUILD_DIR - Directory containing build artifacts (default: 'dist')
+```
 
-Once the workflow completes, you'll be prompted with options for branch management:
+## Workflow Architecture
 
-1. **Commit Changes**: You can choose to commit your changes directly
-2. **Create Pull Request**: Option to create a PR with the preview URLs included
-3. **Continue Working**: Keep your changes uncommitted for further work
+The workflow system has a modular architecture:
 
-## Workflow Structure
-
-The workflow is composed of several specialized modules:
-
-- `improved-workflow.js`: Main orchestration script
-- `workflow/quality-checker.js`: Handles code quality validation
-- `workflow/doc-quality.js`: Checks documentation quality
-- `workflow/deployment-manager.js`: Manages deployments
-- `workflow/consolidated-report.js`: Generates the dashboard
-- `firebase/channel-cleanup.js`: Manages Firebase preview channels
+- **Central Orchestrator**: `improved-workflow.js` - Manages workflow phases
+- **Configuration Management**: `workflow/workflow-config.js` - Centralized settings
+- **Quality Checking**: `checks/quality-checker.js` - Code quality validation
+- **Advanced Checks**: `workflow/advanced-checker.js` - In-depth code analysis
+- **Deployment**: `workflow/deployment-manager.js` - Firebase deployment
+- **Reporting**: `workflow/consolidated-report.js` - Dashboard generation
+- **Channel Management**: `firebase/channel-cleanup.js` - Hosting channel cleanup
+- **Package Coordination**: `workflow/package-coordinator.js` - Package build ordering
 
 ## Troubleshooting
 
 If you encounter issues with the workflow:
 
 ### Dashboard Not Opening
-- The dashboard is saved as `preview-dashboard.html` in the project root
+- The dashboard is saved as `dashboard.html` in the project root
 - Open it manually if it doesn't launch automatically
 
 ### Firebase Authentication Issues
@@ -188,13 +208,18 @@ If you encounter issues with the workflow:
 - **Unix/Mac**: Ensure proper permissions for script execution with `chmod +x scripts/*.js`
 - **Cross-Platform**: The workflow automatically detects your OS and uses appropriate commands for cleaning build artifacts
 
+### Dependency Issues
+- If you encounter import errors, run `pnpm install` to ensure all dependencies are installed
+- The 'open' package is required for automatic dashboard viewing
+
 ## Extending the Workflow
 
 The workflow is designed to be extensible. To add new checks or features:
 
 1. Add new modules in the appropriate scripts directory
-2. Connect them to the main workflow in a modular way
-3. Ensure warnings are properly categorized
+2. Import them into the main workflow components
+3. Use the `recordWarning` method to add findings to the dashboard
+4. Follow the existing module pattern for consistency
 
 ## Best Practices
 
