@@ -146,6 +146,48 @@ function createFeatureBranch(branchName) {
 }
 
 /**
+ * Handle next steps based on user selection
+ * @param {string} choice - User's selected option
+ * @param {string} currentBranch - Current branch name
+ */
+async function handleNextSteps(choice, currentBranch) {
+  if (currentBranch === 'main' || currentBranch === 'master') {
+    if (choice === '1') {
+      logger.info("Starting new feature branch workflow...");
+      try {
+        const result = execSync('pnpm run workflow:new', { stdio: 'inherit' });
+        logger.success("New feature branch workflow completed");
+      } catch (error) {
+        logger.error("Failed to run workflow:new command:", error.message);
+      }
+    } else if (choice === '2') {
+      logger.info("Running complete workflow...");
+      try {
+        const result = execSync('pnpm run workflow', { stdio: 'inherit' });
+        logger.success("Workflow completed");
+      } catch (error) {
+        logger.error("Failed to run workflow command:", error.message);
+      }
+    }
+  } else {
+    // On feature branch
+    if (choice === '1') {
+      logger.info("Continuing development on current branch");
+      logger.info("You can start making changes to your code now");
+      // No action needed, just informational
+    } else if (choice === '2') {
+      logger.info("Running complete workflow...");
+      try {
+        const result = execSync('pnpm run workflow', { stdio: 'inherit' });
+        logger.success("Workflow completed");
+      } catch (error) {
+        logger.error("Failed to run workflow command:", error.message);
+      }
+    }
+  }
+}
+
+/**
  * Main function to sync the main branch
  */
 async function syncMainBranch() {
@@ -314,6 +356,14 @@ async function syncMainBranch() {
       logger.info("2. Run the complete workflow: pnpm run workflow");
     }
     
+    // Allow the user to select a next step
+    const nextStep = await prompt("Enter your choice (or press Enter to exit): ");
+    if (nextStep === '1' || nextStep === '2') {
+      await handleNextSteps(nextStep, finalBranch);
+    } else {
+      logger.info("Exiting script. Happy coding!");
+    }
+    
   } catch (error) {
     const duration = Date.now() - startTime;
     state.fail(error);
@@ -329,6 +379,9 @@ async function syncMainBranch() {
     }
     
     return 1;
+  } finally {
+    // Close the readline interface
+    rl.close();
   }
 }
 
