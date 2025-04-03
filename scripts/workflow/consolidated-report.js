@@ -742,7 +742,7 @@ export async function generateReport(data) {
     try {
       await open(DASHBOARD_PATH);
       logger.success('Dashboard opened in your browser');
-    } catch (error) {
+  } catch (error) {
       logger.warn(`Could not open dashboard automatically: ${error.message}`);
       logger.info(`Dashboard available at: ${DASHBOARD_PATH}`);
     }
