@@ -254,14 +254,22 @@ class WorkflowState {
   }
 
   /**
-   * Update preview URLs
-   * @param {Object} urls - Preview URLs
+   * Set preview URLs for the current workflow
+   * @param {Object} urls - Preview URLs object with hours and admin properties
    */
   setPreviewUrls(urls) {
     this.state.previewUrls = {
       ...this.state.previewUrls,
       ...urls
     };
+    
+    // Also add to metrics for easier tracking
+    this.updateMetrics({
+      previewUrls: {
+        ...this.state.previewUrls,
+        ...urls
+      }
+    });
     
     this._saveState();
   }

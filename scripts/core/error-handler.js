@@ -11,6 +11,7 @@
  * - Error aggregation to collect and report on multiple errors
  * - Standardized error formatting with color highlighting
  * - Suggestions for error recovery where applicable
+ * - Workflow integration utilities for easier adoption
  * 
  * @module core/error-handler
  * @example
@@ -704,4 +705,159 @@ const errorHandler = {
   handleFatalError
 };
 
-export default errorHandler; 
+/**
+ * Format error details in a consistent way for display
+ * @param {Error} error - The error to format
+ * @param {Object} [options={}] - Formatting options
+ * @param {boolean} [options.includeStack=false] - Whether to include stack trace
+ * @param {boolean} [options.colorize=true] - Whether to colorize output
+ * @returns {string} Formatted error message
+ */
+export function formatErrorDetails(error, options = {}) {
+  if (!error) return 'Unknown error';
+  
+  const { includeStack = false, colorize = true } = options;
+  
+  // Format specialized workflow errors
+  if (error instanceof WorkflowError) {
+    return error.format();
+  }
+  
+  // Format regular errors with extra properties
+  let details = `Error: ${error.message}`;
+  
+  // Add common error properties
+  if (error.code) details += `\nCode: ${error.code}`;
+  if (error.exitCode) details += `\nExit Code: ${error.exitCode}`;
+  if (error.command) details += `\nCommand: ${error.command}`;
+  if (error.stderr) details += `\nStandard Error: ${error.stderr}`;
+  if (error.stdout) details += `\nStandard Output: ${error.stdout}`;
+  
+  // Add any additional fields that could be helpful
+  const additionalFields = ['details', 'status', 'response', 'context', 'phase', 'step'];
+  for (const field of additionalFields) {
+    if (error[field]) {
+      if (typeof error[field] === 'object') {
+        details += `\n${field}: ${JSON.stringify(error[field], null, 2)}`;
+      } else {
+        details += `\n${field}: ${error[field]}`;
+      }
+    }
+  }
+  
+  // Add stack trace if requested
+  if (includeStack && error.stack) {
+    details += `\n\nStack Trace:\n${error.stack}`;
+  }
+  
+  return details;
+}
+
+/**
+ * Create a workflow-compatible error with enhanced details
+ * @param {string} message - Error message
+ * @param {Object} options - Error options
+ * @returns {Error} Enhanced error object
+ */
+export function createWorkflowError(message, options = {}) {
+  const { phase, step, cause, suggestion } = options;
+  
+  // Create a specialized error or use base class
+  let errorType = options.type || 'general';
+  let error;
+  
+  switch(errorType.toLowerCase()) {
+    case 'build':
+      error = new BuildError(message, cause);
+      break;
+    case 'validation':
+      error = new ValidationError(message, options.field, cause);
+      break;
+    case 'authentication':
+      error = new AuthenticationError(message);
+      break;
+    case 'deployment':
+      error = new DeploymentError(message, cause);
+      break;
+    default:
+      error = new WorkflowError(message, options.category || 'workflow');
+  }
+  
+  // Add workflow-specific properties
+  if (phase) error.phase = phase;
+  if (step) error.step = step;
+  if (suggestion) error.suggestion = suggestion;
+  
+  return error;
+}
+
+/**
+ * Convert any errors from a promise to workflow-compatible format
+ * @param {Promise} promise - The promise to handle
+ * @param {Object} options - Error handling options
+ * @returns {Promise} - The handled promise
+ */
+export function withWorkflowErrorHandling(promise, options = {}) {
+  return promise.catch(error => {
+    const workflowError = createWorkflowError(error.message, {
+      ...options,
+      cause: error
+    });
+    
+    throw workflowError;
+  });
+}
+
+/**
+ * Create an error handler function that can be used with workflow
+ * @param {Function} recordWarning - Function to record warnings in workflow
+ * @param {Function} recordStep - Function to record steps in workflow
+ * @param {Object} options - Additional options
+ * @returns {Function} - Error handler function
+ */
+export function createWorkflowErrorHandler(recordWarning, recordStep, options = {}) {
+  const { phase = 'Unknown', defaultStepName = 'Operation' } = options;
+  
+  return function handleWorkflowError(error, stepName = defaultStepName, startTime = 0) {
+    // Calculate duration if startTime is provided
+    const duration = startTime > 0 ? Date.now() - startTime : 0;
+    
+    // Format error message
+    const formattedError = formatErrorDetails(error);
+    
+    // Log the error
+    logger.error(`${stepName} failed: ${error.message}`);
+    
+    // Record as warning if recording function available
+    if (recordWarning) {
+      recordWarning(`Error in ${stepName}: ${error.message}`, phase, stepName);
+    }
+    
+    // Record step failure if tracking function available
+    if (recordStep) {
+      recordStep(stepName, phase, false, duration, error.message);
+    }
+    
+    return {
+      success: false,
+      error: error.message,
+      details: formattedError,
+      duration
+    };
+  };
+}
+
+export default {
+  WorkflowError,
+  ValidationError,
+  AuthenticationError,
+  QualityCheckError,
+  BuildError,
+  DeploymentError,
+  DependencyError,
+  ErrorAggregator,
+  formatErrorDetails,
+  createWorkflowError,
+  withWorkflowErrorHandling,
+  createWorkflowErrorHandler
+}; 

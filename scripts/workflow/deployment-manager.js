@@ -4,11 +4,12 @@
  * Handles deployment to Firebase preview environments.
  */
 
-import { commandRunner } from '../core/command-runner.js';
-import { logger } from '../core/logger.js';
-import { getCurrentBranch } from './branch-manager.js';
 import fs from 'fs';
 import path from 'path';
+import getWorkflowState from './workflow-state.js';
+import { logger } from '../core/logger.js';
+import { commandRunner } from '../core/command-runner.js';
+import { getCurrentBranch } from './branch-manager.js';
 
 /* global process */
 
@@ -141,6 +142,127 @@ export async function deployPackage(options) {
 }
 
 /**
+ * Deploy a package with workflow integration
+ *
+ * @param {Object} options - Deployment options
+ * @param {string} options.channelId - Channel ID to deploy to
+ * @param {boolean} [options.skipBuild=false] - Skip build step
+ * @param {boolean} [options.force=false] - Force deployment even if artifacts don't exist
+ * @param {string} [options.phase='Deployment'] - Current phase of the workflow
+ * @returns {Promise<Object>} Deployment result with preview URLs
+ */
+export async function deployPackageWithWorkflowIntegration(options = {}) {
+  const { channelId, skipBuild = false, force = false, phase = 'Deployment' } = options;
+  
+  // Get workflow state for tracking
+  const workflowState = getWorkflowState();
+  
+  // Generate step name
+  const stepName = 'Package Deployment';
+  
+  // Start time for performance tracking
+  const startTime = Date.now();
+  
+  // Set current workflow step
+  workflowState.setCurrentStep(stepName);
+  
+  try {
+    // Validate channel ID
+    if (!channelId) {
+      const error = 'Channel ID is required for deployment';
+      workflowState.addWarning(error, stepName, phase);
+      workflowState.completeStep(stepName, { success: false, error });
+      return { success: false, error };
+    }
+    
+    // Check if build artifacts exist or run build
+    const artifactsExist = await checkBuildArtifacts();
+    
+    if (!artifactsExist) {
+      if (skipBuild) {
+        if (!force) {
+          const error = 'Build artifacts not found and build step is skipped. Use force option to deploy anyway.';
+          workflowState.addWarning(error, stepName, phase);
+          workflowState.completeStep(stepName, { success: false, error });
+          return { success: false, error };
+        } else {
+          workflowState.addWarning('Forcing deployment without build artifacts', stepName, phase);
+        }
+      } else {
+        // Run build
+        workflowState.addWarning('Build artifacts not found. Running build...', stepName, phase);
+        
+        try {
+          await runBuild();
+          
+          // Verify build succeeded
+          const artifactsExistAfterBuild = await checkBuildArtifacts();
+          if (!artifactsExistAfterBuild && !force) {
+            const error = 'Build completed but artifacts are still missing';
+            workflowState.addWarning(error, stepName, phase);
+            workflowState.completeStep(stepName, { success: false, error });
+            return { success: false, error };
+          }
+        } catch (buildError) {
+          const error = `Build failed: ${buildError.message}`;
+          workflowState.addWarning(error, stepName, phase);
+          workflowState.completeStep(stepName, { success: false, error });
+          return { success: false, error };
+        }
+      }
+    }
+    
+    // Deploy the package
+    workflowState.addWarning(`Deploying to channel: ${channelId}`, stepName, phase, 'info');
+    
+    const deployResult = await deployToFirebase(channelId);
+    
+    if (!deployResult.success) {
+      const error = `Deployment failed: ${deployResult.error}`;
+      workflowState.addWarning(error, stepName, phase);
+      workflowState.completeStep(stepName, { success: false, error });
+      return deployResult;
+    }
+    
+    // Record preview URLs
+    if (deployResult.urls) {
+      workflowState.setPreviewUrls(deployResult.urls);
+      workflowState.addWarning(`Deployed successfully. Preview URLs: ${JSON.stringify(deployResult.urls)}`, stepName, phase, 'info');
+    }
+    
+    // Record completion
+    workflowState.completeStep(stepName, { 
+      success: true, 
+      channelId,
+      urls: deployResult.urls
+    });
+    
+    // Track metrics
+    workflowState.updateMetrics({
+      deploymentDuration: Date.now() - startTime,
+      channelId
+    });
+    
+    return {
+      ...deployResult,
+      duration: Date.now() - startTime
+    };
+  } catch (error) {
+    // Handle unexpected errors
+    const errorMessage = `Unexpected deployment error: ${error.message}`;
+    workflowState.addWarning(errorMessage, stepName, phase);
+    workflowState.trackError(error, stepName);
+    workflowState.completeStep(stepName, { success: false, error: errorMessage });
+    
+    return {
+      success: false,
+      error: errorMessage,
+      duration: Date.now() - startTime
+    };
+  }
+}
+
+/**
  * Create a unique channel ID based on branch and timestamp
  * 
  * @returns {Promise<string>} Channel ID
@@ -165,4 +287,168 @@ export async function createChannelId() {
   }
   
   return channelId;
+}
+
+/**
+ * Check if build artifacts exist for both packages
+ * 
+ * @returns {Promise<boolean>} True if artifacts exist
+ */
+async function checkBuildArtifacts() {
+  try {
+    const hoursDistPath = path.resolve(process.cwd(), 'packages/hours/dist');
+    const adminDistPath = path.resolve(process.cwd(), 'packages/admin/dist');
+    
+    const hoursIndexPath = path.join(hoursDistPath, 'index.html');
+    const adminIndexPath = path.join(adminDistPath, 'index.html');
+    
+    const hoursExists = fs.existsSync(hoursDistPath) && fs.existsSync(hoursIndexPath);
+    const adminExists = fs.existsSync(adminDistPath) && fs.existsSync(adminIndexPath);
+    
+    return hoursExists && adminExists;
+  } catch (error) {
+    logger.error(`Error checking build artifacts: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Run the build process for both packages
+ * 
+ * @returns {Promise<Object>} Build result
+ */
+async function runBuild() {
+  try {
+    logger.info('Running build for all packages...');
+    
+    const buildResult = await commandRunner.runCommandAsync(
+      'pnpm run build:all',
+      { 
+        stdio: 'pipe',
+        timeout: 300000 // 5 minute timeout
+      }
+    );
+    
+    if (!buildResult.success) {
+      throw new Error(buildResult.error || 'Unknown build error');
+    }
+    
+    return { success: true };
+  } catch (error) {
+    logger.error(`Build error: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * Deploy to Firebase hosting
+ * 
+ * @param {string} channelId - Channel ID for deployment
+ * @returns {Promise<Object>} Deployment result with URLs
+ */
+async function deployToFirebase(channelId) {
+  try {
+    // Validate channel ID length
+    if (channelId && channelId.length > 63) {
+      return { 
+        success: false, 
+        error: `Channel ID '${channelId}' exceeds Firebase's 63 character limit`
+      };
+    }
+    
+    // Deploy hours app
+    logger.info('Deploying Hours app...');
+    const hoursResult = await commandRunner.runCommandAsync(
+      `firebase hosting:channel:deploy ${channelId} --only hours`,
+      { 
+        stdio: 'pipe',
+        timeout: 180000 // 3 minute timeout
+      }
+    );
+    
+    if (!hoursResult.success) {
+      return { 
+        success: false, 
+        error: `Hours deployment failed: ${hoursResult.error || 'Unknown error'}`
+      };
+    }
+    
+    // Deploy admin app
+    logger.info('Deploying Admin app...');
+    const adminResult = await commandRunner.runCommandAsync(
+      `firebase hosting:channel:deploy ${channelId} --only admin`,
+      { 
+        stdio: 'pipe',
+        timeout: 180000 // 3 minute timeout
+      }
+    );
+    
+    if (!adminResult.success) {
+      return { 
+        success: false, 
+        error: `Admin deployment failed: ${adminResult.error || 'Unknown error'}`
+      };
+    }
+    
+    // Extract preview URLs
+    const urls = {
+      hours: extractUrlFromOutput(hoursResult.output, channelId),
+      admin: extractUrlFromOutput(adminResult.output, channelId)
+    };
+    
+    return {
+      success: true,
+      channelId,
+      urls
+    };
+  } catch (error) {
+    logger.error(`Deployment error: ${error.message}`);
+    return { 
+      success: false, 
+      error: `Deployment process error: ${error.message}`
+    };
+  }
+}
+
+/**
+ * Extract URL from Firebase deployment output
+ * 
+ * @param {string} output - Command output
+ * @param {string} channelId - Channel ID
+ * @returns {string|null} Extracted URL or null
+ */
+function extractUrlFromOutput(output, channelId) {
+  try {
+    if (!output) return null;
+    
+    // Try to find URL in the output
+    const lines = output.split('\n');
+    
+    // Look for the channel URL
+    for (const line of lines) {
+      if (line.includes('Channel URL') || line.includes('Live URL')) {
+        const urlMatch = line.match(/(https?:\/\/[^\s"]+)/);
+        if (urlMatch) {
+          return urlMatch[1];
+        }
+      }
+    }
+    
+    // If no URL found in output, try alternative extraction
+    const urlRegex = new RegExp(`${channelId}[^\\s"]*\\.(web\\.app|firebaseapp\\.com)`, 'i');
+    for (const line of lines) {
+      const match = line.match(urlRegex);
+      if (match) {
+        const fullUrlMatch = line.match(/(https?:\/\/[^\s"]+)/);
+        if (fullUrlMatch) {
+          return fullUrlMatch[1];
+        }
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    logger.debug(`URL extraction error: ${error.message}`);
+    return null;
+  }
 } 

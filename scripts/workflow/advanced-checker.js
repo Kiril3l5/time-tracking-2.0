@@ -17,6 +17,7 @@ import { runLint } from '../checks/lint-check.js';
 import { runChecks as runHealthChecks } from '../checks/health-checker.js';
 import { execSync } from 'child_process';
 import { setTimeout, clearTimeout } from 'timers';
+import getWorkflowState from './workflow-state.js';
 
 /**
  * A wrapper around the logger that respects silent mode
@@ -910,6 +911,221 @@ export async function runAllAdvancedChecks(options = {}) {
   };
 }
 
+/**
+ * Run a single advanced check with direct workflow integration
+ * 
+ * @param {string} checkName - Name of the check to run
+ * @param {Object} options - Check options
+ * @param {string} [options.phase='Validation'] - Current workflow phase
+ * @returns {Promise<Object>} Check result
+ */
+export async function runSingleCheckWithWorkflowIntegration(checkName, options = {}) {
+  const { 
+    phase = 'Validation',
+    ...checkOptions
+  } = options;
+  
+  // Get workflow state for tracking
+  const workflowState = getWorkflowState();
+  
+  const stepName = `${checkName} Check`;
+  const startTime = Date.now();
+  
+  // Start step tracking
+  workflowState.setCurrentStep(stepName);
+  
+  // Set silent mode based on options - we'll handle our own logging
+  const isSilent = checkOptions.silentMode !== false;
+  silentLogger.setSilent(isSilent);
+  
+  try {
+    // Select the appropriate check function
+    let checkFunction;
+    switch(checkName.toLowerCase()) {
+      case 'bundle':
+      case 'bundlesize':
+        checkFunction = runBundleSizeCheck;
+        break;
+      case 'deadcode':
+        checkFunction = runDeadCodeCheck;
+        break;
+      case 'docs':
+      case 'documentation':
+        checkFunction = runDocsQualityCheck;
+        break;
+      case 'docfreshness':
+        checkFunction = runDocsFreshnessCheck;
+        break;
+      case 'typescript':
+        checkFunction = runAdvancedTypeScriptCheck;
+        break;
+      case 'lint':
+        checkFunction = runAdvancedLintCheck;
+        break;
+      case 'workflow':
+      case 'workflowvalidation':
+        checkFunction = runWorkflowValidationCheck;
+        break;
+      case 'health':
+        checkFunction = runProjectHealthCheck;
+        break;
+      default: {
+        const error = `Unknown advanced check: ${checkName}`;
+        workflowState.addWarning(error, stepName, phase);
+        workflowState.completeStep(stepName, { success: false, error });
+        return { success: false, error };
+      }
+    }
+    
+    // Run the check with timeout handling
+    const checkResult = await runWithTimeout(
+      checkFunction(checkOptions),
+      options.timeout?.[checkName.toLowerCase()] || 60000,
+      `${checkName} Check`,
+      { success: false, error: `${checkName} check timed out` },
+      checkOptions
+    );
+    
+    // Record specific warnings based on check type
+    if (checkResult.data) {
+      if (checkName.toLowerCase() === 'bundle' || checkName.toLowerCase() === 'bundlesize') {
+        // Bundle size warnings
+        if (checkResult.data.issues) {
+          checkResult.data.issues.forEach(issue => {
+            workflowState.addWarning(`Bundle size issue: ${issue.message}`, stepName, phase);
+          });
+        }
+        
+        if (checkResult.data.sizeIncrease && checkResult.data.sizeIncrease > 10) {
+          workflowState.addWarning(`Bundle size increased by ${checkResult.data.sizeIncrease}% compared to the previous build`, stepName, phase);
+        }
+      } 
+      
+      else if (checkName.toLowerCase() === 'deadcode') {
+        // Dead code warnings
+        if (checkResult.data.files) {
+          checkResult.data.files.forEach(file => {
+            workflowState.addWarning(`Potential dead code: ${file.path} (${file.confidence}% confidence)`, stepName, phase);
+          });
+        }
+      } 
+      
+      else if (checkName.toLowerCase() === 'docs' || checkName.toLowerCase() === 'documentation') {
+        // Documentation quality warnings
+        if (checkResult.data.issues) {
+          checkResult.data.issues.forEach(issue => {
+            workflowState.addWarning(`Documentation issue: ${issue.message} (${issue.file})`, stepName, phase);
+          });
+        }
+      } 
+      
+      else if (checkName.toLowerCase() === 'docfreshness') {
+        // Documentation freshness warnings
+        if (checkResult.data.staleDocuments) {
+          checkResult.data.staleDocuments.forEach(doc => {
+            workflowState.addWarning(`Stale documentation: ${doc.file} (last updated ${doc.lastUpdated})`, stepName, phase);
+          });
+        }
+      } 
+      
+      else if (checkName.toLowerCase() === 'typescript') {
+        // TypeScript warnings
+        if (checkResult.data.errors) {
+          checkResult.data.errors.forEach(issue => {
+            workflowState.addWarning(`TypeScript issue: ${issue.message} (${issue.file}:${issue.line})`, stepName, phase);
+          });
+        }
+      } 
+      
+      else if (checkName.toLowerCase() === 'lint') {
+        // Lint warnings
+        if (checkResult.data.issues) {
+          checkResult.data.issues.forEach(issue => {
+            workflowState.addWarning(`Lint issue: ${issue.message} (${issue.file}:${issue.line})`, stepName, phase);
+          });
+        }
+      } 
+      
+      else if (checkName.toLowerCase() === 'workflow' || checkName.toLowerCase() === 'workflowvalidation') {
+        // Workflow validation warnings
+        if (checkResult.data.issues) {
+          checkResult.data.issues.forEach(issue => {
+            workflowState.addWarning(`Workflow validation issue: ${issue.message}`, stepName, phase);
+          });
+        }
+      } 
+      
+      else if (checkName.toLowerCase() === 'health') {
+        // Health check warnings
+        if (checkResult.data.stats && checkResult.data.stats.security) {
+          const security = checkResult.data.stats.security;
+          
+          // Security vulnerabilities
+          if (security.vulnerabilities && security.vulnerabilities.details) {
+            security.vulnerabilities.details.forEach(vuln => {
+              workflowState.addWarning(`Security vulnerability: ${vuln.package} (${vuln.severity}) - ${vuln.description}`, stepName, phase);
+            });
+          }
+          
+          // Security issues
+          if (security.issues) {
+            security.issues.forEach(issue => {
+              workflowState.addWarning(`Security issue: ${issue.message}`, stepName, phase);
+            });
+          }
+        }
+        
+        // Performance issues
+        if (checkResult.data.stats && checkResult.data.stats.performance && checkResult.data.stats.performance.issues) {
+          checkResult.data.stats.performance.issues.forEach(issue => {
+            workflowState.addWarning(`Performance issue: ${issue.message}`, stepName, phase);
+          });
+        }
+      }
+    }
+    
+    // Record warnings for timeouts
+    if (checkResult.timedOut) {
+      workflowState.addWarning(`${checkName} check timed out after ${options.timeout?.[checkName.toLowerCase()] || 60000}ms`, stepName, phase);
+    }
+    
+    // Update metrics with check data
+    if (checkResult.data) {
+      workflowState.updateMetrics({
+        advancedChecks: {
+          ...(workflowState.state.metrics.advancedChecks || {}),
+          [checkName.toLowerCase()]: checkResult.data
+        }
+      });
+    }
+    
+    // Complete step tracking
+    workflowState.completeStep(stepName, { 
+      success: checkResult.success,
+      data: checkResult.data,
+      duration: Date.now() - startTime
+    });
+    
+    return checkResult;
+  } catch (error) {
+    // Record error as a warning
+    workflowState.addWarning(`${checkName} check error: ${error.message}`, stepName, phase);
+    workflowState.trackError(error, stepName);
+    
+    // Complete step with failure
+    workflowState.completeStep(stepName, { 
+      success: false, 
+      error: error.message,
+      duration: Date.now() - startTime
+    });
+    
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
 export default {
   runBundleSizeCheck,
   runDeadCodeCheck,
@@ -919,5 +1135,6 @@ export default {
   runAdvancedLintCheck,
   runWorkflowValidationCheck,
   runProjectHealthCheck,
-  runAllAdvancedChecks
+  runAllAdvancedChecks,
+  runSingleCheckWithWorkflowIntegration
 }; 

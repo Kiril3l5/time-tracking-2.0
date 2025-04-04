@@ -9,14 +9,14 @@ import { commandRunner } from './core/command-runner.js';
 import { getCurrentBranch, hasUncommittedChanges, commitChanges } from './workflow/branch-manager.js';
 import { QualityChecker } from './checks/quality-checker.js';
 import { PackageCoordinator } from './workflow/package-coordinator.js';
-import { deployPackage, createChannelId } from './workflow/deployment-manager.js';
+import { deployPackage, createChannelId, deployPackageWithWorkflowIntegration } from './workflow/deployment-manager.js';
 import progressTracker from './core/progress-tracker.js';
 import { colors, styled } from './core/colors.js';
 import { generateReport } from './workflow/consolidated-report.js';
 import { performanceMonitor } from './core/performance-monitor.js';
 import { setTimeout } from 'timers/promises';
 import { cleanupChannels } from './firebase/channel-cleanup.js';
-import { runAllAdvancedChecks } from './workflow/advanced-checker.js';
+import { runAllAdvancedChecks, runSingleCheckWithWorkflowIntegration } from './workflow/advanced-checker.js';
 import { verifyAllAuth } from './auth/auth-manager.js';
 import { createPR } from './github/pr-manager.js';
 import getWorkflowState from './workflow/workflow-state.js';
@@ -424,34 +424,53 @@ class Workflow {
         this.logger.info("Running advanced checks...");
         
         try {
+          // Run all advanced checks for backward compatibility
           const advancedResult = await runAllAdvancedChecks({
-            // Use options passed from the command line, with reasonable defaults
+            // (keep existing options)
             skipAdvancedChecks: this.options.skipAdvancedChecks,
-            skipBundleCheck: this.options.skipBundleCheck || false, // Don't automatically skip
+            skipBundleCheck: this.options.skipBundleCheck || false,
             skipDocsCheck: this.options.skipDocsCheck || false,
             skipDocsFreshnessCheck: this.options.skipDocsFreshnessCheck || false,
-            skipDeadCodeCheck: this.options.skipDeadCodeCheck || false, // Don't automatically skip
-            skipTypeCheck: this.options.skipTests, // Respect the skip-tests flag
-            skipLintCheck: this.options.skipTests, // Respect the skip-tests flag
+            skipDeadCodeCheck: this.options.skipDeadCodeCheck || false,
+            skipTypeCheck: this.options.skipTests,
+            skipLintCheck: this.options.skipTests,
             skipWorkflowValidation: this.options.skipWorkflowValidation || false,
             skipHealthCheck: this.options.skipHealthCheck || false,
-            ignoreAdvancedFailures: true, // Don't block on advanced failures
+            ignoreAdvancedFailures: true,
             verbose: this.options.verbose,
             treatLintAsWarning: true,
             treatHealthAsWarning: true,
-            silentMode: true, // Avoid duplicate logging in improved-workflow.js
-            promptFn: null, // Don't prompt, we'll handle warnings in the workflow
+            silentMode: true,
+            promptFn: null,
             timeout: {
-              docsFreshness: 30000,     // 30 seconds
-              docsQuality: 30000,       // 30 seconds
-              bundleSize: 60000,        // 1 minute
-              deadCode: 45000,          // 45 seconds
-              typeCheck: 45000,         // 45 seconds
-              lint: 45000,              // 45 seconds
-              workflowValidation: 30000, // 30 seconds
-              health: 60000             // 1 minute
+              docsFreshness: 30000,
+              docsQuality: 30000,
+              bundleSize: 60000,
+              deadCode: 45000,
+              typeCheck: 45000,
+              lint: 45000,
+              workflowValidation: 30000,
+              health: 60000
             }
           });
+          
+          // Additionally run TypeScript check with workflow integration
+          if (!this.options.skipTests && !this.options.skipAdvancedChecks) {
+            this.logger.info("Running TypeScript validation with workflow integration...");
+            
+            // This will automatically update workflow state
+            const tsCheckResult = await runSingleCheckWithWorkflowIntegration('typescript', {
+              timeout: { typescript: 45000 },
+              silentMode: true,
+              phase: 'Validation'
+            });
+            
+            // Store the result for the dashboard
+            this.advancedCheckResults = {
+              ...this.advancedCheckResults,
+              typescript: tsCheckResult
+            };
+          }
           
           // Store advanced check results for the dashboard
           this.advancedCheckResults = advancedResult.results || {};
@@ -763,87 +782,48 @@ class Workflow {
       const channelId = await createChannelId();
       this.recordWorkflowStep('Create Channel ID', 'Deploy', true, Date.now() - channelStartTime);
       
-      // Deploy hours app
-      const hoursStartTime = Date.now();
-      this.logger.info(`Deploying hours app to channel: ${channelId}...`);
-      const hoursResult = await deployPackage({
-        target: 'hours',
-        channelId
+      // Use the new workflow-integrated deployment function
+      // which handles hours and admin app deployments together
+      this.logger.info(`Deploying apps to channel: ${channelId}...`);
+      const deployResult = await deployPackageWithWorkflowIntegration({
+        channelId,
+        skipBuild: this.options.skipBuild,
+        phase: 'Deploy'
       });
       
-      if (!hoursResult.success) {
-        const error = new Error('Hours app deployment failed');
+      if (!deployResult.success) {
+        const error = new Error('Deployment failed');
         Object.assign(error, {
-          details: hoursResult.error || 'Unknown deployment error',
-          logs: hoursResult.logs
+          details: deployResult.error || 'Unknown deployment error'
         });
-        this.recordWorkflowStep('Deploy Hours App', 'Deploy', false, Date.now() - hoursStartTime, 'Hours app deployment failed');
         throw error;
       }
       
-      // Check for warnings in hours deployment
-      if (hoursResult.warnings && hoursResult.warnings.length > 0) {
-        hoursResult.warnings.forEach(warning => {
-          this.recordWarning(warning, 'Deploy', 'Deploy Hours App');
-        });
+      // Store the preview URLs for the dashboard
+      if (deployResult.urls) {
+        this.previewUrls = deployResult.urls;
+        
+        if (this.previewUrls.hours) {
+          this.logger.success(`✓ Hours app deployed to: ${this.previewUrls.hours}`);
+        }
+        
+        if (this.previewUrls.admin) {
+          this.logger.success(`✓ Admin app deployed to: ${this.previewUrls.admin}`);
+        }
       }
       
-      this.logger.success(`✓ Hours app deployed to: ${hoursResult.url}`);
-      this.recordWorkflowStep('Deploy Hours App', 'Deploy', true, Date.now() - hoursStartTime);
-      
-      // Deploy admin app
-      const adminStartTime = Date.now();
-      this.logger.info(`Deploying admin app to channel: ${channelId}...`);
-      const adminResult = await deployPackage({
-        target: 'admin',
-        channelId
-      });
-      
-      if (!adminResult.success) {
-        const error = new Error('Admin app deployment failed');
-        Object.assign(error, {
-          details: adminResult.error || 'Unknown deployment error',
-          logs: adminResult.logs
-        });
-        this.recordWorkflowStep('Deploy Admin App', 'Deploy', false, Date.now() - adminStartTime, 'Admin app deployment failed');
-        throw error;
-      }
-      
-      // Check for warnings in admin deployment
-      if (adminResult.warnings && adminResult.warnings.length > 0) {
-        adminResult.warnings.forEach(warning => {
-          this.recordWarning(warning, 'Deploy', 'Deploy Admin App');
-        });
-      }
-      
-      this.logger.success(`✓ Admin app deployed to: ${adminResult.url}`);
-      this.recordWorkflowStep('Deploy Admin App', 'Deploy', true, Date.now() - adminStartTime);
-      
-      // Save URLs for display in results
-      this.previewUrls = {
-        hours: hoursResult.url,
-        admin: adminResult.url,
-        channelId
-      };
-      
-      this.logger.success('✓ Deployment completed successfully');
       this.progressTracker.completeStep(true, 'Deployment complete');
       this.recordWorkflowStep('Deploy Phase', 'Deploy', true, Date.now() - phaseStartTime);
     } catch (error) {
       this.progressTracker.completeStep(false, `Deployment failed: ${error.message}`);
       
       // Enhanced error logging for deployment failures
-      this.logger.error('\nDeployment Phase Failed:');
-      this.logger.error(`➤ ${error.message}`);
+      this.logger.error('\nDeploy Phase Failed:');
+      this.logger.error(`${error.message}`);
       
       if (error.details) {
-        this.logger.error('\nError Details:');
+        this.logger.error('\nDeployment Error Details:');
         this.logger.error(error.details);
-      }
-      
-      if (error.logs) {
-        this.logger.error('\nDeployment Logs:');
-        this.logger.error(error.logs);
       }
       
       this.recordWorkflowStep('Deploy Phase', 'Deploy', false, Date.now() - phaseStartTime, error.message);
