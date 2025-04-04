@@ -63,6 +63,41 @@ export async function cleanupChannels(options = {}) {
   
   if (!sites || sites.length === 0) {
     logger.error('Cannot clean up channels: No sites configured');
+    
+    // Try to detect sites dynamically if none are configured
+    try {
+      const sitesListResult = await commandRunner.runCommandAsync('firebase hosting:sites:list --json', {
+        stdio: 'pipe',
+        ignoreError: true
+      });
+      
+      if (sitesListResult.success) {
+        let sitesList = [];
+        try {
+          const sitesData = JSON.parse(sitesListResult.output.trim());
+          sitesList = sitesData.result.sites || [];
+          
+          if (sitesList.length > 0) {
+            const siteNames = sitesList.map(site => site.name || site.site);
+            logger.info(`Found sites: ${siteNames.join(', ')}`);
+            
+            // Use auto-detected sites
+            config.sites = siteNames;
+            logger.success('Using auto-detected sites for cleanup');
+            
+            // Continue with cleanup using the detected sites
+            return cleanupChannels(config);
+          }
+        } catch (parseError) {
+          logger.debug(`Failed to parse sites list: ${parseError.message}`);
+        }
+      } else {
+        logger.debug('Could not fetch sites list');
+      }
+    } catch (error) {
+      logger.debug(`Error fetching sites list: ${error.message}`);
+    }
+    
     return { 
       success: false, 
       cleaned: 0, 

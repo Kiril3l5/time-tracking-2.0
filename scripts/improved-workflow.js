@@ -226,9 +226,40 @@ class Workflow {
       
       this.logger.info(styled.bold(`${colors.green}✨ Dashboard opened in your browser${colors.reset}`));
       
-      // Just show warning count, details will be in dashboard
+      // Show a summary of warnings by category
       if (this.workflowWarnings && this.workflowWarnings.length > 0) {
-        this.logger.info(`${this.workflowWarnings.length} items to review in dashboard`);
+        // Group warnings by phase/category
+        const warningsByCategory = {};
+        this.workflowWarnings.forEach(warning => {
+          const category = warning.phase || 'General';
+          if (!warningsByCategory[category]) {
+            warningsByCategory[category] = [];
+          }
+          warningsByCategory[category].push(warning);
+        });
+        
+        this.logger.info(styled.bold(`\n${colors.yellow}⚠️ Warnings Summary (${this.workflowWarnings.length} total)${colors.reset}`));
+        
+        // Show counts by category
+        Object.entries(warningsByCategory).forEach(([category, warnings]) => {
+          this.logger.info(`${category}: ${warnings.length} items`);
+        });
+        
+        // Show the first 3 warnings as examples
+        if (this.workflowWarnings.length > 0) {
+          this.logger.info('\nWarning examples:');
+          this.workflowWarnings.slice(0, 3).forEach(warning => {
+            // Truncate long messages
+            const shortMessage = warning.message.length > 80 
+              ? warning.message.substring(0, 80) + '...' 
+              : warning.message;
+            this.logger.info(`- ${shortMessage}`);
+          });
+          
+          if (this.workflowWarnings.length > 3) {
+            this.logger.info(`...and ${this.workflowWarnings.length - 3} more (see dashboard for full details)`);
+          }
+        }
       }
       
       // Give the user time to view the dashboard (3 seconds)

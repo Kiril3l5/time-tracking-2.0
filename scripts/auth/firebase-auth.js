@@ -73,6 +73,41 @@ import { spawn } from 'child_process';
 export async function checkFirebaseAuth() {
   logger.info('Checking Firebase CLI authentication...');
   
+  // Check for CI environment and token first
+  if (process.env.CI === 'true' || process.env.CI === true) {
+    logger.info('CI environment detected, checking for Firebase token...');
+    
+    const token = process.env.FIREBASE_TOKEN;
+    if (token) {
+      // Validate the token
+      try {
+        const projectsResult = commandRunner.runCommand(`firebase projects:list --token "${token}"`, {
+          stdio: 'pipe',
+          ignoreError: true
+        });
+        
+        if (projectsResult.success) {
+          logger.success('Firebase token authentication successful in CI environment');
+          return {
+            authenticated: true,
+            email: 'CI Service Account',
+            isCI: true
+          };
+        } else {
+          logger.warn('Firebase token provided but failed validation in CI environment');
+          // Continue with regular auth flow as fallback
+        }
+      } catch (error) {
+        logger.warn(`Error validating Firebase token in CI: ${error.message}`);
+        // Continue with regular auth flow as fallback
+      }
+    } else {
+      logger.warn('CI environment detected but no FIREBASE_TOKEN environment variable found');
+      logger.info('For CI/CD automation, set FIREBASE_TOKEN environment variable');
+      logger.info('Generate a token with: firebase login:ci');
+    }
+  }
+  
   try {
     // Start by checking the current auth state with login:list
     const loginListResult = commandRunner.runCommand('firebase login:list', {
