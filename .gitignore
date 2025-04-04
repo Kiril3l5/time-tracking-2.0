@@ -49,6 +49,7 @@ firebase-debug.log
 
 # Preview deployment files
 preview-dashboard.html
+dashboard.html
 temp/
 temp/**/*
 
