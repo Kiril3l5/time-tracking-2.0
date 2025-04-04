@@ -270,7 +270,7 @@ export async function generateReport(data) {
                 <div class="accordion-content">
                   <ul class="warnings-list">
                     ${warnings.map(warning => `
-                    <li class="warning-item">
+                    <li class="warning-item ${warning.severity || 'warning'}">
                       <div class="warning-message">${warning.message}</div>
                       ${warning.step ? `<div class="warning-source">Source: ${warning.step}</div>` : ''}
                     </li>
@@ -287,6 +287,62 @@ export async function generateReport(data) {
             <p>All checks passed successfully without any warnings!</p>
           </div>
           `}
+          
+          ${report.buildMetrics ? `
+          <div class="panel build-metrics">
+            <h2>Build Metrics</h2>
+            
+            <div class="metrics-overview">
+              <div class="metric-card total-size">
+                <h3>Total Bundle Size</h3>
+                <div class="size-value">${report.buildMetrics.totalSize}</div>
+                ${report.buildMetrics.sizeChange ? `
+                <div class="size-change ${report.buildMetrics.sizeChange.startsWith('+') ? 'increase' : 'decrease'}">
+                  ${report.buildMetrics.sizeChange} from previous build
+                </div>` : ''}
+              </div>
+              
+              <div class="metric-card build-time">
+                <h3>Build Duration</h3>
+                <div class="time-value">${formatDuration(report.buildMetrics.duration)}</div>
+              </div>
+            </div>
+            
+            <div class="packages-breakdown">
+              <h3>Package Breakdown</h3>
+              <div class="package-grid">
+                ${report.buildMetrics.packages ? Object.entries(report.buildMetrics.packages).map(([name, pkg]) => `
+                <div class="package-card">
+                  <h4>${name}</h4>
+                  <div class="package-stats">
+                    <div class="stat">
+                      <span class="stat-label">Size:</span>
+                      <span class="stat-value">${pkg.size}</span>
+                    </div>
+                    <div class="stat">
+                      <span class="stat-label">Files:</span>
+                      <span class="stat-value">${pkg.fileCount}</span>
+                    </div>
+                  </div>
+                  ${pkg.largestFiles && pkg.largestFiles.length > 0 ? `
+                  <div class="largest-files">
+                    <h5>Largest Files:</h5>
+                    <ul>
+                      ${pkg.largestFiles.map(file => `
+                      <li>
+                        <span class="file-name">${file.name}</span>
+                        <span class="file-size">${file.size}</span>
+                      </li>
+                      `).join('')}
+                    </ul>
+                  </div>
+                  ` : ''}
+                </div>
+                `).join('') : ''}
+              </div>
+            </div>
+          </div>
+          ` : ''}
           
           <div class="panel workflow">
             <h2>Workflow Steps</h2>
@@ -723,6 +779,150 @@ export async function generateReport(data) {
       .metrics {
         grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
       }
+    }
+
+    /* Build Metrics Styles */
+    .build-metrics {
+      background-color: white;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .metrics-overview {
+      display: flex;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .metric-card {
+      flex: 1;
+      background-color: #f6f8fa;
+      border-radius: 6px;
+      padding: 15px;
+      text-align: center;
+    }
+
+    .metric-card h3 {
+      font-size: 16px;
+      color: #24292e;
+      margin-bottom: 10px;
+    }
+
+    .size-value, .time-value {
+      font-size: 24px;
+      font-weight: 500;
+      margin-bottom: 5px;
+    }
+
+    .size-change {
+      font-size: 14px;
+      border-radius: 4px;
+      padding: 2px 6px;
+      display: inline-block;
+    }
+
+    .size-change.increase {
+      background-color: #ffebe9;
+      color: #cf222e;
+    }
+
+    .size-change.decrease {
+      background-color: #dafbe1;
+      color: #116329;
+    }
+
+    .packages-breakdown {
+      margin-top: 20px;
+    }
+
+    .packages-breakdown h3 {
+      font-size: 16px;
+      margin-bottom: 15px;
+    }
+
+    .package-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      gap: 15px;
+    }
+
+    .package-card {
+      background-color: #f6f8fa;
+      border-radius: 6px;
+      padding: 15px;
+    }
+
+    .package-card h4 {
+      font-size: 14px;
+      margin-bottom: 10px;
+      color: #24292e;
+    }
+
+    .package-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .stat {
+      background-color: #ffffff;
+      border-radius: 4px;
+      padding: 5px 8px;
+      font-size: 12px;
+    }
+
+    .stat-label {
+      color: #6a737d;
+      margin-right: 5px;
+    }
+
+    .largest-files h5 {
+      font-size: 12px;
+      margin-bottom: 5px;
+      color: #6a737d;
+    }
+
+    .largest-files ul {
+      list-style: none;
+      font-size: 12px;
+    }
+
+    .largest-files li {
+      display: flex;
+      justify-content: space-between;
+      padding: 3px 0;
+      border-bottom: 1px solid #eaecef;
+    }
+
+    .file-name {
+      color: #24292e;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 70%;
+    }
+
+    .file-size {
+      color: #6a737d;
+    }
+
+    /* Warning Severity Styles */
+    .warning-item.error {
+      background-color: #ffebe9;
+      border-left: 3px solid #cf222e;
+    }
+
+    .warning-item.warning {
+      background-color: #fff8c5;
+      border-left: 3px solid #9a6700;
+    }
+
+    .warning-item.info {
+      background-color: #ddf4ff;
+      border-left: 3px solid #0969da;
     }
     `;
     

@@ -21,6 +21,7 @@ import { verifyAllAuth } from './auth/auth-manager.js';
 import { createPR } from './github/pr-manager.js';
 import getWorkflowState from './workflow/workflow-state.js';
 import { execSync } from 'child_process';
+import { buildPackageWithWorkflowIntegration } from './workflow/build-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -148,8 +149,9 @@ class Workflow {
    * @param {string} message - Warning message
    * @param {string} phase - Phase (Setup, Validation, Build, Deploy, Results)
    * @param {string} [step] - Step name
+   * @param {string} [severity] - Severity level (error, warning, info)
    */
-  recordWarning(message, phase, step = null) {
+  recordWarning(message, phase, step = null, severity = 'warning') {
     // Skip empty warnings
     if (!message) return;
     
@@ -162,6 +164,7 @@ class Workflow {
       message: warningMessage,
       phase,
       step,
+      severity,
       timestamp: new Date().toISOString()
     };
     
@@ -177,7 +180,7 @@ class Workflow {
       
       // Log the warning to the console if verbose
       if (this.options.verbose) {
-        this.logger.debug(`Recorded warning: ${warningMessage} (${phase}${step ? ` - ${step}` : ''})`);
+        this.logger.debug(`Recorded warning: ${warningMessage} (${phase}${step ? ` - ${step}` : ''}, ${severity})`);
       }
     }
   }
@@ -670,69 +673,40 @@ class Workflow {
     }
     
     try {
-      // Clean dist directories first to ensure we have a fresh build
-      this.logger.info('Cleaning previous build artifacts...');
+      // Use our new workflow integration function
+      this.logger.info('Building packages with workflow integration...');
       
-      // Use platform-specific command for cleaning
-      const isWindows = process.platform === 'win32';
-      const cleanCommand = isWindows 
-        ? 'if exist packages\\admin\\dist rmdir /s /q packages\\admin\\dist && if exist packages\\hours\\dist rmdir /s /q packages\\hours\\dist && if exist packages\\common\\dist rmdir /s /q packages\\common\\dist'
-        : 'rm -rf packages/admin/dist packages/hours/dist packages/common/dist';
-      
-      await this.commandRunner.runCommandAsync(cleanCommand, {
-        ignoreError: true, // Don't fail if directories don't exist
-        shell: true
-      });
-      
-      // Run build
-      const buildStartTime = Date.now();
-      this.logger.info('Building packages...');
-      
-      // Use build:all instead of build to ensure proper sequential building
-      const buildResult = await this.commandRunner.runCommandAsync('pnpm run build:all', {
-        stdio: 'pipe', // Capture output for warning detection
-        timeout: 300000 // 5 minutes timeout for build
+      const buildResult = await buildPackageWithWorkflowIntegration({
+        target: this.options.target || 'development',
+        minify: !this.options.noMinify,
+        sourceMaps: this.options.sourceMaps,
+        typeCheck: !this.options.skipTests,
+        clean: true,
+        packages: ['admin', 'hours'],
+        recordWarning: this.recordWarning.bind(this),
+        recordStep: this.recordWorkflowStep.bind(this),
+        phase: 'Build'
       });
       
       if (!buildResult.success) {
         const error = new Error('Build failed');
-        error.details = {
-          output: buildResult.output,
-          error: buildResult.error
-        };
-        this.recordWorkflowStep('Package Build', 'Build', false, Date.now() - buildStartTime, 'Build command failed');
-        throw error;
-      }
-      
-      // Get root directory
-      const rootDir = process.cwd();
-      
-      // Verify that build artifacts exist
-      const adminDistPath = join(rootDir, 'packages/admin/dist');
-      const hoursDistPath = join(rootDir, 'packages/hours/dist');
-      
-      if (!fs.existsSync(adminDistPath) || !fs.existsSync(hoursDistPath)) {
-        this.logger.error('Build artifacts not found after build process');
-        const error = new Error('Build verification failed');
-        this.recordWorkflowStep('Package Build', 'Build', false, Date.now() - buildStartTime, 'Build verification failed');
-        throw error;
-      }
-      
-      // Check for warnings in the build output
-      if (buildResult.output && buildResult.output.includes('warning')) {
-        // Extract meaningful warnings
-        const lines = buildResult.output.split('\n');
-        for (const line of lines) {
-          if (line.toLowerCase().includes('warning') && !line.includes('TypeScript which is not officially supported')) {
-            // Skip TypeScript version warnings
-            const warning = line.trim();
-            this.recordWarning(warning.trim(), 'Build', 'Package Build');
-          }
+        error.details = buildResult.error || 'Unknown build error';
+        
+        if (buildResult.typeCheckErrors) {
+          error.typeCheckErrors = buildResult.typeCheckErrors;
         }
+        
+        throw error;
       }
+      
+      // Store build metrics for dashboard
+      this.buildMetrics = {
+        totalSize: buildResult.totalSize || '0 B',
+        duration: buildResult.duration || 0,
+        packages: buildResult.results || {}
+      };
       
       this.logger.success('✓ Build completed successfully');
-      this.recordWorkflowStep('Package Build', 'Build', true, Date.now() - buildStartTime);
       this.progressTracker.completeStep(true, 'Build complete');
       this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
     } catch (error) {
@@ -742,15 +716,20 @@ class Workflow {
       this.logger.error('\nBuild Phase Failed:');
       this.logger.error(`${error.message}`);
       
-      // Show the output if available
-      if (error.details && error.details.output) {
-        this.logger.error('\nBuild Output:');
-        this.logger.error(error.details.output);
-      }
-      
-      if (error.details && error.details.error) {
-        this.logger.error('\nBuild Errors:');
-        this.logger.error(error.details.error);
+      // Show type check errors if available
+      if (error.typeCheckErrors) {
+        this.logger.error('\nTypeScript Errors:');
+        error.typeCheckErrors.slice(0, 10).forEach(err => {
+          let message = err.message;
+          if (err.file) {
+            message = `${err.file}(${err.line},${err.column}): ${message}`;
+          }
+          this.logger.error(message);
+        });
+        
+        if (error.typeCheckErrors.length > 10) {
+          this.logger.error(`...and ${error.typeCheckErrors.length - 10} more errors`);
+        }
       }
       
       this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, error.message);
@@ -864,48 +843,30 @@ class Workflow {
         this.recordWorkflowStep('Channel Cleanup', 'Results', false, Date.now() - cleanupStartTime, 'Cleanup issue');
       }
       
-      // Create report data - include all warnings collected throughout the workflow
-      const reportData = {
-        timestamp: new Date().toISOString(),
-        metrics: {
-          duration: Date.now() - (this.startTime || Date.now()),
-        },
-        preview: this.previewUrls ? {
-          hours: this.previewUrls.hours || 'Not available',
-          admin: this.previewUrls.admin || 'Not available',
-          channelId: this.previewUrls.channelId
-        } : null,
-        workflow: {
-          options: this.options,
-          git: {
-            branch: await getCurrentBranch(),
-          },
-          steps: this.workflowSteps
-        },
-        warnings: this.workflowWarnings,
-        // Include advanced check results in report data
-        advancedChecks: this.advancedCheckResults
-      };
-      
       // Generate consolidated report
-      const reportStartTime = Date.now();
-      this.logger.info('Generating workflow report...');
-      
-      let report;
       try {
-        report = await generateReport(reportData);
-        this.recordWorkflowStep('Generate Dashboard', 'Results', true, Date.now() - reportStartTime);
-        this.logger.success('✓ Workflow report generated');
-      } catch (error) {
-        this.logger.error(`Dashboard generation error: ${error.message}`);
-        this.recordWorkflowStep('Generate Dashboard', 'Results', false, Date.now() - reportStartTime, error.message);
-        this.recordWarning(`Failed to generate dashboard: ${error.message}`, 'Results', 'Generate Dashboard');
+        const reportData = await generateReport({
+          steps: Array.from(this.workflowSteps.values()),
+          warnings: this.workflowWarnings,
+          metrics: {
+            duration: Date.now() - this.startTime
+          },
+          timestamp: new Date().toISOString(),
+          advancedChecks: this.advancedCheckResults || {},
+          preview: this.previewUrls
+            ? {
+                hours: this.previewUrls.hours,
+                admin: this.previewUrls.admin,
+                channelId: this.options.channelId
+              }
+            : null,
+          buildMetrics: this.buildMetrics
+        });
         
-        // Create a fallback report
-        report = {
-          ...reportData,
-          error: error.message
-        };
+        this.reportUrl = reportData.path;
+        this.logger.success(`Dashboard generated at: ${this.reportUrl}`);
+      } catch (reportError) {
+        this.logger.error(`Failed to generate dashboard: ${reportError.message}`);
       }
       
       // Display preview URLs
@@ -938,7 +899,7 @@ class Workflow {
       this.recordWorkflowStep('Results Phase', 'Results', true, Date.now() - phaseStartTime);
       
       // The dashboard is already opened by the generateReport function
-      return report;
+      return this.reportUrl;
     } catch (error) {
       this.logger.error(`Results generation failed: ${error.message}`);
       this.progressTracker.completeStep(false, `Results generation failed: ${error.message}`);

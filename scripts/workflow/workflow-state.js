@@ -215,8 +215,9 @@ class WorkflowState {
    * @param {string|Object} warning - Warning message or object
    * @param {string} [step] - Step where warning occurred
    * @param {string} [category] - Warning category
+   * @param {string} [severity] - Warning severity (error, warning, info)
    */
-  addWarning(warning, step = null, category = 'general') {
+  addWarning(warning, step = null, category = 'general', severity = 'warning') {
     // Format the warning object
     const warningData = typeof warning === 'string' 
       ? { message: warning } 
@@ -226,6 +227,7 @@ class WorkflowState {
     warningData.step = step || warningData.step || null;
     warningData.category = category || warningData.category || 'general';
     warningData.timestamp = warningData.timestamp || Date.now();
+    warningData.severity = severity || warningData.severity || 'warning';
     
     // Prevent duplicate warnings
     const isDuplicate = this.state.warnings.some(w => 
