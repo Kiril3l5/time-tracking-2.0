@@ -48,6 +48,14 @@ const defaultTemplate = `
         .tab.active { border-bottom: 2px solid #0066cc; color: #0066cc; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
+        .empty-state .info-message {
+          font-size: 14px;
+          color: #0366d6;
+          background-color: #f1f8ff;
+          padding: 8px 16px;
+          border-radius: 4px;
+          display: inline-block;
+        }
     </style>
 </head>
 <body>
@@ -126,21 +134,59 @@ export async function generateReport(data) {
       advancedChecks: data.advancedChecks || {}
     };
     
-    // Calculate step stats
+    // Process steps by phase - make this more robust
     const stepsByPhase = {};
     const failedSteps = [];
-    
-    if (report.workflow.steps) {
-      report.workflow.steps.forEach(step => {
-        if (!stepsByPhase[step.phase]) {
-          stepsByPhase[step.phase] = [];
+
+    // Fix variable usage in steps by phase loop
+    // Ensure we check both data.steps (new format) and data.workflow.steps (old format)
+    const stepData = data.steps && Array.isArray(data.steps) 
+      ? data.steps 
+      : (data.workflow && data.workflow.steps ? data.workflow.steps : []);
+
+    if (stepData.length > 0) {
+      logger.debug(`Processing ${stepData.length} workflow steps`);
+      
+      // First log all steps for debugging
+      stepData.forEach((step, index) => {
+        // Different data formats may have success in different places
+        const success = step.success !== undefined 
+          ? step.success 
+          : (step.result ? step.result.success : undefined);
+          
+        logger.debug(`Step ${index}: ${step.name}, phase: ${step.phase}, success: ${success}`);
+      });
+      
+      // Group steps by phase
+      stepData.forEach(step => {
+        const phase = step.phase || 'Other';
+        if (!stepsByPhase[phase]) {
+          stepsByPhase[phase] = [];
         }
-        stepsByPhase[step.phase].push(step);
+        stepsByPhase[phase].push(step);
         
-        if (step.result && !step.result.success) {
+        // Track failed steps - check both formats
+        const isSuccess = step.success !== undefined 
+          ? step.success 
+          : (step.result ? step.result.success : true);
+          
+        if (isSuccess === false) {
           failedSteps.push(step);
         }
       });
+    } else {
+      logger.debug('No steps found in report data');
+    }
+    
+    // Filter out informational build metrics from warnings
+    if (report.warnings) {
+      report.warnings = report.warnings.filter(warning => 
+        !(warning.phase === 'Build' && 
+          (warning.message.includes('package:') || 
+           warning.message.includes('large file:') ||
+           warning.message.includes('bundle size:') ||
+           warning.message.includes('Build process completed') ||
+           warning.message.includes('Largest files'))));
     }
     
     // Calculate warning stats
@@ -177,6 +223,14 @@ export async function generateReport(data) {
       return `${seconds}s`;
     };
     
+    // Before generating the HTML content, let's add a debug statement to check the report structure
+    logger.debug(`Report data received: ${Object.keys(report).join(', ')}`);
+    if (report.buildMetrics) {
+      logger.debug(`Build metrics present: ${JSON.stringify(report.buildMetrics, null, 2)}`);
+    } else {
+      logger.debug('Build metrics not found in report data');
+    }
+    
     // Generate HTML content
     const htmlContent = `
     <!DOCTYPE html>
@@ -202,10 +256,10 @@ export async function generateReport(data) {
             <div class="panel success">
               <h2>Status</h2>
               <div class="status-indicator">
-                <span class="status-icon ${failedSteps.length > 0 ? 'warning' : 'success'}">
-                  ${failedSteps.length > 0 ? '⚠️' : '✓'}
+                <span class="status-icon ${(report.errors && report.errors.length > 0) || failedSteps.length > 0 ? 'warning' : 'success'}">
+                  ${(report.errors && report.errors.length > 0) || failedSteps.length > 0 ? '⚠️' : '✓'}
                 </span>
-                <span class="status-text">${failedSteps.length > 0 ? 'Completed with Warnings' : 'Success'}</span>
+                <span class="status-text">${(report.errors && report.errors.length > 0) || failedSteps.length > 0 ? 'Completed with Warnings' : 'Success'}</span>
               </div>
               <div class="metrics">
                 <div class="metric">
@@ -218,7 +272,7 @@ export async function generateReport(data) {
                 </div>
                 <div class="metric">
                   <span class="metric-label">Errors</span>
-                  <span class="metric-value">${failedSteps.length}</span>
+                  <span class="metric-value">${(report.errors ? report.errors.length : 0) + failedSteps.length}</span>
                 </div>
               </div>
             </div>
@@ -288,84 +342,115 @@ export async function generateReport(data) {
           </div>
           `}
           
-          ${report.buildMetrics ? `
+          ${report.buildMetrics && (report.buildMetrics.isValid || report.buildMetrics.totalSize) ? `
           <div class="panel build-metrics">
             <h2>Build Metrics</h2>
             
-            <div class="metrics-overview">
-              <div class="metric-card total-size">
-                <h3>Total Bundle Size</h3>
-                <div class="size-value">${report.buildMetrics.totalSize}</div>
-                ${report.buildMetrics.sizeChange ? `
-                <div class="size-change ${report.buildMetrics.sizeChange.startsWith('+') ? 'increase' : 'decrease'}">
-                  ${report.buildMetrics.sizeChange} from previous build
-                </div>` : ''}
+            <div class="metrics-grid">
+              <div class="metric-card">
+                <div class="metric-icon">📦</div>
+                <div class="metric-title">Total Bundle Size</div>
+                <div class="metric-value">${report.buildMetrics.totalSize}</div>
               </div>
               
-              <div class="metric-card build-time">
-                <h3>Build Duration</h3>
-                <div class="time-value">${formatDuration(report.buildMetrics.duration)}</div>
+              <div class="metric-card">
+                <div class="metric-icon">⏱️</div>
+                <div class="metric-title">Build Time</div>
+                <div class="metric-value">${formatDuration(report.buildMetrics.duration)}</div>
+              </div>
+              
+              <div class="metric-card">
+                <div class="metric-icon">🗂️</div>
+                <div class="metric-title">Total Files</div>
+                <div class="metric-value">${
+                  Object.values(report.buildMetrics.packages || {})
+                    .reduce((sum, pkg) => sum + (pkg.fileCount || 0), 0)
+                }</div>
               </div>
             </div>
             
-            <div class="packages-breakdown">
-              <h3>Package Breakdown</h3>
-              <div class="package-grid">
-                ${report.buildMetrics.packages ? Object.entries(report.buildMetrics.packages).map(([name, pkg]) => `
-                <div class="package-card">
-                  <h4>${name}</h4>
-                  <div class="package-stats">
-                    <div class="stat">
-                      <span class="stat-label">Size:</span>
-                      <span class="stat-value">${pkg.size}</span>
-                    </div>
-                    <div class="stat">
-                      <span class="stat-label">Files:</span>
-                      <span class="stat-value">${pkg.fileCount}</span>
+            ${report.buildMetrics.packages ? `
+            <div class="package-section">
+              <h3>Package Details</h3>
+              <div class="packages-bar-chart">
+                ${Object.entries(report.buildMetrics.packages).map(([name, pkg]) => {
+                  const maxSize = Math.max(
+                    ...Object.values(report.buildMetrics.packages)
+                      .map(p => p.size || 0)
+                  );
+                  const percentage = maxSize > 0 ? (pkg.size / maxSize) * 100 : 0;
+                  return `
+                  <div class="package-bar">
+                    <div class="package-name">${name}</div>
+                    <div class="bar-container">
+                      <div class="bar" style="width: ${percentage}%"></div>
+                      <span class="bar-label">${pkg.sizeFormatted}</span>
                     </div>
                   </div>
-                  ${pkg.largestFiles && pkg.largestFiles.length > 0 ? `
-                  <div class="largest-files">
-                    <h5>Largest Files:</h5>
-                    <ul>
-                      ${pkg.largestFiles.map(file => `
-                      <li>
-                        <span class="file-name">${file.name}</span>
-                        <span class="file-size">${file.size}</span>
-                      </li>
-                      `).join('')}
-                    </ul>
+                  `;
+                }).join('')}
+              </div>
+              
+              <div class="files-section">
+                <h3>Largest Files</h3>
+                <div class="files-table">
+                  <div class="table-header">
+                    <div class="col file-name">Filename</div>
+                    <div class="col file-size">Size</div>
+                    <div class="col file-package">Package</div>
                   </div>
-                  ` : ''}
+                  ${Object.entries(report.buildMetrics.packages).flatMap(([pkgName, pkg]) => 
+                    (pkg.largestFiles || []).map(file => `
+                      <div class="table-row">
+                        <div class="col file-name">${file.name}</div>
+                        <div class="col file-size">${file.sizeFormatted}</div>
+                        <div class="col file-package">${pkgName}</div>
+                      </div>
+                    `)
+                  ).join('')}
                 </div>
-                `).join('') : ''}
               </div>
             </div>
+            ` : ''}
           </div>
           ` : ''}
           
           <div class="panel workflow">
             <h2>Workflow Steps</h2>
             <div class="timeline">
-              ${Object.entries(stepsByPhase).map(([phase, steps]) => `
-              <div class="phase">
-                <h3 class="phase-name">${phase}</h3>
-                <div class="steps">
-                  ${steps.map(step => `
-                  <div class="step ${step.result && step.result.success ? 'success' : 'failure'}">
-                    <div class="step-header">
-                      <span class="step-name">${step.name}</span>
-                      <span class="step-indicator">${step.result && step.result.success ? '✓' : '✗'}</span>
+              ${Object.keys(stepsByPhase).length > 0 ? 
+                Object.entries(stepsByPhase).map(([phase, steps]) => `
+                <div class="phase">
+                  <h3 class="phase-name">${phase}</h3>
+                  <div class="steps">
+                    ${steps.map(step => `
+                    <div class="step ${
+                      (step.success !== undefined && step.success === false) || 
+                      (step.result && step.result.success === false) ? 'failure' : 'success'
+                    }">
+                      <div class="step-header">
+                        <span class="step-name">${step.name}</span>
+                        <span class="step-indicator">${
+                          (step.success !== undefined && step.success === false) || 
+                          (step.result && step.result.success === false) ? '✗' : '✓'
+                        }</span>
+                      </div>
+                      <div class="step-details">
+                        <span class="step-duration">${formatDuration(step.duration)}</span>
+                        ${step.error || (step.result && step.result.error) ? 
+                          `<div class="step-error">Error: ${step.error || step.result.error}</div>` : ''
+                        }
+                      </div>
                     </div>
-                    <div class="step-details">
-                      <span class="step-duration">${formatDuration(step.duration)}</span>
-                      ${step.error ? `<div class="step-error">Error: ${step.error}</div>` : ''}
-                    </div>
+                    `).join('')}
                   </div>
-                  `).join('')}
                 </div>
-              </div>
-              `).join('')}
+                `).join('') : 
+                `<div class="empty-state">
+                  <p>No workflow steps recorded.</p>
+                  <span class="info-message">Steps will appear here when workflow is run.</span>
+                </div>`
+              }
             </div>
           </div>
           
@@ -790,139 +875,153 @@ export async function generateReport(data) {
       margin-bottom: 20px;
     }
 
-    .metrics-overview {
-      display: flex;
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 20px;
-      margin-bottom: 20px;
+      margin-bottom: 30px;
     }
 
     .metric-card {
-      flex: 1;
       background-color: #f6f8fa;
-      border-radius: 6px;
-      padding: 15px;
+      border-radius: 8px;
+      padding: 20px;
       text-align: center;
+      transition: transform 0.2s;
     }
 
-    .metric-card h3 {
-      font-size: 16px;
-      color: #24292e;
+    .metric-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    }
+
+    .metric-icon {
+      font-size: 28px;
       margin-bottom: 10px;
     }
 
-    .size-value, .time-value {
-      font-size: 24px;
-      font-weight: 500;
-      margin-bottom: 5px;
-    }
-
-    .size-change {
+    .metric-title {
       font-size: 14px;
-      border-radius: 4px;
-      padding: 2px 6px;
-      display: inline-block;
+      color: #6a737d;
+      margin-bottom: 8px;
     }
 
-    .size-change.increase {
-      background-color: #ffebe9;
-      color: #cf222e;
+    .metric-value {
+      font-size: 22px;
+      font-weight: 600;
+      color: #24292e;
     }
 
-    .size-change.decrease {
-      background-color: #dafbe1;
-      color: #116329;
+    .package-section {
+      margin-top: 30px;
     }
 
-    .packages-breakdown {
-      margin-top: 20px;
-    }
-
-    .packages-breakdown h3 {
-      font-size: 16px;
+    .package-section h3 {
       margin-bottom: 15px;
+      font-size: 16px;
+      color: #24292e;
     }
 
-    .package-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-      gap: 15px;
+    .packages-bar-chart {
+      margin-bottom: 25px;
     }
 
-    .package-card {
+    .package-bar {
+      margin-bottom: 12px;
+    }
+
+    .package-name {
+      font-size: 14px;
+      margin-bottom: 4px;
+      color: #24292e;
+    }
+
+    .bar-container {
+      height: 24px;
       background-color: #f6f8fa;
-      border-radius: 6px;
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .bar {
+      height: 100%;
+      background-color: #0366d6;
+      border-radius: 4px;
+    }
+
+    .bar-label {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 12px;
+      color: #24292e;
+      font-weight: 600;
+    }
+
+    .files-section {
+      background-color: #f6f8fa;
+      border-radius: 8px;
       padding: 15px;
     }
 
-    .package-card h4 {
+    .files-table {
+      width: 100%;
+    }
+
+    .table-header {
+      display: flex;
+      padding: 10px 0;
+      border-bottom: 1px solid #e1e4e8;
+      font-weight: 600;
       font-size: 14px;
-      margin-bottom: 10px;
       color: #24292e;
     }
 
-    .package-stats {
+    .table-row {
       display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-bottom: 10px;
+      padding: 10px 0;
+      border-bottom: 1px solid #e1e4e8;
+      font-size: 14px;
     }
 
-    .stat {
-      background-color: #ffffff;
-      border-radius: 4px;
-      padding: 5px 8px;
-      font-size: 12px;
-    }
-
-    .stat-label {
-      color: #6a737d;
-      margin-right: 5px;
-    }
-
-    .largest-files h5 {
-      font-size: 12px;
-      margin-bottom: 5px;
-      color: #6a737d;
-    }
-
-    .largest-files ul {
-      list-style: none;
-      font-size: 12px;
-    }
-
-    .largest-files li {
-      display: flex;
-      justify-content: space-between;
-      padding: 3px 0;
-      border-bottom: 1px solid #eaecef;
+    .col {
+      padding: 0 10px;
     }
 
     .file-name {
-      color: #24292e;
+      flex: 2;
+      white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 70%;
     }
 
     .file-size {
+      flex: 1;
+      text-align: right;
+    }
+
+    .file-package {
+      flex: 1;
+    }
+
+    /* Empty State Styles */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px;
+      background-color: #f6f8fa;
+      border-radius: 8px;
+      text-align: center;
+    }
+
+    .empty-state p {
       color: #6a737d;
-    }
-
-    /* Warning Severity Styles */
-    .warning-item.error {
-      background-color: #ffebe9;
-      border-left: 3px solid #cf222e;
-    }
-
-    .warning-item.warning {
-      background-color: #fff8c5;
-      border-left: 3px solid #9a6700;
-    }
-
-    .warning-item.info {
-      background-color: #ddf4ff;
-      border-left: 3px solid #0969da;
+      font-size: 16px;
+      margin-bottom: 15px;
     }
     `;
     
@@ -951,7 +1050,7 @@ export async function generateReport(data) {
       path: DASHBOARD_PATH,
       reportId,
       warnings: report.warnings ? report.warnings.length : 0,
-      errors: failedSteps.length,
+      errors: (report.errors ? report.errors.length : 0) + failedSteps.length,
       timestamp: report.timestamp
     };
   } catch (error) {

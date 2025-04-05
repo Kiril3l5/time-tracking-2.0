@@ -631,7 +631,7 @@ export async function buildPackageWithWorkflowIntegration(options = {}) {
         .filter(line => line.toLowerCase().includes('warning') && !line.includes('TypeScript which is not officially supported'))
         .map(line => line.trim());
       
-      // Record warnings - don't mark these as 'info' so they appear in the warnings section
+      // Record actual warnings only - these should appear in the warnings section
       if (recordWarning && warnings.length > 0) {
         warnings.forEach(warning => {
           recordWarning(`Build warning: ${warning}`, phase, 'Build Packages');
@@ -655,6 +655,7 @@ export async function buildPackageWithWorkflowIntegration(options = {}) {
           
           if (files.length === 0) {
             if (recordWarning) {
+              // This is an actual warning - no build artifacts
               recordWarning(`No build artifacts found for ${pkg}`, phase, 'Build Packages');
             }
             
@@ -692,16 +693,7 @@ export async function buildPackageWithWorkflowIntegration(options = {}) {
             
             totalBundleSize += packageSize;
             
-            if (recordWarning) {
-              // This is a successful case, but we want it shown prominently in the dashboard
-              recordWarning(`${pkg} package: ${files.length} files, total size: ${formatFileSize(packageSize)}`, phase, 'Build Packages');
-              
-              // Record largest files - don't mark as info to ensure visibility in dashboard
-              fileDetails.slice(0, 3).forEach(file => {
-                recordWarning(`${pkg} large file: ${file.name} (${file.sizeFormatted})`, phase, 'Build Packages');
-              });
-            }
-            
+            // Store build results instead of warnings - these should go to the metrics section
             buildResults[pkg] = {
               success: true,
               fileCount: files.length,
@@ -712,6 +704,7 @@ export async function buildPackageWithWorkflowIntegration(options = {}) {
           }
         } catch (error) {
           if (recordWarning) {
+            // This is an actual warning - could not verify the build
             recordWarning(`Failed to verify build for ${pkg}: ${error.message}`, phase, 'Build Packages');
           }
           
@@ -728,20 +721,18 @@ export async function buildPackageWithWorkflowIntegration(options = {}) {
         recordStep('Build Packages', phase, allSucceeded, Date.now() - startTime);
       }
       
-      // Record success
+      // Check for bundle size warnings - only report actual problems as warnings
       if (recordWarning) {
-        recordWarning(`Build process completed in ${Date.now() - startTime}ms, total bundle size: ${formatFileSize(totalBundleSize)}`, phase, 'Package Build');
-        
-        // Record bundle size warnings if over certain thresholds
+        // Check for oversized bundles - this is an actual warning
         if (totalBundleSize > 5 * 1024 * 1024) { // Over 5MB
           recordWarning(`Total bundle size exceeds 5MB (${formatFileSize(totalBundleSize)})`, phase, 'Package Build');
         }
         
-        // Include top 5 largest files as warnings (not info) to ensure visibility
-        if (largestFiles.length > 0) {
-          recordWarning(`Largest files in bundle:`, phase, 'Package Build');
-          largestFiles.forEach((file, index) => {
-            recordWarning(`${index+1}. ${file.name} (${file.sizeFormatted})`, phase, 'Package Build');
+        // Check for individual large files
+        const suspiciouslyLargeFiles = largestFiles.filter(file => file.size > 1024 * 1024); // Over 1MB
+        if (suspiciouslyLargeFiles.length > 0) {
+          suspiciouslyLargeFiles.forEach(file => {
+            recordWarning(`Large file detected: ${file.name} (${file.sizeFormatted})`, phase, 'Package Build');
           });
         }
       }

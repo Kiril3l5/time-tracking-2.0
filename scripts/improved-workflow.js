@@ -10,7 +10,7 @@ import { getCurrentBranch, hasUncommittedChanges, commitChanges } from './workfl
 import { QualityChecker } from './checks/quality-checker.js';
 import { PackageCoordinator } from './workflow/package-coordinator.js';
 import { deployPackage, createChannelId, deployPackageWithWorkflowIntegration } from './workflow/deployment-manager.js';
-import progressTracker from './core/progress-tracker.js';
+import * as progressTracker from './core/progress-tracker.js';
 import { colors, styled } from './core/colors.js';
 import { generateReport } from './workflow/consolidated-report.js';
 import { performanceMonitor } from './core/performance-monitor.js';
@@ -25,6 +25,26 @@ import { buildPackageWithWorkflowIntegration } from './workflow/build-manager.js
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+/**
+ * Format duration in milliseconds to a human-readable string
+ * @param {number} milliseconds - Duration in milliseconds
+ * @returns {string} Formatted duration string
+ */
+function formatDuration(milliseconds) {
+  if (!milliseconds) return '0s';
+  
+  if (milliseconds < 1000) return `${milliseconds}ms`;
+  
+  const seconds = Math.floor(milliseconds / 1000) % 60;
+  const minutes = Math.floor(milliseconds / (1000 * 60)) % 60;
+  
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  
+  return `${seconds}s`;
+}
 
 /**
  * Clean up existing workflow state files to prevent showing errors from previous runs
@@ -59,26 +79,7 @@ function cleanupPreviousRuns() {
  */
 class Workflow {
   constructor(options = {}) {
-    // Core dependencies
-    this.logger = logger;
-    this.commandRunner = commandRunner;
-    this.progressTracker = progressTracker;
-    
-    // Save start time
-    this.startTime = Date.now();
-    
-    // Initialize workflow components
-    try {
-      this.qualityChecker = new QualityChecker();
-      this.packageCoordinator = new PackageCoordinator();
-    } catch (error) {
-      // If components fail to initialize, log the error but continue
-      this.logger.warn(`Component initialization warning: ${error.message}`);
-      if (!this.qualityChecker) this.qualityChecker = { runAllChecks: async () => ({ success: false, error: 'Quality checker initialization failed' }) };
-      if (!this.packageCoordinator) this.packageCoordinator = { initialize: async () => ({ success: false, error: 'Package coordinator initialization failed' }) };
-    }
-    
-    // Options
+    // Initialize standard options with defaults
     this.options = {
       verbose: false,
       skipTests: false,
@@ -93,14 +94,38 @@ class Workflow {
       skipWorkflowValidation: false,
       skipHealthCheck: false,
       skipAdvancedChecks: false,
-      ...options
     };
     
-    // Track workflow steps for reporting
-    this.workflowSteps = [];
+    // Override with user-provided options
+    Object.assign(this.options, options);
     
-    // Track warnings separately
+    // Set up logging
+    this.logger = logger;
+    
+    // Set up progress tracker
+    this.progressTracker = progressTracker;
+    
+    // Initialize properties
+    this.workflowSteps = new Map();
     this.workflowWarnings = [];
+    this.workflowErrors = [];
+    
+    // Record start time
+    this.startTime = Date.now();
+    
+    // Initialize command runner
+    this.commandRunner = commandRunner;
+    
+    // Initialize workflow components
+    try {
+      this.qualityChecker = new QualityChecker();
+      this.packageCoordinator = new PackageCoordinator();
+    } catch (error) {
+      // If components fail to initialize, log the error but continue
+      this.logger.warn(`Component initialization warning: ${error.message}`);
+      if (!this.qualityChecker) this.qualityChecker = { runAllChecks: async () => ({ success: false, error: 'Quality checker initialization failed' }) };
+      if (!this.packageCoordinator) this.packageCoordinator = { initialize: async () => ({ success: false, error: 'Package coordinator initialization failed' }) };
+    }
     
     // Initialize preview URLs
     this.previewUrls = null;
@@ -115,33 +140,53 @@ class Workflow {
   }
 
   /**
-   * Record a workflow step for the dashboard
+   * Record a workflow error
+   * @param {string} message - Error message
+   * @param {string} phase - Phase where error occurred
+   * @param {string} [step] - Step where error occurred
+   */
+  recordWorkflowError(message, phase, step = null) {
+    if (!message) return;
+    
+    const error = {
+      message: typeof message === 'object' ? JSON.stringify(message) : message,
+      phase,
+      step,
+      timestamp: new Date().toISOString()
+    };
+    
+    this.workflowErrors.push(error);
+    this.logger.debug(`Recorded error: ${error.message} (${phase}${step ? ` - ${step}` : ''})`);
+  }
+
+  /**
+   * Record a step in the workflow
    * @param {string} name - Step name
    * @param {string} phase - Phase (Setup, Validation, Build, Deploy, Results)
-   * @param {boolean} success - Whether step succeeded
+   * @param {boolean} success - Whether the step was successful
    * @param {number} duration - Duration in milliseconds
-   * @param {string} [error] - Error message if any
+   * @param {string} [error] - Error message if step failed
    */
   recordWorkflowStep(name, phase, success, duration, error = null) {
     const step = {
       name,
       phase,
-      result: { success },
+      success,
       duration,
+      error,
       timestamp: new Date().toISOString()
     };
     
-    if (error) {
-      step.error = error;
-      // Also record error as a warning to ensure it shows in the timeline
-      this.recordWarning(error, phase, name);
+    // Store the step by name for easy reference
+    this.workflowSteps.set(name, step);
+    
+    // Log errors when steps fail
+    if (!success && error) {
+      this.recordWorkflowError(error, phase, name);
     }
     
-    this.workflowSteps.push(step);
-    
-    if (this.options.verbose) {
-      this.logger.debug(`Recorded step: ${name} (${phase}) - ${success ? 'Success' : 'Failed'} - ${duration}ms`);
-    }
+    // Log step for debugging
+    this.logger.debug(`Recorded step: ${name} (${phase}) - ${success ? 'Success' : 'Failed'}${error ? ` - ${error}` : ''}`);
   }
   
   /**
@@ -703,8 +748,21 @@ class Workflow {
       this.buildMetrics = {
         totalSize: buildResult.totalSize || '0 B',
         duration: buildResult.duration || 0,
-        packages: buildResult.results || {}
+        packages: buildResult.results || {},
+        // Add a flag to ensure this object is properly detected
+        isValid: true
       };
+      
+      // Log build metrics for debugging
+      this.logger.debug(`Collected build metrics: ${JSON.stringify(this.buildMetrics, null, 2)}`);
+      
+      // Report build metrics to the console for visibility
+      this.logger.info(`Build metrics:`);
+      this.logger.info(`- Total size: ${this.buildMetrics.totalSize}`);
+      this.logger.info(`- Duration: ${formatDuration(this.buildMetrics.duration)}`);
+      Object.entries(this.buildMetrics.packages).forEach(([name, pkg]) => {
+        this.logger.info(`- ${name}: ${pkg.fileCount} files, ${pkg.sizeFormatted}`);
+      });
       
       this.logger.success('✓ Build completed successfully');
       this.progressTracker.completeStep(true, 'Build complete');
@@ -845,8 +903,15 @@ class Workflow {
       
       // Generate consolidated report
       try {
+        // Log all workflow steps before generating report
+        this.logger.debug(`Workflow steps for dashboard: ${this.workflowSteps.size} steps`);
+        
+        // Convert steps Map to Array for the report
+        const stepsArray = Array.from(this.workflowSteps.values());
+        this.logger.debug(`First step: ${stepsArray.length > 0 ? JSON.stringify(stepsArray[0]) : 'None'}`);
+        
         const reportData = await generateReport({
-          steps: Array.from(this.workflowSteps.values()),
+          steps: stepsArray,
           warnings: this.workflowWarnings,
           metrics: {
             duration: Date.now() - this.startTime
@@ -860,7 +925,9 @@ class Workflow {
                 channelId: this.options.channelId
               }
             : null,
-          buildMetrics: this.buildMetrics
+          buildMetrics: this.buildMetrics,
+          // Add errors explicitly
+          errors: this.workflowErrors || []
         });
         
         this.reportUrl = reportData.path;
