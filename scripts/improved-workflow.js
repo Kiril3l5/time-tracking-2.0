@@ -15,13 +15,19 @@ import { colors, styled } from './core/colors.js';
 import { generateReport } from './workflow/consolidated-report.js';
 import { performanceMonitor } from './core/performance-monitor.js';
 import { setTimeout } from 'timers/promises';
-import { cleanupChannels } from './firebase/channel-cleanup.js';
 import { runAllAdvancedChecks, runSingleCheckWithWorkflowIntegration } from './workflow/advanced-checker.js';
 import { verifyAllAuth } from './auth/auth-manager.js';
 import { createPR } from './github/pr-manager.js';
 import getWorkflowState from './workflow/workflow-state.js';
 import { execSync } from 'child_process';
 import { buildPackageWithWorkflowIntegration } from './workflow/build-manager.js';
+import { getWorkflowConfig } from './workflow/workflow-config.js';
+import { WorkflowCache, generateCacheKey } from './workflow/workflow-cache.js';
+import { createRequire } from 'module';
+import path from 'path';
+import { rotateFiles } from './core/command-runner.js';
+import { createHash } from 'crypto';
+import { cleanupChannels } from './firebase/channel-cleanup.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -94,9 +100,11 @@ class Workflow {
       skipWorkflowValidation: false,
       skipHealthCheck: false,
       skipAdvancedChecks: false,
+      // New option for caching
+      noCache: false,
     };
     
-    // Override with user-provided options
+    // Override with user-provided options FIRST
     Object.assign(this.options, options);
     
     // Set up logging
@@ -132,6 +140,11 @@ class Workflow {
     
     // Initialize advanced check results
     this.advancedCheckResults = null;
+    
+    // Initialize the workflow cache
+    this.cache = new WorkflowCache({
+      enabled: !this.options.noCache
+    });
     
     // Set verbose mode
     if (this.logger && this.logger.setVerbose) {
@@ -205,6 +218,17 @@ class Workflow {
       ? (message.message || JSON.stringify(message))
       : message;
     
+    // Auto-detect severity for build info messages
+    if (phase === 'Build' && !severity) {
+      // These are informational messages, not warnings
+      if (warningMessage.startsWith('Starting build') || 
+          warningMessage.startsWith('Cleaned build') ||
+          warningMessage.startsWith('TypeScript check passed') ||
+          warningMessage.startsWith('Building all packages')) {
+        severity = 'info';
+      }
+    }
+    
     const warning = {
       message: warningMessage,
       phase,
@@ -242,7 +266,7 @@ class Workflow {
       performanceMonitor.start();
       
       // Initialize progress tracking
-      this.progressTracker.initProgress(5, styled.bold(`${colors.cyan}Development Workflow${colors.reset}`));
+      this.progressTracker.initProgress(6, styled.bold(`${colors.cyan}Development Workflow${colors.reset}`));
       
       // 1. Setup Phase
       await this.setup();
@@ -251,13 +275,16 @@ class Workflow {
       await this.validate();
       
       // 3. Build Phase
-      await this.build();
+      const buildMetrics = await this.build();
       
       // 4. Deploy Phase
       await this.deploy();
       
-      // 5. Results Phase
-      const _reportPath = await this.generateResults();
+      // 5. Results Phase (Pass buildMetrics)
+      const _reportPath = await this.generateResults(buildMetrics);
+      
+      // 6. Cleanup Phase (New)
+      await this.cleanup();
       
       // End performance monitoring silently - no need to show metrics in console
       performanceMonitor.end();
@@ -425,6 +452,25 @@ class Workflow {
     const phaseStartTime = Date.now();
     
     try {
+      // Check if we can use cached validation results
+      if (!this.options.skipTests) {
+        const { tryUseValidationCache } = await import('./workflow/workflow-cache.js');
+        const cacheResult = await tryUseValidationCache(this.cache, this.options);
+        
+        if (cacheResult.fromCache) {
+          this.advancedCheckResults = cacheResult.data.advancedChecks;
+          
+          // Record success steps from cache
+          for (const step of cacheResult.data.steps) {
+            this.recordWorkflowStep(step.name, step.phase, step.success, step.duration);
+          }
+          
+          this.progressTracker.completeStep(true, 'Validation completed from cache');
+          this.recordWorkflowStep('Validation Phase', 'Validation', true, Date.now() - phaseStartTime);
+          return;
+        }
+      }
+      
       // Initialize package coordinator to get build order
       const packageStartTime = Date.now();
       this.logger.info('Analyzing package dependencies...');
@@ -472,19 +518,68 @@ class Workflow {
         this.logger.info("Running advanced checks...");
         
         try {
-          // Run all advanced checks for backward compatibility
-          const advancedResult = await runAllAdvancedChecks({
-            // (keep existing options)
-            skipAdvancedChecks: this.options.skipAdvancedChecks,
+          // Run TypeScript and ESLint checks in parallel first
+          const criticalChecks = ['typescript', 'lint'];
+          
+          if (!this.options.skipAdvancedChecks) {
+            this.logger.info(`Running critical checks in parallel: ${criticalChecks.join(', ')}...`);
+            
+            // Setup common options for both checks
+            const commonOptions = {
+              phase: 'Validation',
+              skipAdvancedChecks: this.options.skipAdvancedChecks,
+              treatLintAsWarning: true,
+              verbose: this.options.verbose,
+              silentMode: true,
+              recordWarning: (message, phase, step, severity) => 
+                this.recordWarning(message, phase, step, severity),
+              recordStep: (name, phase, success, duration, error) => 
+                this.recordWorkflowStep(name, phase, success, duration, error)
+            };
+            
+            // Run TypeScript and ESLint checks in parallel
+            const [tsResult, lintResult] = await Promise.all([
+              runSingleCheckWithWorkflowIntegration('typescript', {
+                ...commonOptions,
+                timeout: { typescript: 45000 }
+              }),
+              runSingleCheckWithWorkflowIntegration('lint', {
+                ...commonOptions,
+                timeout: { lint: 45000 }
+              })
+            ]);
+            
+            // Store results for the dashboard
+            this.advancedCheckResults = {
+              typescript: tsResult,
+              lint: lintResult
+            };
+            
+            // Run health check after TypeScript and ESLint have completed
+            if (!this.options.skipHealthCheck) {
+              this.logger.info('Running health check...');
+              const healthResult = await runSingleCheckWithWorkflowIntegration('health', {
+                ...commonOptions,
+                treatHealthAsWarning: true,
+                timeout: { health: 60000 }
+              });
+              
+              this.advancedCheckResults.health = healthResult;
+            }
+          }
+          
+          // Run remaining advanced checks in parallel
+          const remainingChecks = {
             skipBundleCheck: this.options.skipBundleCheck || false,
             skipDocsCheck: this.options.skipDocsCheck || false,
             skipDocsFreshnessCheck: this.options.skipDocsFreshnessCheck || false,
             skipDeadCodeCheck: this.options.skipDeadCodeCheck || false,
-            skipTypeCheck: this.options.skipTests,
-            skipLintCheck: this.options.skipTests,
+            skipTypeCheck: true, // Skip TypeScript check as we already ran it
+            skipLintCheck: true, // Skip lint check as we already ran it
             skipWorkflowValidation: this.options.skipWorkflowValidation || false,
-            skipHealthCheck: this.options.skipHealthCheck || false,
+            skipHealthCheck: true, // Skip health check as we already ran it
             ignoreAdvancedFailures: true,
+            parallelChecks: true, // Enable parallel check execution
             verbose: this.options.verbose,
             treatLintAsWarning: true,
             treatHealthAsWarning: true,
@@ -495,40 +590,18 @@ class Workflow {
               docsQuality: 30000,
               bundleSize: 60000,
               deadCode: 45000,
-              typeCheck: 45000,
-              lint: 45000,
-              workflowValidation: 30000,
-              health: 60000
+              workflowValidation: 30000
             }
-          });
+          };
           
-          // Additionally run TypeScript check with workflow integration
-          if (!this.options.skipTests && !this.options.skipAdvancedChecks) {
-            this.logger.info("Running TypeScript validation with workflow integration...");
-            
-            // This will automatically update workflow state
-            const tsCheckResult = await runSingleCheckWithWorkflowIntegration('typescript', {
-              timeout: { typescript: 45000 },
-              silentMode: true,
-              phase: 'Validation'
-            });
-            
-            // Store the result for the dashboard
-            this.advancedCheckResults = {
-              ...this.advancedCheckResults,
-              typescript: tsCheckResult
-            };
-          }
+          this.logger.info("Running remaining checks...");
+          const remainingResults = await runAllAdvancedChecks(remainingChecks);
           
-          // Store advanced check results for the dashboard
-          this.advancedCheckResults = advancedResult.results || {};
-          
-          // Record all warnings from advanced checks
-          if (advancedResult.warnings && advancedResult.warnings.length > 0) {
-            advancedResult.warnings.forEach(warning => {
-              this.recordWarning(warning, 'Validation', 'Advanced Checks');
-            });
-          }
+          // Merge all results
+          this.advancedCheckResults = {
+            ...this.advancedCheckResults,
+            ...(remainingResults.results || {})
+          };
           
           // Process documentation quality results
           if (this.advancedCheckResults.docsQuality && 
@@ -666,34 +739,40 @@ class Workflow {
             this.logger.info(`Collected ${warningCount} warnings - details will be shown in dashboard`);
           }
         } catch (error) {
-          this.logger.error(`Advanced checks failed: ${error.message}`);
-          this.recordWarning(`Advanced checks error: ${error.message}`, 'Validation', 'Advanced Checks');
-          this.recordWorkflowStep('Advanced Checks', 'Validation', false, performanceMonitor.measure('advancedChecks'), `Error: ${error.message}`);
+          this.logger.error(`Advanced checks warning: ${error.message}`);
+          this.recordWarning(error.message, 'Validation', 'Advanced Checks');
         }
       } catch (error) {
-        // Handle quality checker errors - don't fail the whole workflow
-        this.logger.warn(`Quality checker error: ${error.message}`);
-        this.recordWarning(`Quality check error: ${error.message}`, 'Validation', 'Quality Checks');
-        this.recordWorkflowStep('Quality Checks', 'Validation', false, Date.now() - qualityStartTime, `Error: ${error.message}`);
+        this.logger.error(`Quality checks failed: ${error.message}`);
+        this.progressTracker.completeStep(false, `Validation failed: ${error.message}`);
+        this.recordWorkflowStep('Quality Checks', 'Validation', false, Date.now() - qualityStartTime, error.message);
+        this.recordWorkflowStep('Validation Phase', 'Validation', false, Date.now() - phaseStartTime, error.message);
+        throw error;
       }
       
-      this.progressTracker.completeStep(true, 'Validation complete');
+      // Cache validation results if enabled
+      if (!this.options.noCache) {
+        const { saveValidationCache } = await import('./workflow/workflow-cache.js');
+        const cacheKey = await generateCacheKey('validation', [
+          'package.json',
+          'tsconfig.json',
+          '.eslintrc.js',
+          '.eslintignore'
+        ]);
+        
+        await saveValidationCache(
+          this.cache, 
+          cacheKey, 
+          this.advancedCheckResults, 
+          this.workflowSteps, 
+          this.options
+        );
+      }
+      
+      this.progressTracker.completeStep(true, 'Validation completed');
       this.recordWorkflowStep('Validation Phase', 'Validation', true, Date.now() - phaseStartTime);
     } catch (error) {
       this.progressTracker.completeStep(false, `Validation failed: ${error.message}`);
-      
-      // Enhanced error logging
-      this.logger.error('\nValidation Phase Failed:');
-      this.logger.error(`➤ ${error.message}`);
-      
-      // Show validation issues if available
-      if (error.issues && error.issues.length > 0) {
-        this.logger.error('\nValidation Issues:');
-        error.issues.forEach((issue, i) => {
-          this.logger.error(`${i+1}. ${issue}`);
-        });
-      }
-      
       this.recordWorkflowStep('Validation Phase', 'Validation', false, Date.now() - phaseStartTime, error.message);
       throw error;
     }
@@ -705,93 +784,92 @@ class Workflow {
   async build() {
     this.progressTracker.startStep('Build Phase');
     this.logger.sectionHeader('Building Application');
-    
     const phaseStartTime = Date.now();
-    
+
     // Skip build if requested
     if (this.options.skipBuild) {
       this.logger.warn('Skipping build due to --skip-build flag');
       this.progressTracker.completeStep(true, 'Build skipped');
-      this.recordWorkflowStep('Package Build', 'Build', true, 0, 'Skipped');
+      this.recordWorkflowStep('Package Build', 'Build', true, 0, 'Skipped'); // Record skip
       this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
       return;
     }
-    
+
+    // Cache Check (moved outside main try block)
+    let cacheResult = { fromCache: false };
+    if (!this.options.noCache) {
+      try {
+        const { tryUseBuildCache } = await import('./workflow/workflow-cache.js');
+        cacheResult = await tryUseBuildCache(this.cache, this.options);
+      } catch (cacheError) {
+        this.recordWarning(`Build cache check failed: ${cacheError.message}`, 'Build', 'Cache Check');
+      }
+    }
+
+    // If using cache, record steps and return
+    if (cacheResult.fromCache) {
+      // Load metrics from cache as well
+      const cachedMetrics = cacheResult.data?.buildMetrics;
+      this.logger.debug(`[Build Cache Hit] Loaded buildMetrics from cache: ${JSON.stringify(cachedMetrics)}`);
+
+      // Record success steps from cache
+      if (cacheResult.data?.steps) {
+          for (const step of cacheResult.data.steps) {
+            this.recordWorkflowStep(step.name, step.phase, step.success, step.duration);
+          }
+      } else {
+          // If cache is corrupt or missing steps, record a generic success
+          this.recordWorkflowStep('Package Build', 'Build', true, 0, 'From Cache');
+      }
+      this.progressTracker.completeStep(true, 'Build completed from cache');
+      this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
+      return cachedMetrics || {}; // Return metrics from cache (or empty object)
+    }
+
+    // Main Build Logic
     try {
-      // Use our new workflow integration function
-      this.logger.info('Building packages with workflow integration...');
-      
+      this.logger.info('Building application (cache miss or disabled)...');
+
       const buildResult = await buildPackageWithWorkflowIntegration({
-        target: this.options.target || 'development',
-        minify: !this.options.noMinify,
-        sourceMaps: this.options.sourceMaps,
-        typeCheck: !this.options.skipTests,
-        clean: true,
+        target: 'development', // Or determine target based on needs
+        minify: true,
+        sourceMaps: false,
+        parallel: !process.env.CI, // Disable parallel in CI for simpler logs, enable locally
         packages: ['admin', 'hours'],
         recordWarning: this.recordWarning.bind(this),
         recordStep: this.recordWorkflowStep.bind(this),
         phase: 'Build'
       });
-      
-      if (!buildResult.success) {
-        const error = new Error('Build failed');
-        error.details = buildResult.error || 'Unknown build error';
-        
-        if (buildResult.typeCheckErrors) {
-          error.typeCheckErrors = buildResult.typeCheckErrors;
-        }
-        
-        throw error;
+
+      // If we get here, the build succeeded (as errors are thrown)
+      this.logger.success('✓ ✓ Build completed successfully');
+
+      // Save to cache if not disabled
+      if (!this.options.noCache && cacheResult.cacheKey) {
+        const { saveBuildCache } = await import('./workflow/workflow-cache.js');
+        await saveBuildCache(this.cache, cacheResult.cacheKey, buildResult.buildMetrics || {}, this.workflowSteps, this.options);
       }
-      
-      // Store build metrics for dashboard
-      this.buildMetrics = {
-        totalSize: buildResult.totalSize || '0 B',
-        duration: buildResult.duration || 0,
-        packages: buildResult.results || {},
-        // Add a flag to ensure this object is properly detected
-        isValid: true
-      };
-      
-      // Log build metrics for debugging
-      this.logger.debug(`Collected build metrics: ${JSON.stringify(this.buildMetrics, null, 2)}`);
-      
-      // Report build metrics to the console for visibility
-      this.logger.info(`Build metrics:`);
-      this.logger.info(`- Total size: ${this.buildMetrics.totalSize}`);
-      this.logger.info(`- Duration: ${formatDuration(this.buildMetrics.duration)}`);
-      Object.entries(this.buildMetrics.packages).forEach(([name, pkg]) => {
-        this.logger.info(`- ${name}: ${pkg.fileCount} files, ${pkg.sizeFormatted}`);
-      });
-      
-      this.logger.success('✓ Build completed successfully');
+
       this.progressTracker.completeStep(true, 'Build complete');
       this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
+
+      // Return metrics from live build
+      return buildResult.buildMetrics || {};
     } catch (error) {
-      this.progressTracker.completeStep(false, `Build failed: ${error.message}`);
-      
-      // Enhanced error logging for build failures
-      this.logger.error('\nBuild Phase Failed:');
-      this.logger.error(`${error.message}`);
-      
-      // Show type check errors if available
-      if (error.typeCheckErrors) {
-        this.logger.error('\nTypeScript Errors:');
-        error.typeCheckErrors.slice(0, 10).forEach(err => {
-          let message = err.message;
-          if (err.file) {
-            message = `${err.file}(${err.line},${err.column}): ${message}`;
-          }
-          this.logger.error(message);
-        });
-        
-        if (error.typeCheckErrors.length > 10) {
-          this.logger.error(`...and ${error.typeCheckErrors.length - 10} more errors`);
-        }
+      // Catch the error thrown by buildPackageWithWorkflowTracking
+      this.logger.error('🔴 Build Phase Failed:');
+      this.logger.error(`➤ Error Details: ${error.message}`);
+
+      // Optionally log stack trace if verbose
+      if (this.options.verbose && error.stack) {
+        this.logger.error('\nStack Trace:');
+        this.logger.error(error.stack);
       }
-      
+
+      this.progressTracker.completeStep(false, `Build failed: ${error.message}`);
+      this.recordWorkflowStep('Package Build', 'Build', false, 0, error.message); // Record failure
       this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, error.message);
-      throw error;
+      throw error; // Re-throw to stop the main workflow
     }
   }
 
@@ -871,71 +949,78 @@ class Workflow {
   /**
    * Results Phase
    */
-  async generateResults() {
+  async generateResults(buildMetrics) {
     this.progressTracker.startStep('Results Phase');
     this.logger.sectionHeader('Workflow Results');
+    this.logger.debug(`[Generate Results] Received buildMetrics: ${JSON.stringify(buildMetrics)}`);
     const phaseStartTime = Date.now();
     
     try {
-      // Clean up old preview channels
+      // --- Firebase Channel Cleanup --- START ---
       const cleanupStartTime = Date.now();
-      this.logger.info('Cleaning up old preview channels...');
+      let cleanupResult = { deletedCount: 0, errors: [] }; // Default result
       try {
-        const cleanupResult = await cleanupChannels();
-        
-        // Just show a simple success message in terminal
-        if (cleanupResult.cleaned > 0) {
-          this.logger.success(`✓ Cleaned up ${cleanupResult.cleaned} old channels`);
-        } else {
-          this.logger.info('No channels needed cleanup');
-        }
-        
-        // Record for dashboard
-        this.recordWorkflowStep('Channel Cleanup', 'Results', true, Date.now() - cleanupStartTime);
-      } catch (error) {
-        // Minimal error info in terminal
-        this.logger.warn('Channel cleanup had issues (not critical)');
-        
-        // Record for dashboard
-        this.recordWarning(`Failed to cleanup channels: ${error.message}`, 'Results', 'Channel Cleanup');
-        this.recordWorkflowStep('Channel Cleanup', 'Results', false, Date.now() - cleanupStartTime, 'Cleanup issue');
-      }
-      
-      // Generate consolidated report
-      try {
-        // Log all workflow steps before generating report
-        this.logger.debug(`Workflow steps for dashboard: ${this.workflowSteps.size} steps`);
-        
-        // Convert steps Map to Array for the report
-        const stepsArray = Array.from(this.workflowSteps.values());
-        this.logger.debug(`First step: ${stepsArray.length > 0 ? JSON.stringify(stepsArray[0]) : 'None'}`);
-        
-        const reportData = await generateReport({
-          steps: stepsArray,
-          warnings: this.workflowWarnings,
-          metrics: {
-            duration: Date.now() - this.startTime
-          },
-          timestamp: new Date().toISOString(),
-          advancedChecks: this.advancedCheckResults || {},
-          preview: this.previewUrls
-            ? {
-                hours: this.previewUrls.hours,
-                admin: this.previewUrls.admin,
-                channelId: this.options.channelId
-              }
-            : null,
-          buildMetrics: this.buildMetrics,
-          // Add errors explicitly
-          errors: this.workflowErrors || []
+        this.logger.info('Starting Firebase preview channel cleanup...');
+        // Get config, potentially falling back to defaults in cleanupChannels itself
+        const config = getWorkflowConfig();
+        cleanupResult = await cleanupChannels({
+          sites: config.firebaseSites || [], // Pass detected sites or let function auto-detect
+          keepCount: config.previewKeepCount || 5, // Use configured or default
+          // keepDays: config.previewExpireDays || 7, // Uncomment if keepDays logic is confirmed/added in cleanupChannels
+          dryRun: false
         });
-        
-        this.reportUrl = reportData.path;
-        this.logger.success(`Dashboard generated at: ${this.reportUrl}`);
-      } catch (reportError) {
-        this.logger.error(`Failed to generate dashboard: ${reportError.message}`);
+        this.logger.info(`Channel cleanup finished. Deleted: ${cleanupResult.deletedCount}`);
+        this.recordWorkflowStep('Channel Cleanup', 'Results', cleanupResult.errors.length === 0, Date.now() - cleanupStartTime, cleanupResult.errors.join('; ') || null);
+
+        // Record specific errors from cleanup as warnings
+        if (cleanupResult.errors.length > 0) {
+          cleanupResult.errors.forEach(errMsg => this.recordWarning(errMsg, 'Results', 'Channel Cleanup', 'error'));
+        }
+      } catch (cleanupError) {
+        const errorMsg = `Channel cleanup failed: ${cleanupError.message}`;
+        this.logger.error(errorMsg);
+        this.recordWarning(errorMsg, 'Results', 'Channel Cleanup', 'error');
+        this.recordWorkflowStep('Channel Cleanup', 'Results', false, Date.now() - cleanupStartTime, errorMsg);
+        // Do not re-throw, allow report generation to proceed
       }
+      // --- Firebase Channel Cleanup --- END ---
+
+      // Generate the dashboard
+      this.logger.info('Generating dashboard...');
+      const reportData = await generateReport({
+        steps: Array.from(this.workflowSteps.values()),
+        warnings: this.workflowWarnings,
+        metrics: {
+          duration: Date.now() - this.startTime
+        },
+        timestamp: new Date().toISOString(),
+        advancedChecks: this.advancedCheckResults || {},
+        preview: this.previewUrls
+          ? {
+              hours: this.previewUrls.hours,
+              admin: this.previewUrls.admin,
+              channelId: this.options.channelId
+            }
+          : null,
+        buildMetrics: buildMetrics,
+        // Add errors explicitly
+        errors: this.workflowErrors || [],
+        // Add performance metrics
+        performance: {
+          totalDuration: Date.now() - this.startTime,
+          phaseDurations: {
+            setup: performanceMonitor.measure('setup') || 0,
+            validation: performanceMonitor.measure('validation') || 0,
+            build: performanceMonitor.measure('build') || 0,
+            deploy: performanceMonitor.measure('deploy') || 0,
+            results: Date.now() - phaseStartTime
+          }
+        }
+      });
       
+      this.reportUrl = reportData.path;
+      this.logger.success(`Dashboard generated at: ${this.reportUrl}`);
+
       // Display preview URLs
       if (this.previewUrls) {
         this.logger.info('\nPreview URLs:');
@@ -945,21 +1030,55 @@ class Workflow {
       
       // Don't show warnings in console, just mention to check dashboard
       if (this.workflowWarnings && this.workflowWarnings.length > 0) {
-        // Categorize warnings
+        // Categorize warnings and info messages separately
         const warningsByCategory = {};
+        const infoByCategory = {};
+        
         this.workflowWarnings.forEach(warning => {
           const category = warning.phase || 'General';
-          if (!warningsByCategory[category]) {
-            warningsByCategory[category] = [];
+          // Auto-detect severity for build messages if not already set
+          if (!warning.severity) {
+            if (warning.phase === 'Build') {
+              if (warning.message.startsWith('Starting build') || 
+                  warning.message.startsWith('Cleaned build') ||
+                  warning.message.startsWith('TypeScript check passed') ||
+                  warning.message.startsWith('Build completed') ||
+                  warning.message.includes('files, ') ||
+                  warning.message.includes('KB total') ||
+                  warning.message.startsWith('Build output:') ||
+                  warning.message.startsWith('Build configuration:') ||
+                  warning.message.startsWith('Building all packages') ||
+                  warning.message.startsWith('Running build')) {
+                warning.severity = 'info';
+              }
+            }
           }
-          warningsByCategory[category].push(warning);
+          
+          // Sort into appropriate category
+          if (warning.severity === 'info') {
+            if (!infoByCategory[category]) {
+              infoByCategory[category] = [];
+            }
+            infoByCategory[category].push(warning);
+          } else {
+            if (!warningsByCategory[category]) {
+              warningsByCategory[category] = [];
+            }
+            warningsByCategory[category].push(warning);
+          }
         });
         
-        // Just show counts by category 
-        this.logger.info('\nWarnings and suggestions: (see dashboard for details)');
-        Object.entries(warningsByCategory).forEach(([category, warnings]) => {
-          this.logger.info(`• ${category}: ${warnings.length} items`);
-        });
+        // Only show actual warnings in console summary
+        const hasRealWarnings = Object.values(warningsByCategory).some(warnings => warnings.length > 0);
+        
+        if (hasRealWarnings) {
+          this.logger.info('\nWarnings and suggestions: (see dashboard for details)');
+          Object.entries(warningsByCategory).forEach(([category, warnings]) => {
+            if (warnings.length > 0) {
+              this.logger.info(`• ${category}: ${warnings.length} items`);
+            }
+          });
+        }
       }
       
       this.progressTracker.completeStep(true, 'Results generated');
@@ -1012,6 +1131,64 @@ class Workflow {
           warnings: this.workflowWarnings
         }
       };
+    }
+  }
+
+  /**
+   * Cleanup Phase
+   * Rotates old report files and command logs.
+   */
+  async cleanup() {
+    this.progressTracker.startStep('Cleanup Phase');
+    this.logger.sectionHeader('Cleaning Up Old Files');
+    const phaseStartTime = Date.now();
+    let overallSuccess = true;
+
+    try {
+      const keepCount = 10; // Number of files to keep
+
+      // Rotate report files
+      this.logger.info(`Rotating report files in ./reports, keeping ${keepCount}...`);
+      const reportDir = path.join(process.cwd(), 'reports');
+      const reportResult = await rotateFiles(reportDir, 'workflow-report-', '.json', keepCount, ['latest-report.json']);
+      const reportHtmlResult = await rotateFiles(reportDir, 'workflow-report-', '.html', keepCount, ['latest-report.html']);
+      this.logger.info(`Reports cleanup: Deleted ${reportResult.deletedCount + reportHtmlResult.deletedCount}, Kept ${reportResult.keptCount + reportHtmlResult.keptCount}`);
+      this.recordWorkflowStep('Rotate Reports', 'Cleanup', true, 0);
+
+      // Rotate command logs
+      this.logger.info(`Rotating command logs in ./temp/command-logs, keeping ${keepCount}...`);
+      const logDir = path.join(process.cwd(), 'temp', 'command-logs');
+      // Check if logDir exists before attempting rotation
+      if (fs.existsSync(logDir)) {
+        const logResult = await rotateFiles(logDir, 'command-log-', '.log', keepCount);
+        this.logger.info(`Command logs cleanup: Deleted ${logResult.deletedCount}, Kept ${logResult.keptCount}`);
+      } else {
+        this.logger.debug(`Command log directory not found, skipping rotation: ${logDir}`);
+      }
+      this.recordWorkflowStep('Rotate Command Logs', 'Cleanup', true, 0);
+
+      // Rotate performance metrics logs
+      this.logger.info(`Rotating performance metrics in ./temp/metrics, keeping ${keepCount}...`);
+      const metricsDir = path.join(process.cwd(), 'temp', 'metrics');
+      // Check if metricsDir exists before attempting rotation
+      if (fs.existsSync(metricsDir)) {
+        const metricsResult = await rotateFiles(metricsDir, 'workflow-metrics-', '.json', keepCount);
+        this.logger.info(`Metrics cleanup: Deleted ${metricsResult.deletedCount}, Kept ${metricsResult.keptCount}`);
+      } else {
+        this.logger.debug(`Metrics directory not found, skipping rotation: ${metricsDir}`);
+      }
+      this.recordWorkflowStep('Rotate Metrics Logs', 'Cleanup', true, 0);
+
+    } catch (error) {
+      this.logger.error(`Cleanup phase failed: ${error.message}`);
+      this.recordWorkflowStep('Cleanup Phase', 'Cleanup', false, Date.now() - phaseStartTime, error.message);
+      overallSuccess = false;
+      // Don't re-throw, allow workflow to finish reporting if possible
+    }
+
+    if (overallSuccess) {
+        this.progressTracker.completeStep(true, 'Cleanup complete');
+        this.recordWorkflowStep('Cleanup Phase', 'Cleanup', true, Date.now() - phaseStartTime);
     }
   }
 
@@ -1162,6 +1339,9 @@ Advanced Check Options:
   --skip-health-check       Skip health checks
   --skip-advanced-checks    Skip all advanced checks
   
+Performance Options:
+  --no-cache                Disable caching for validation and build phases
+  
   --help, -h                Show this help information
 
 Examples:
@@ -1169,6 +1349,7 @@ Examples:
   node scripts/improved-workflow.js --skip-tests --skip-build
   node scripts/improved-workflow.js --verbose
   node scripts/improved-workflow.js --skip-advanced-checks
+  node scripts/improved-workflow.js --no-cache
   `);
 }
 
@@ -1188,7 +1369,9 @@ function parseArgs() {
     skipDocsFreshnessCheck: false,
     skipWorkflowValidation: false,
     skipHealthCheck: false,
-    skipAdvancedChecks: false
+    skipAdvancedChecks: false,
+    // Caching option
+    noCache: false
   };
   
   for (const arg of args) {
@@ -1205,6 +1388,8 @@ function parseArgs() {
     if (arg === '--skip-workflow-validation') options.skipWorkflowValidation = true;
     if (arg === '--skip-health-check') options.skipHealthCheck = true;
     if (arg === '--skip-advanced-checks') options.skipAdvancedChecks = true;
+    // Cache option
+    if (arg === '--no-cache') options.noCache = true;
     if (arg === '--help' || arg === '-h') {
       showHelp();
       process.exit(0);
@@ -1218,6 +1403,7 @@ function parseArgs() {
 async function main() {
   logger.init();
   const options = parseArgs();
+
   const workflow = new Workflow(options);
   await workflow.run();
 }

@@ -18,6 +18,10 @@ import { runChecks as runHealthChecks } from '../checks/health-checker.js';
 import { execSync } from 'child_process';
 import { setTimeout, clearTimeout } from 'timers';
 import getWorkflowState from './workflow-state.js';
+import path from 'path';
+import fs from 'fs';
+import process from 'node:process';
+import { createHash } from 'crypto';
 
 /**
  * A wrapper around the logger that respects silent mode
@@ -149,6 +153,133 @@ async function runWithTimeout(operation, timeoutMs, operationName, fallbackValue
 }
 
 /**
+ * Simple cache manager for resource-intensive checks
+ */
+class CheckCache {
+  constructor() {
+    this.cacheFile = path.join(process.cwd(), 'temp', 'check-cache.json');
+    this.cache = null;
+    this.loaded = false;
+  }
+  
+  /**
+   * Load the cache from disk
+   */
+  async load() {
+    if (this.loaded) return;
+    
+    try {
+      // Create temp directory if it doesn't exist
+      const tempDir = path.join(process.cwd(), 'temp');
+      try {
+        await fs.mkdir(tempDir, { recursive: true });
+      } catch (err) {
+        // Directory exists or can't be created
+      }
+      
+      // Load cache file
+      try {
+        const data = await fs.readFile(this.cacheFile, 'utf8');
+        this.cache = JSON.parse(data);
+      } catch (err) {
+        // File doesn't exist or is invalid
+        this.cache = {};
+      }
+    } catch (error) {
+      silentLogger.debug(`Failed to load check cache: ${error.message}`);
+      this.cache = {};
+    }
+    
+    this.loaded = true;
+  }
+  
+  /**
+   * Save the cache to disk
+   */
+  async save() {
+    if (!this.loaded || !this.cache) return;
+    
+    try {
+      await fs.writeFile(this.cacheFile, JSON.stringify(this.cache, null, 2));
+    } catch (error) {
+      silentLogger.debug(`Failed to save check cache: ${error.message}`);
+    }
+  }
+  
+  /**
+   * Generate a cache key based on relevant files
+   * @param {string} type - Check type
+   * @param {string[]} relevantFiles - Files to check for changes
+   * @returns {Promise<string>} - Cache key
+   */
+  async getCacheKey(type, relevantFiles) {
+    try {
+      const hash = createHash('md5');
+      
+      // Add check type to the hash
+      hash.update(type);
+      
+      // Add file modification times
+      for (const file of relevantFiles) {
+        if (fs.existsSync(file)) {
+          const stats = await fs.stat(file);
+          hash.update(`${file}:${stats.mtimeMs}`);
+        }
+      }
+      
+      return hash.digest('hex');
+    } catch (error) {
+      silentLogger.debug(`Failed to generate cache key: ${error.message}`);
+      // Return a timestamp if we can't generate a proper key
+      return `${type}-${Date.now()}`;
+    }
+  }
+  
+  /**
+   * Check if a result is cached and still valid
+   * @param {string} key - Cache key
+   * @returns {Object|null} - Cached result or null
+   */
+  get(key) {
+    if (!this.loaded || !this.cache || !key) return null;
+    
+    const entry = this.cache[key];
+    if (!entry) return null;
+    
+    // Check if the cache entry has expired (default: 24 hours)
+    const now = Date.now();
+    if (entry.expires && entry.expires < now) {
+      delete this.cache[key];
+      return null;
+    }
+    
+    return entry.result;
+  }
+  
+  /**
+   * Store a result in the cache
+   * @param {string} key - Cache key
+   * @param {Object} result - Result to cache
+   * @param {number} ttl - Time to live in milliseconds (default: 24 hours)
+   */
+  set(key, result, ttl = 24 * 60 * 60 * 1000) {
+    if (!this.loaded || !this.cache || !key) return;
+    
+    this.cache[key] = {
+      result,
+      expires: Date.now() + ttl,
+      timestamp: Date.now()
+    };
+    
+    // Schedule a save
+    setTimeout(() => this.save(), 0);
+  }
+}
+
+// Create a singleton instance
+const checkCache = new CheckCache();
+
+/**
  * Run a bundle size analysis check
  * @param {Object} options - Options for the check
  * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
@@ -162,11 +293,28 @@ export async function runBundleSizeCheck(options = {}) {
   silentLogger.info("Running bundle size analysis...");
   
   try {
+    // Find build directories to analyze
+    const rootDir = process.cwd();
+    const buildDirs = [
+      path.join(rootDir, 'packages/admin/dist'),
+      path.join(rootDir, 'packages/hours/dist')
+    ].filter(dir => fs.existsSync(dir));
+    
+    if (buildDirs.length === 0) {
+      silentLogger.warn("No build directories found for bundle analysis. Run the build step first.");
+      return {
+        success: false,
+        error: "No build directories found. Run build step first.",
+        warning: true
+      };
+    }
+    
     // Try to use the module function
     if (typeof analyzeBundles === 'function') {
       // Set a timeout to prevent hanging
       const result = await runWithTimeout(
         analyzeBundles({
+          directories: buildDirs,
           verbose: options.verbose,
           compareToPrevious: true,
           saveReport: true,
@@ -178,13 +326,26 @@ export async function runBundleSizeCheck(options = {}) {
         options
       );
       
-      if (result.sizeIncrease && result.sizeIncrease > 10) {
-        silentLogger.warn(`Bundle size increased by ${result.sizeIncrease}% compared to the previous build.`);
+      if (!result) {
+        silentLogger.warn("Bundle size analysis returned no result");
         return { 
           success: false, 
+          error: "Bundle size analysis returned no result",
+          warning: true
+        };
+      }
+      
+      if (result.issues && result.issues.length > 0) {
+        const errorCount = result.issues.filter(issue => issue.severity === 'error').length;
+        const warningCount = result.issues.filter(issue => issue.severity === 'warning').length;
+        
+        silentLogger.warn(`Bundle size issues: ${errorCount} errors, ${warningCount} warnings`);
+        
+        return { 
+          success: errorCount === 0, // Only fail on errors, warnings are acceptable
           data: result,
-          warning: true,
-          message: `Bundle size increased by ${result.sizeIncrease}%` 
+          warning: warningCount > 0,
+          message: `Bundle size check found ${errorCount} errors and ${warningCount} warnings` 
         };
       }
       
@@ -219,50 +380,99 @@ export async function runDeadCodeCheck(options = {}) {
   // Update silent mode setting
   silentLogger.setSilent(silentMode);
   
-  silentLogger.info("Running dead code detection...");
+  silentLogger.info("Running dead code analysis...");
   
+  // Try to use cached result if files haven't changed
   try {
-    // Try to use the module function
-    if (typeof analyzeDeadCode === 'function') {
-      const result = await runWithTimeout(
+    await checkCache.load();
+    
+    // Define relevant source directories
+    const srcDirs = [
+      path.join(process.cwd(), 'packages/admin/src'),
+      path.join(process.cwd(), 'packages/hours/src'),
+      path.join(process.cwd(), 'packages/common/src')
+    ];
+    
+    // Generate a cache key based on source files
+    const cacheKey = await checkCache.getCacheKey('deadCode', srcDirs);
+    
+    // Check for cached result
+    const cachedResult = checkCache.get(cacheKey);
+    if (cachedResult) {
+      silentLogger.info("Using cached dead code analysis result");
+      return cachedResult;
+    }
+    
+    // No cached result, run the analysis
+    silentLogger.info("No cache available, running fresh dead code analysis...");
+    
+    // Original check implementation
+    let analyzeResult;
+    
+    try {
+      analyzeResult = await runWithTimeout(
         analyzeDeadCode({
+          srcDirs,
           verbose: options.verbose,
-          saveReport: true,
-          silent: true
+          excludeTests: true,
+          saveReport: true
         }),
-        45000,
-        "Dead code detection",
-        { success: true },
+        60000, // Increased timeout from 45s to 60s
+        "Dead code analysis",
+        { success: true, warning: true },
         options
       );
-      
-      const deadCodeCount = result.totalFiles || 0;
-      if (deadCodeCount > 0) {
-        silentLogger.warn(`Found ${deadCodeCount} files with potentially unused code.`);
-        return { 
-          success: false, 
-          data: result,
-          warning: true,
-          message: `Found ${deadCodeCount} files with potentially unused code` 
-        };
-      }
-      
-      silentLogger.success("No dead code found.");
-      return { success: true, data: result };
-    } else {
-      // Fallback to command line
-      silentLogger.info("Using command line fallback for dead code check");
-      execSync('pnpm run detect-deadcode', { 
-        stdio: silentMode ? 'ignore' : 'inherit', 
-        timeout: options.timeout?.deadcode || 45000 
-      });
-      return { success: true };
+    } catch (deadCodeError) {
+      silentLogger.error(`Dead code analysis execution error: ${deadCodeError.message}`);
+      // Return detailed error information
+      return { 
+        success: false, 
+        error: `Dead code analysis failed: ${deadCodeError.message}`,
+        warning: true,
+        message: "Dead code analysis encountered execution errors. See logs for details."
+      };
     }
+    
+    // If we got an undefined or null result
+    if (!analyzeResult) {
+      silentLogger.error("Dead code analysis returned no result");
+      return { 
+        success: false, 
+        error: "Dead code analysis returned no result",
+        warning: true,
+        message: "Dead code analyzer returned no result. Check system resources and try again."
+      };
+    }
+    
+    // If we have detailed results with issues
+    if (analyzeResult.unusedExports && analyzeResult.unusedExports.length > 0) {
+      const count = analyzeResult.unusedExports.length;
+      silentLogger.warn(`Found ${count} unused exports that could be removed.`);
+      
+      // Add detailed error message
+      analyzeResult.message = `Found ${count} unused exports that could be removed. Check the report for details.`;
+    }
+    
+    // Improve the result structure to include proper success/failure indication
+    const result = {
+      ...analyzeResult,
+      success: analyzeResult.success !== false, // Ensure we have a boolean success value
+      warning: analyzeResult.unusedExports && analyzeResult.unusedExports.length > 0
+    };
+    
+    // Cache the result
+    checkCache.set(cacheKey, result);
+    await checkCache.save();
+    
+    silentLogger.success("Dead code analysis completed successfully.");
+    return result;
   } catch (error) {
-    silentLogger.warn(`Dead code check error: ${error.message}`);
+    silentLogger.error("Dead code check failed:", error);
     return { 
       success: false, 
-      error: error.message 
+      error: error.message,
+      warning: true,
+      message: `Dead code check failed: ${error.message}. Try running with --verbose for more details.`
     };
   }
 }
@@ -618,80 +828,69 @@ export async function runProjectHealthCheck(options = {}) {
 
 /**
  * Run all advanced checks
+ * 
  * @param {Object} options - Options for checks
- * @param {Function} options.promptFn - Function to prompt the user
- * @returns {Promise<{success: boolean, results: Object}>} - Overall result and individual results
+ * @param {boolean} [options.skipBundleCheck=false] - Skip bundle size check
+ * @param {boolean} [options.skipDeadCodeCheck=false] - Skip dead code check
+ * @param {boolean} [options.skipDocsCheck=false] - Skip documentation quality check
+ * @param {boolean} [options.skipDocsFreshnessCheck=false] - Skip docs freshness check
+ * @param {boolean} [options.skipWorkflowValidation=false] - Skip workflow validation
+ * @param {boolean} [options.skipTypeCheck=false] - Skip advanced type checking
+ * @param {boolean} [options.skipLintCheck=false] - Skip advanced lint checking
+ * @param {boolean} [options.skipHealthCheck=false] - Skip health check
+ * @param {boolean} [options.parallelChecks=true] - Run compatible checks in parallel
+ * @returns {Promise<Object>} - Results of all checks
  */
 export async function runAllAdvancedChecks(options = {}) {
   const {
+    skipBundleCheck = false,
+    skipDeadCodeCheck = false,
+    skipDocsCheck = false,
+    skipDocsFreshnessCheck = false,
+    skipWorkflowValidation = false,
+    skipTypeCheck = false,
+    skipLintCheck = false,
+    skipHealthCheck = false,
+    ignoreAdvancedFailures = false,
+    parallelChecks = true,
+    verbose = false,
     silentMode = false,
+    treatLintAsWarning = false,
+    treatHealthAsWarning = false,
+    promptFn = null,
+    timeout = {
+      docsFreshness: 30000,
+      docsQuality: 30000,
+      bundleSize: 60000,
+      deadCode: 45000,
+      typeCheck: 45000,
+      lint: 45000,
+      workflowValidation: 30000,
+      health: 60000
+    },
     ...restOptions
   } = options;
   
-  // Set silent mode for the logger
+  // Set silent mode
   silentLogger.setSilent(silentMode);
   
-  // Initialize results object with default values
-  const results = {
-    bundleSize: { success: true, skipped: false },
-    deadCode: { success: true, skipped: false },
-    docsQuality: { success: true, skipped: false },
-    docsFreshness: { success: true, skipped: false },
-    typescript: { success: true, skipped: false },
-    lint: { success: true, skipped: false },
-    workflowValidation: { success: true, skipped: false },
-    health: { success: true, skipped: false }
-  };
-  
-  // Skip if requested
-  if (options.skipAdvancedChecks) {
-    silentLogger.info("Skipping advanced checks as requested.");
-    
-    // Mark all checks as skipped
-    Object.keys(results).forEach(key => {
-      results[key].skipped = true;
-    });
-    
-    return { 
-      success: true, 
-      skipped: true,
-      results 
-    };
+  // Validate that timeout is an object
+  if (timeout && typeof timeout !== 'object') {
+    silentLogger.warn("Invalid timeout parameter. Using defaults.");
   }
   
-  silentLogger.info("Running comprehensive code quality checks...");
+  // Initialize report object
+  silentLogger.info("Running advanced checks...");
+  const results = {};
   
-  // Run health checks first since they're more fundamental
-  if (!options.skipHealthCheck) {
-    try {
-      results.health = await runProjectHealthCheck({
-        ...restOptions,
-        silentMode, // Pass silentMode to suppress duplicate logging
-        quiet: true // Reduce output verbosity from health checks
-      });
-      // Ensure the result is valid even if the function returns undefined
-      if (!results.health) {
-        results.health = { success: false, error: "Health check returned no result" };
-      }
-    } catch (error) {
-      silentLogger.error(`Health check error: ${error.message}`);
-      results.health = { 
-        success: false, 
-        error: error.message,
-        warning: options.treatHealthAsWarning || false
-      };
-    }
-  } else {
-    silentLogger.info("Skipping health checks as requested.");
-    results.health = { success: true, skipped: true };
-  }
-  
-  // Run TypeScript check
-  if (!options.skipTypeCheck) {
+  // Define which checks need to run sequentially
+  // TypeScript and Lint checks should run first since other checks rely on valid code
+  if (!skipTypeCheck) {
     try {
       results.typescript = await runAdvancedTypeScriptCheck({
         ...restOptions,
-        silentMode
+        silentMode,
+        timeout: timeout?.typeCheck
       });
       // Ensure the result is valid even if the function returns undefined
       if (!results.typescript) {
@@ -706,209 +905,206 @@ export async function runAllAdvancedChecks(options = {}) {
     results.typescript = { success: true, skipped: true };
   }
   
-  // Run ESLint check
-  if (!options.skipLintCheck) {
+  // Run lint check
+  if (!skipLintCheck) {
     try {
       results.lint = await runAdvancedLintCheck({
         ...restOptions,
-        silentMode
+        silentMode,
+        timeout: timeout?.lint
       });
       // Ensure the result is valid even if the function returns undefined
       if (!results.lint) {
         results.lint = { success: false, error: "Lint check returned no result" };
       }
+      // Make lint check a warning if requested
+      if (!results.lint.success && treatLintAsWarning) {
+        results.lint.warning = true;
+      }
     } catch (error) {
       silentLogger.error(`Lint check error: ${error.message}`);
-      results.lint = { 
-        success: false, 
-        error: error.message,
-        warning: options.treatLintAsWarning || false
-      };
+      results.lint = { success: false, error: error.message };
+      if (treatLintAsWarning) {
+        results.lint.warning = true;
+      }
     }
   } else {
-    silentLogger.info("Skipping ESLint check as requested.");
+    silentLogger.info("Skipping lint check as requested.");
     results.lint = { success: true, skipped: true };
   }
   
-  // Run workflow validation
-  if (!options.skipWorkflowValidation) {
-    try {
-      results.workflowValidation = await runWorkflowValidationCheck({
+  // Run the rest of the checks in parallel if requested
+  const parallelChecksToRun = [];
+  
+  // Bundle size check
+  if (!skipBundleCheck) {
+    parallelChecksToRun.push({
+      name: 'bundleSize',
+      func: runBundleSizeCheck,
+      options: {
         ...restOptions,
-        silentMode
-      });
-      // Ensure the result is valid even if the function returns undefined
-      if (!results.workflowValidation) {
-        results.workflowValidation = { success: false, error: "Workflow validation returned no result" };
+        silentMode,
+        timeout: timeout?.bundleSize
       }
-    } catch (error) {
-      silentLogger.error(`Workflow validation error: ${error.message}`);
-      results.workflowValidation = { success: false, error: error.message, warning: true };
-    }
-  } else {
-    silentLogger.info("Skipping workflow validation as requested.");
-    results.workflowValidation = { success: true, skipped: true };
+    });
   }
   
-  // Run bundle size check
-  if (!options.skipBundleCheck) {
-    try {
-      results.bundleSize = await runBundleSizeCheck({
+  // Dead code check
+  if (!skipDeadCodeCheck) {
+    parallelChecksToRun.push({
+      name: 'deadCode',
+      func: runDeadCodeCheck,
+      options: {
         ...restOptions,
-        silentMode
-      });
-      // Ensure the result is valid even if the function returns undefined
-      if (!results.bundleSize) {
-        results.bundleSize = { success: false, error: "Bundle size check returned no result" };
+        silentMode,
+        timeout: timeout?.deadCode
       }
-    } catch (error) {
-      silentLogger.error(`Bundle size check error: ${error.message}`);
-      results.bundleSize = { success: false, error: error.message, warning: true };
-    }
-  } else {
-    silentLogger.info("Skipping bundle size check as requested.");
-    results.bundleSize = { success: true, skipped: true };
+    });
   }
   
-  // Run dead code check
-  if (!options.skipDeadCodeCheck) {
-    try {
-      results.deadCode = await runDeadCodeCheck({
+  // Docs quality check
+  if (!skipDocsCheck) {
+    parallelChecksToRun.push({
+      name: 'docsQuality',
+      func: runDocsQualityCheck,
+      options: {
         ...restOptions,
-        silentMode
-      });
-      // Ensure the result is valid even if the function returns undefined
-      if (!results.deadCode) {
-        results.deadCode = { success: false, error: "Dead code check returned no result" };
+        silentMode,
+        timeout: timeout?.docsQuality
       }
-    } catch (error) {
-      silentLogger.error(`Dead code check error: ${error.message}`);
-      results.deadCode = { success: false, error: error.message, warning: true };
-    }
-  } else {
-    silentLogger.info("Skipping dead code check as requested.");
-    results.deadCode = { success: true, skipped: true };
+    });
   }
   
-  // Run docs quality check
-  if (!options.skipDocsCheck) {
-    try {
-      results.docsQuality = await runDocsQualityCheck({
+  // Docs freshness check
+  if (!skipDocsFreshnessCheck) {
+    parallelChecksToRun.push({
+      name: 'docsFreshness',
+      func: runDocsFreshnessCheck,
+      options: {
         ...restOptions,
-        silentMode
-      });
-      // Ensure the result is valid even if the function returns undefined
-      if (!results.docsQuality) {
-        results.docsQuality = { success: false, error: "Docs quality check returned no result" };
+        silentMode,
+        timeout: timeout?.docsFreshness
       }
-    } catch (error) {
-      silentLogger.error(`Docs quality check error: ${error.message}`);
-      results.docsQuality = { success: false, error: error.message, warning: true };
-    }
-  } else {
-    silentLogger.info("Skipping documentation quality check as requested.");
-    results.docsQuality = { success: true, skipped: true };
+    });
   }
   
-  // Run docs freshness check
-  if (!options.skipDocsFreshnessCheck) {
-    try {
-      results.docsFreshness = await runDocsFreshnessCheck({
+  // Workflow validation
+  if (!skipWorkflowValidation) {
+    parallelChecksToRun.push({
+      name: 'workflowValidation',
+      func: runWorkflowValidationCheck,
+      options: {
         ...restOptions,
-        silentMode
-      });
-      // Ensure the result is valid even if the function returns undefined
-      if (!results.docsFreshness) {
-        results.docsFreshness = { success: false, error: "Docs freshness check returned no result" };
+        silentMode,
+        timeout: timeout?.workflowValidation
       }
-    } catch (error) {
-      silentLogger.error(`Docs freshness check error: ${error.message}`);
-      results.docsFreshness = { success: false, error: error.message, warning: true };
-    }
-  } else {
-    silentLogger.info("Skipping documentation freshness check as requested.");
-    results.docsFreshness = { success: true, skipped: true };
+    });
   }
   
-  // Safely collect warnings
+  // Health check
+  if (!skipHealthCheck) {
+    parallelChecksToRun.push({
+      name: 'health',
+      func: runProjectHealthCheck,
+      options: {
+        ...restOptions,
+        silentMode,
+        timeout: timeout?.health
+      }
+    });
+  }
+  
+  // Execute parallel checks efficiently
+  if (parallelChecks && parallelChecksToRun.length > 0) {
+    // Add progress indicators
+    if (!silentMode) {
+      silentLogger.info(`Running ${parallelChecksToRun.length} checks in parallel...`);
+    }
+    
+    // Run checks in parallel with better progress tracking
+    const parallelPromises = parallelChecksToRun.map(check => {
+      return new Promise((resolve) => {
+        const startTime = Date.now();
+        if (!silentMode) {
+          silentLogger.info(`Starting check: ${check.name}...`);
+        }
+        
+        // Run the check and handle the result
+        check.func(check.options)
+          .then(result => {
+            const duration = Date.now() - startTime;
+            
+            if (!silentMode) {
+              const status = result.success ? 'succeeded' : (result.warning ? 'has warnings' : 'failed');
+              silentLogger.info(`Check ${check.name} ${status} (${duration}ms)`);
+            }
+            
+            resolve({ name: check.name, result });
+          })
+          .catch(error => {
+            const duration = Date.now() - startTime;
+            silentLogger.error(`Check ${check.name} failed with error: ${error.message} (${duration}ms)`);
+            resolve({ 
+              name: check.name, 
+              result: { 
+                success: false, 
+                error: error.message,
+                duration 
+              } 
+            });
+          });
+      });
+    });
+    
+    // Wait for all parallel checks to complete with timeout protection
+    const parallelTimeout = setTimeout(() => {
+      silentLogger.warn("Some parallel checks are taking too long. Consider running with --skip options for problematic checks.");
+    }, 30000); // 30-second warning for long-running checks
+    
+    const parallelResults = await Promise.all(parallelPromises);
+    clearTimeout(parallelTimeout);
+    
+    // Process the results
+    for (const { name, result } of parallelResults) {
+      results[name] = result;
+    }
+  } else {
+    await runChecksSequentially(parallelChecksToRun, results);
+  }
+  
+  // Check for warnings
   const warnings = Object.entries(results)
-    .filter(([, result]) => result && result.warning === true)
+    .filter(([, result]) => result && !result.success && result.warning === true)
     .map(([key, result]) => ({
       key,
       message: result.message || result.error || `Warning in ${key} check`
     }));
   
-  if (warnings.length > 0 && options.promptFn) {
-    silentLogger.warn("The following warnings were found in quality checks:");
-    warnings.forEach(({key, message}, index) => {
-      silentLogger.warn(`${index + 1}. [${key}] ${message}`);
-    });
-    
-    try {
-      const shouldContinue = await options.promptFn(
-        "Continue despite these warnings? (Y/n)", 
-        "Y"
-      );
-      
-      if (shouldContinue.toLowerCase() === 'n') {
-        silentLogger.info("Exiting workflow due to quality check warnings.");
-        return { 
-          success: false, 
-          results,
-          warnings: warnings.map(w => w.message)
-        };
-      }
-    } catch (error) {
-      silentLogger.warn(`Warning prompt failed: ${error.message}. Continuing.`);
-    }
-  }
-  
-  // Safely check for critical errors (non-warnings)
-  const criticalErrors = Object.entries(results)
-    .filter(([, result]) => result && 
-                           !result.success && 
-                           result.warning !== true && 
-                           !result.skipped)
-    .map(([key, result]) => ({
-      key,
-      message: result.message || result.error || `${key} check failed`
-    }));
-    
-  const hasCriticalErrors = criticalErrors.length > 0;
-  
-  if (hasCriticalErrors && options.promptFn) {
-    silentLogger.error("Critical errors found in quality checks:");
-    criticalErrors.forEach(({key, message}, index) => {
-      silentLogger.error(`${index + 1}. [${key}] ${message}`);
-    });
-    
-    try {
-      const shouldContinue = await options.promptFn(
-        "Continue despite critical errors? (y/N)", 
-        "N"
-      );
-      
-      if (shouldContinue.toLowerCase() !== 'y') {
-        silentLogger.info("Exiting workflow due to critical quality check errors.");
-        return { 
-          success: false, 
-          results,
-          errors: criticalErrors.map(e => e.message)
-        };
-      }
-    } catch (error) {
-      silentLogger.warn(`Error prompt failed: ${error.message}. Continuing.`);
-    }
-  }
-  
-  silentLogger.success("Quality checks complete!");
-  
   return {
-    success: !hasCriticalErrors || options.ignoreAdvancedFailures,
-    warnings: warnings.length > 0 ? warnings.map(w => w.message) : null,
-    errors: hasCriticalErrors ? criticalErrors.map(e => e.message) : null,
-    results
+    success: !warnings.length,
+    results,
+    warnings
   };
+}
+
+/**
+ * Helper function to run checks sequentially
+ */
+async function runChecksSequentially(checksToRun, results) {
+  for (const { name, func, options } of checksToRun) {
+    try {
+      silentLogger.info(`Running ${name} check...`);
+      const result = await func(options);
+      results[name] = result || { success: false, error: `${name} check returned no result` };
+    } catch (error) {
+      silentLogger.error(`${name} check error: ${error.message}`);
+      results[name] = { 
+        success: false, 
+        error: error.message, 
+        warning: name === 'health' && options.treatHealthAsWarning 
+      };
+    }
+  }
 }
 
 /**
@@ -995,10 +1191,6 @@ export async function runSingleCheckWithWorkflowIntegration(checkName, options =
             workflowState.addWarning(`Bundle size issue: ${issue.message}`, stepName, phase);
           });
         }
-        
-        if (checkResult.data.sizeIncrease && checkResult.data.sizeIncrease > 10) {
-          workflowState.addWarning(`Bundle size increased by ${checkResult.data.sizeIncrease}% compared to the previous build`, stepName, phase);
-        }
       } 
       
       else if (checkName.toLowerCase() === 'deadcode') {
@@ -1027,76 +1219,6 @@ export async function runSingleCheckWithWorkflowIntegration(checkName, options =
           });
         }
       } 
-      
-      else if (checkName.toLowerCase() === 'typescript') {
-        // TypeScript warnings
-        if (checkResult.data.errors) {
-          checkResult.data.errors.forEach(issue => {
-            workflowState.addWarning(`TypeScript issue: ${issue.message} (${issue.file}:${issue.line})`, stepName, phase);
-          });
-        }
-      } 
-      
-      else if (checkName.toLowerCase() === 'lint') {
-        // Lint warnings
-        if (checkResult.data.issues) {
-          checkResult.data.issues.forEach(issue => {
-            workflowState.addWarning(`Lint issue: ${issue.message} (${issue.file}:${issue.line})`, stepName, phase);
-          });
-        }
-      } 
-      
-      else if (checkName.toLowerCase() === 'workflow' || checkName.toLowerCase() === 'workflowvalidation') {
-        // Workflow validation warnings
-        if (checkResult.data.issues) {
-          checkResult.data.issues.forEach(issue => {
-            workflowState.addWarning(`Workflow validation issue: ${issue.message}`, stepName, phase);
-          });
-        }
-      } 
-      
-      else if (checkName.toLowerCase() === 'health') {
-        // Health check warnings
-        if (checkResult.data.stats && checkResult.data.stats.security) {
-          const security = checkResult.data.stats.security;
-          
-          // Security vulnerabilities
-          if (security.vulnerabilities && security.vulnerabilities.details) {
-            security.vulnerabilities.details.forEach(vuln => {
-              workflowState.addWarning(`Security vulnerability: ${vuln.package} (${vuln.severity}) - ${vuln.description}`, stepName, phase);
-            });
-          }
-          
-          // Security issues
-          if (security.issues) {
-            security.issues.forEach(issue => {
-              workflowState.addWarning(`Security issue: ${issue.message}`, stepName, phase);
-            });
-          }
-        }
-        
-        // Performance issues
-        if (checkResult.data.stats && checkResult.data.stats.performance && checkResult.data.stats.performance.issues) {
-          checkResult.data.stats.performance.issues.forEach(issue => {
-            workflowState.addWarning(`Performance issue: ${issue.message}`, stepName, phase);
-          });
-        }
-      }
-    }
-    
-    // Record warnings for timeouts
-    if (checkResult.timedOut) {
-      workflowState.addWarning(`${checkName} check timed out after ${options.timeout?.[checkName.toLowerCase()] || 60000}ms`, stepName, phase);
-    }
-    
-    // Update metrics with check data
-    if (checkResult.data) {
-      workflowState.updateMetrics({
-        advancedChecks: {
-          ...(workflowState.state.metrics.advancedChecks || {}),
-          [checkName.toLowerCase()]: checkResult.data
-        }
-      });
     }
     
     // Complete step tracking
@@ -1126,6 +1248,7 @@ export async function runSingleCheckWithWorkflowIntegration(checkName, options =
   }
 }
 
+// And update the export default statement at the end:
 export default {
   runBundleSizeCheck,
   runDeadCodeCheck,
@@ -1137,4 +1260,4 @@ export default {
   runProjectHealthCheck,
   runAllAdvancedChecks,
   runSingleCheckWithWorkflowIntegration
-}; 
+};

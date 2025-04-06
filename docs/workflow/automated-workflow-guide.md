@@ -11,6 +11,7 @@ The automated workflow system orchestrates the entire development cycle from set
 - Preview deployment to Firebase
 - Interactive dashboard with detailed reporting
 - Channel cleanup to maintain Firebase resources
+- Automated cleanup of old logs and reports
 - Branch management for easy commit and PR creation
 - GitHub Actions integration and verification
 
@@ -59,11 +60,47 @@ pnpm run workflow --skip-health-check
 
 # Skip all advanced checks
 pnpm run workflow --skip-advanced-checks
+
+# Performance options
+pnpm run workflow --no-cache # Disable caching for validation and build phases
 ```
+
+## Performance Optimizations
+
+The workflow includes several optimizations to reduce execution time:
+
+### Caching System
+
+The workflow implements a caching system that significantly improves performance for repeated runs:
+
+- **Validation Caching**: Results from TypeScript, ESLint, and other validation checks are cached
+- **Build Caching**: Build artifacts are cached when the source files haven't changed
+- **Smart Invalidation**: Cache is invalidated based on file modification times of relevant files
+- **Command-Line Control**: Use `--no-cache` to force a fresh run without using cached results
+- **Integrity**: Failed validation or build runs are not saved to the cache to prevent inconsistent states.
+
+### Parallel Execution
+
+Multiple operations are executed in parallel to reduce overall execution time:
+
+- **Parallel Validation**: TypeScript and ESLint checks run simultaneously
+- **Parallel Package Building**: The admin and hours packages are built in parallel
+- **Concurrent Advanced Checks**: Multiple advanced checks run concurrently
+- **Controlled Concurrency**: Resource utilization is managed to prevent overloading the system
+
+### Incremental Processing
+
+The workflow uses incremental processing where possible:
+
+- **Smart Dependency Detection**: Analyzes which files have changed to minimize work
+- **Prioritized Checks**: Critical checks are run first to fail fast if issues are found
+- **Progressive Enhancement**: Basic checks run before more advanced analysis
+
+The combined effect of these optimizations can reduce workflow execution time from minutes to seconds, especially for repeated runs where caching is most effective.
 
 ## Workflow Phases
 
-The workflow progresses through five distinct phases:
+The workflow progresses through six distinct phases:
 
 ### 1. Setup Phase
 - Verifies Git configuration
@@ -74,8 +111,8 @@ The workflow progresses through five distinct phases:
 ### 2. Validation Phase
 - Analyzes package dependencies
 - Runs code quality checks:
-  - Linting with ESLint
-  - Type checking with TypeScript
+  - Linting with ESLint (runs in parallel)
+  - Type checking with TypeScript (runs in parallel)
   - Tests with Vitest
 - Performs advanced checks:
   - Documentation quality and freshness
@@ -84,14 +121,20 @@ The workflow progresses through five distinct phases:
   - Bundle size analysis
   - Health checks
   - Workflow validation
+- Utilizes caching to skip redundant checks when source files haven't changed
+- Runs critical checks first (TypeScript, ESLint) to fail fast
+- Executes multiple checks concurrently for faster validation
 - Collects warnings from all checks to display in dashboard
 
 ### 3. Build Phase
-- Cleans previous build artifacts with platform-specific commands (Windows/Unix)
-- Uses `pnpm run build:all` to build packages sequentially in the correct dependency order
+- Cleans previous build artifacts (`dist/` directory).
+- Builds `admin` and `hours` packages in parallel using **Vite**.
+  - Executes the `vite build` command directly within each package's directory (`packages/admin`, `packages/hours`) for proper context.
+- Uses caching to skip rebuilds when source files haven't changed
 - Verifies build artifacts exist before proceeding to deployment
 - Optimizes assets for deployment
 - Detects and reports build warnings
+  - *Note: Build warning and metric parsing from Vite output is currently basic.*
 
 ### 4. Deploy Phase
 - Creates a unique preview channel ID
@@ -106,6 +149,12 @@ The workflow progresses through five distinct phases:
 - Displays warnings and suggestions for improvement
 - Provides options for branch/commit management
 - Assists with GitHub integration including PR creation
+
+### 6. Cleanup Phase (New)
+- Automatically rotates old files to prevent excessive disk usage.
+- **Reports**: Keeps the 10 most recent timestamped JSON and HTML reports in `./reports`, deleting older ones (excludes `latest-report.*`).
+- **Command Logs**: Keeps the 10 most recent logs in `./temp/command-logs`, deleting older ones.
+- **Performance Metrics**: Keeps the 10 most recent metrics files in `./temp/metrics`, deleting older ones.
 
 ## The Dashboard
 
@@ -132,7 +181,7 @@ Each warning includes specific information about the issue and the affected file
 
 ### Advanced Check Results
 Detailed results from advanced checks, including:
-- Bundle size analysis with component-level breakdown
+- **Build Metrics**: Basic information like total file count and estimated size based on Vite output. Historical build size trend chart.
 - Dead code detection showing unused files and functions
 - Documentation quality assessment and freshness evaluation
 - TypeScript and lint issues with file locations and line numbers
@@ -194,6 +243,9 @@ The workflow system has a modular architecture:
 - **Branch Management**: `workflow/branch-manager.js` - Git branch operations
 - **Performance Monitoring**: `core/performance-monitor.js` - Timing tracking
 - **Authentication**: `auth/auth-manager.js` - Service authentication
+- **Caching System**: `workflow/workflow-cache.js` - Smart caching for validation and build
+- **Parallel Execution**: `workflow/parallel-executor.js` - Concurrent task execution
+- **File Utilities**: `core/command-runner.js` - Includes `rotateFiles` utility for cleanup
 
 ## Workflow Integration System
 
@@ -223,16 +275,16 @@ These integrated functions accept these standard parameters:
 import { buildPackageWithWorkflowTracking } from './scripts/workflow/build-manager.js';
 
 const result = await buildPackageWithWorkflowTracking({
-  target: 'production',
-  minify: true, 
-  sourceMaps: false,
-  typeCheck: true,
-  clean: true,
+  package: 'admin', // Specify the package to build
+  timeout: 180000, // Optional timeout
+  parallel: true,  // Enable parallel package building
   recordWarning: fn,  // Workflow warning recorder
   recordStep: fn,     // Workflow step recorder
   phase: 'Build'
 });
 ```
+
+*Note: The `buildPackageWithWorkflowTracking` function now internally uses `vite build`.*
 
 #### Deployment Management
 ```javascript
@@ -340,12 +392,18 @@ Below is a dependency map showing how different scripts and modules feed into th
 ```
 improved-workflow.js (Main Orchestrator)
 ├── Core Utilities
-│   ├── core/logger.js - Logging and console output
+│   ├── core/logger.js - Logging
 │   ├── core/command-runner.js - Executes shell commands
+│   │   └── (Includes `rotateFiles` utility)
 │   ├── core/progress-tracker.js - Visual progress indicators
 │   ├── core/performance-monitor.js - Timing measurements
 │   ├── core/error-handler.js - Error management and aggregation
 │   └── core/colors.js - Console output formatting
+│
+├── Performance Optimization
+│   ├── workflow/workflow-cache.js - Smart caching system
+│   │   └── (Creates .workflow-cache directory for stored results)
+│   └── workflow/parallel-executor.js - Parallel task execution
 │
 ├── Authentication & Security
 │   ├── auth/auth-manager.js - Authentication coordination
@@ -375,11 +433,8 @@ improved-workflow.js (Main Orchestrator)
 │   └── workflow/package-coordinator.js - Dependency analysis
 │
 ├── Build Phase
-│   ├── (Direct command execution) - Custom clean & build commands
-│   └── build/build-manager.js - Not currently fully utilized
-│       ├── build/build-validator.js - Validates build outputs
-│       ├── build/build-cache.js - Build caching
-│       └── build/build-runner.js - Build process execution
+│   └── build/build-manager.js - Orchestrates Vite builds for packages
+│       └── (Uses `vite build` via command runner)
 │
 ├── Deploy Phase
 │   ├── workflow/deployment-manager.js - Firebase preview deployment
@@ -392,6 +447,9 @@ improved-workflow.js (Main Orchestrator)
     │   └── reports/report-collector.js - Collects check reports
     └── github/pr-manager.js - Pull request creation
         └── workflow/branch-manager.js - Branch management
+
+└── Cleanup Phase (New)
+    └── (Uses `rotateFiles` from core/command-runner.js)
 ```
 
 ### Data Flow Through the System
@@ -419,6 +477,13 @@ The workflow passes several key data structures between components:
    - Created by: Build processes via command execution
    - Validated by: build-validator.js (indirectly)
    - Used by: deployment-manager.js for deployment
+   - *Note: Build metrics are now parsed from Vite output within build-manager.js*
+
+6. **Cache Data**: Stored results from validation and build phases
+   - Created by: workflow-cache.js in conjunction with validation and build phases
+   - Stored in: .workflow-cache directory in the project root
+   - Consumed by: Subsequent workflow runs to skip redundant operations
+   - Invalidated by: File modifications to source code and configuration files
 
 ### Key Integration Points
 
@@ -498,6 +563,17 @@ If you encounter issues with the workflow:
 - If you encounter import errors, run `pnpm install` to ensure all dependencies are installed
 - The 'open' package is required for automatic dashboard viewing
 
+### Caching Issues
+- If you suspect the cache is providing stale results, run with `--no-cache` flag
+- Cached files are stored in `.workflow-cache` directory - you can delete this directory to clear all caches
+- **Failed builds are not cached**, so running again after a failure will force a rebuild.
+- Check that file timestamps are accurate on your system as the cache relies on file modification times
+- Cache is automatically invalidated when you modify package.json, tsconfig.json, or other critical configuration files
+
+### Missing Warnings in Dashboard
+- Run with `--verbose` flag for more detailed output
+- Check the workspace for quality issues that may not be detected
+
 ## Extending the Workflow
 
 The workflow is designed to be extensible. To add new checks or features:
@@ -507,14 +583,59 @@ The workflow is designed to be extensible. To add new checks or features:
 3. Use the `recordWarning` method to add findings to the dashboard
 4. Follow the existing module pattern for consistency
 
+### Extending the Caching System
+
+To add caching to a new component:
+
+1. Import the caching utilities from `workflow/workflow-cache.js`
+2. Identify files that should invalidate your cache (source files, configuration)
+3. Use `generateCacheKey()` to create deterministic cache keys based on file content
+4. Use `tryUse*Cache()` and `save*Cache()` helpers or create your own cache integration
+5. Handle cache hits and misses appropriately in your module
+
+Example:
+```javascript
+import { generateCacheKey, WorkflowCache } from '../workflow/workflow-cache.js';
+
+async function myComponentWithCaching(options) {
+  // Create a cache key based on files that affect the operation
+  const cacheKey = await generateCacheKey('my-component', [
+    'package.json',
+    'tsconfig.json',
+    'src/myComponent.js'
+  ]);
+  
+  // Try to get cached results
+  const cache = new WorkflowCache();
+  const cachedResult = await cache.get(cacheKey);
+  
+  if (cachedResult) {
+    return cachedResult; // Use cached result
+  }
+  
+  // Perform the actual operation
+  const result = await doExpensiveOperation();
+  
+  // Cache the result for next time
+  await cache.set(cacheKey, result);
+  
+  return result;
+}
+```
+
 ## Best Practices
 
 For optimal workflow usage:
 
-1. **Run Regularly**: Use the workflow during development, not just before PRs
-2. **Review All Warnings**: Address issues shown in the dashboard
-3. **Keep Channels Clean**: Let the workflow manage channel cleanup
-4. **Include Preview URLs**: When sharing code for review, include the preview URLs
-5. **Maintain Documentation**: Update docs to reflect changes in the system 
-6. **Use GitHub Integration**: Take advantage of commit, push and PR creation features
-7. **Configure Advanced Checks**: Adjust which checks run based on your needs 
+1. **Understand Build Scripts**: Remember the workflow executes the `build` script defined in the `package.json` of each package (`admin`, `hours`) via Vite.
+2. **Run Regularly**: Use the workflow during development, not just before PRs
+3. **Review All Warnings**: Address issues shown in the dashboard
+4. **Keep Channels Clean**: Let the workflow manage channel cleanup
+5. **Include Preview URLs**: When sharing code for review, include the preview URLs
+6. **Maintain Documentation**: Update docs to reflect changes in the system 
+7. **Use GitHub Integration**: Take advantage of commit, push and PR creation features
+8. **Configure Advanced Checks**: Adjust which checks run based on your needs
+9. **Leverage Caching**: Let the caching system speed up your workflow - only use `--no-cache` when testing changes to the build process itself
+10. **Use Parallel Building**: The parallel execution system automatically optimizes build speed based on your machine's resources
+11. **Periodic Cache Cleanup**: Occasionally run with `--no-cache` to ensure a full validation if you suspect stale cache data
+12. **Monitor Disk Usage**: While cleanup is implemented, periodically check `/reports`, `/temp/command-logs`, and `/temp/metrics` if issues arise. 

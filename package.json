@@ -186,6 +186,7 @@
     "vite": "^6.2.3",
     "vite-plugin-static-copy": "^2.3.0",
     "vitest": "^0.34.6",
+    "webpack-cli": "^6.0.1",
     "zod": "^3.24.2",
     "zustand": "^5.0.3"
   },

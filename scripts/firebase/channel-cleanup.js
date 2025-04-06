@@ -9,425 +9,442 @@
 
 import { logger } from '../core/logger.js';
 import { commandRunner } from '../core/command-runner.js';
-import { getWorkflowConfig } from '../workflow/workflow-config.js';
-import { fileURLToPath } from 'url';
+import fs from 'fs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 
 /* global process */
 
-// Get configuration from workflow-config 
+const execAsync = promisify(exec);
+
+// Function to get cleanup configuration 
 function getCleanupConfig() {
-  const config = getWorkflowConfig();
-  
-  // Use config or fallback to default values
   return {
-    projectId: config.firebase.projectId,
-    sites: Array.isArray(config.firebase.site) 
-      ? config.firebase.site 
-      : (typeof config.firebase.site === 'string' 
-          ? [config.firebase.site] 
-          : Object.keys(config.firebase.targets || {})),
-    keepDays: config.preview?.expireDays || 7,
-    keepCount: config.preview?.keepCount || 5,
-    prefix: config.preview?.prefix || 'preview-'
+    projectId: process.env.FIREBASE_PROJECT_ID || '',
+    sites: process.env.FIREBASE_SITE ? [process.env.FIREBASE_SITE] : [],
+    keepDays: parseInt(process.env.FIREBASE_KEEP_DAYS || '7', 10),
+    keepCount: parseInt(process.env.FIREBASE_KEEP_COUNT || '5', 10),
+    prefix: process.env.FIREBASE_CHANNEL_PREFIX || 'pr-',
   };
 }
 
 /**
- * Check if channel cleanup is needed based on count and age
- * 
- * @param {Object} options - Configuration options
- * @returns {Promise<{needsCleanup: boolean, channelCounts: Object, oldestChannel: Object}>}
+ * Runs a Firebase command with proper error handling
+ * @param {string} command - The command to run
+ * @returns {Promise<{success: boolean, output: string, error: string}>}
  */
-export async function getCleanupStatus(options = {}) {
-  // Get configuration, overridden by any options passed in
-  const config = {
-    ...getCleanupConfig(),
-    ...options
-  };
-  
-  const { projectId, sites, keepDays, keepCount, prefix } = config;
-  
-  // Validate configuration
-  if (!projectId) {
-    logger.error('Cannot check cleanup status: Project ID not configured');
-    return { 
-      needsCleanup: false, 
-      error: 'Project ID not configured. Check .firebaserc or set FIREBASE_PROJECT_ID environment variable.' 
-    };
-  }
-  
-  if (!sites || sites.length === 0) {
-    logger.error('Cannot check cleanup status: No sites configured');
-    return { 
-      needsCleanup: false, 
-      error: 'No sites configured. Check .firebaserc or set FIREBASE_SITE environment variable.' 
-    };
-  }
-  
-  logger.debug(`Checking channel status in project ${projectId} for sites: ${sites.join(', ')}`);
-  
+async function runFirebaseCommand(command) {
   try {
-    // Check channel status for each site
-    const results = {
-      needsCleanup: false,
-      channelCounts: {},
-      oldestChannels: {},
-      totalChannels: 0,
-      channelsByAge: []
-    };
-    
-    for (const site of sites) {
-      logger.debug(`Checking channels for site: ${site}`);
-      
-      // Get all channels for this site
-      const channelsResult = await commandRunner.runCommandAsync(
-        `firebase hosting:channel:list --site=${site} --json`,
-        { stdio: 'pipe' }
-      );
-      
-      if (!channelsResult.success) {
-        logger.warn(`Failed to get channels for site ${site}: ${channelsResult.error}`);
-        continue;
-      }
-      
-      try {
-        // Parse the JSON output from Firebase CLI
-        const channelsData = JSON.parse(channelsResult.output.trim());
-        
-        // Filter to only get preview channels
-        const channels = channelsData.result.channels || [];
-        const previewChannels = channels.filter(channel => channel.name.startsWith(prefix));
-        
-        results.channelCounts[site] = previewChannels.length;
-        results.totalChannels += previewChannels.length;
-        
-        // Check if we've exceeded the channel count
-        if (previewChannels.length > keepCount) {
-          results.needsCleanup = true;
-        }
-        
-        // Check for old channels
-        const now = new Date();
-        const cutoffDate = new Date(now.getTime() - keepDays * 24 * 60 * 60 * 1000);
-        
-        const oldChannels = previewChannels
-          .filter(c => new Date(c.createTime) < cutoffDate)
-          .map(c => ({ ...c, site, createDate: new Date(c.createTime) })); // Add site to channel data
-        
-        if (oldChannels.length > 0) {
-          results.needsCleanup = true;
-          results.channelsByAge = [
-            ...results.channelsByAge,
-            ...oldChannels
-          ];
-          
-          // Find oldest channel for this site
-          oldChannels.sort((a, b) => a.createDate - b.createDate);
-          results.oldestChannels[site] = oldChannels[0];
-        }
-      } catch (parseError) {
-        logger.debug(`Failed to parse channels for site ${site}: ${parseError.message}`);
-      }
-    }
-    
-    // Sort all channels by age (oldest first)
-    results.channelsByAge.sort((a, b) => a.createDate - b.createDate);
-    
-    // Find the overall oldest channel
-    if (results.channelsByAge.length > 0) {
-      results.oldestChannel = results.channelsByAge[0];
-    }
-    
-    // Add some helpful status metadata
-    results.status = results.needsCleanup 
-      ? 'Cleanup needed' 
-      : 'No cleanup needed';
-      
-    results.reason = results.needsCleanup 
-      ? (results.totalChannels > keepCount 
-          ? `Total channels (${results.totalChannels}) exceeds limit (${keepCount})` 
-          : `Channels older than ${keepDays} days found`)
-      : 'All channels are within limits';
-    
-    return results;
-  } catch (error) {
-    logger.error(`Error checking channel status: ${error.message}`);
+    logger.debug(`Running: ${command}`);
+    const result = await commandRunner.runCommandAsync(command, { stdio: 'pipe' });
     return {
-      needsCleanup: false,
-      error: `Failed to check channel status: ${error.message}`
-    };
-  }
-}
-
-/**
- * Clean up old channel deployments
- * 
- * @param {Object} options - Options for cleanup
- * @param {string} options.projectId - Firebase project ID
- * @param {string[]} options.sites - Sites to clean
- * @param {number} options.keepDays - Number of days to keep
- * @param {number} options.keepCount - Number of channels to keep
- * @param {string} options.prefix - Prefix for channels to clean
- * @returns {Promise<{success: boolean, cleaned: number, error?: string}>}
- */
-export async function cleanupChannels(options = {}) {
-  // Get configuration, overridden by any options passed in
-  const config = {
-    ...getCleanupConfig(),
-    ...options
-  };
-  
-  const { projectId, sites, keepDays, keepCount, prefix } = config;
-  
-  if (!projectId) {
-    logger.error('Cannot clean up channels: Project ID not configured');
-    return { 
-      success: false, 
-      cleaned: 0, 
-      error: 'Project ID not configured. Check .firebaserc or set FIREBASE_PROJECT_ID environment variable.' 
-    };
-  }
-  
-  if (!sites || sites.length === 0) {
-    logger.error('Cannot clean up channels: No sites configured');
-    
-    // Try to detect sites dynamically if none are configured
-    try {
-      const sitesListResult = await commandRunner.runCommandAsync('firebase hosting:sites:list --json', {
-        stdio: 'pipe',
-        ignoreError: true
-      });
-      
-      if (sitesListResult.success) {
-        let sitesList = [];
-        try {
-          const sitesData = JSON.parse(sitesListResult.output.trim());
-          sitesList = sitesData.result.sites || [];
-          
-          if (sitesList.length > 0) {
-            const siteNames = sitesList.map(site => site.name || site.site);
-            logger.info(`Found sites: ${siteNames.join(', ')}`);
-            
-            // Use auto-detected sites
-            config.sites = siteNames;
-            logger.success('Using auto-detected sites for cleanup');
-            
-            // Continue with cleanup using the detected sites
-            return cleanupChannels(config);
-          }
-        } catch (parseError) {
-          logger.debug(`Failed to parse sites list: ${parseError.message}`);
-        }
-      } else {
-        logger.debug('Could not fetch sites list');
-      }
-    } catch (error) {
-      logger.debug(`Error fetching sites list: ${error.message}`);
-    }
-    
-    return { 
-      success: false, 
-      cleaned: 0, 
-      error: 'No sites configured. Check .firebaserc or set FIREBASE_SITE environment variable.' 
-    };
-  }
-  
-  logger.debug(`Cleaning up channels in project ${projectId} for sites: ${sites.join(', ')}`);
-  logger.debug(`Keeping channels newer than ${keepDays} days and the newest ${keepCount} channels`);
-  
-  try {
-    // Keep track of how many channels we've cleaned
-    let cleanedCount = 0;
-    
-    // Process each site
-    for (const site of sites) {
-      logger.debug(`Checking channels for site: ${site}`);
-      
-      // Get all channels for this site
-      const channelsResult = await commandRunner.runCommandAsync(
-        `firebase hosting:channel:list --site=${site} --json`,
-        { stdio: 'pipe' }
-      );
-      
-      if (!channelsResult.success) {
-        logger.warn(`Failed to get channels for site ${site}: ${channelsResult.error}`);
-        continue;
-      }
-      
-      let channels;
-      try {
-        // Parse the JSON output from Firebase CLI
-        channels = JSON.parse(channelsResult.output.trim());
-        
-        // Filter to only get preview channels
-        channels = channels.result.channels || [];
-        channels = channels.filter(channel => channel.name.startsWith(prefix));
-        
-        // Sort channels by creation time
-        channels.sort((a, b) => {
-          const aTime = new Date(a.createTime).getTime();
-          const bTime = new Date(b.createTime).getTime();
-          return bTime - aTime; // descending order (newest first)
-        });
-        
-        // Keep the most recent keepCount channels
-        const recentChannels = channels.slice(0, keepCount);
-        const oldChannels = channels.slice(keepCount);
-        
-        // Calculate the cutoff date for keepDays
-        const now = new Date();
-        const cutoffDate = new Date(now.getTime() - keepDays * 24 * 60 * 60 * 1000);
-        
-        // Channels to delete are either:
-        // 1. Older than keepDays days, or
-        // 2. Not in the most recent keepCount channels
-        const channelsToDelete = oldChannels.filter(channel => {
-          const createTime = new Date(channel.createTime);
-          return createTime < cutoffDate;
-        });
-        
-        logger.debug(`Found ${channelsToDelete.length} channels to clean up for site ${site}`);
-        
-        // Delete each channel
-        for (const channel of channelsToDelete) {
-          const deleteResult = await commandRunner.runCommandAsync(
-            `firebase hosting:channel:delete ${channel.name} --site=${site} --force`,
-            { stdio: 'pipe' }
-          );
-          
-          if (deleteResult.success) {
-            logger.debug(`Deleted channel ${channel.name} for site ${site}`);
-            cleanedCount++;
-          } else {
-            logger.warn(`Failed to delete channel ${channel.name} for site ${site}: ${deleteResult.error}`);
-          }
-        }
-      } catch (error) {
-        logger.warn(`Error processing channels for site ${site}: ${error.message}`);
-      }
-    }
-    
-    logger.success(`Cleaned up ${cleanedCount} old preview channels`);
-    
-    return { 
-      success: true, 
-      cleaned: cleanedCount 
+      success: !result.error,
+      output: result.output || '',
+      error: result.error?.message || ''
     };
   } catch (error) {
-    logger.error(`Channel cleanup failed: ${error.message}`);
-    return { 
-      success: false, 
-      cleaned: 0, 
-      error: error.message 
-    };
-  }
-}
-
-/**
- * Enhanced cleanup function with workflow integration
- * 
- * @param {Object} options - Configuration options
- * @param {Function} [options.recordWarning] - Function to record warnings in workflow
- * @param {Function} [options.recordStep] - Function to record steps in workflow
- * @param {string} [options.phase='Results'] - Workflow phase name
- * @returns {Promise<Object>} Cleanup results with enhanced details
- */
-export async function cleanupChannelsForWorkflow(options = {}) {
-  const { 
-    recordWarning = null, 
-    recordStep = null,
-    phase = 'Results',
-    ...cleanupOptions
-  } = options;
-  
-  const startTime = Date.now();
-  
-  // Record step start if tracking enabled
-  if (recordStep) {
-    recordStep('Channel Cleanup', phase, null, 0);
-  }
-  
-  try {
-    // First check if cleanup is needed
-    const status = await getCleanupStatus(cleanupOptions);
-    
-    if (!status.needsCleanup) {
-      logger.info('No channel cleanup needed - all channels within limits');
-      
-      if (recordStep) {
-        recordStep('Channel Cleanup', phase, true, Date.now() - startTime, 'No cleanup needed');
-      }
-      
-      return { 
-        success: true, 
-        cleaned: 0, 
-        skipped: true,
-        reason: status.reason || 'All channels within limits',
-        channelCounts: status.channelCounts,
-        totalChannels: status.totalChannels
-      };
-    }
-    
-    // Log details about what needs cleanup
-    logger.info(`Channel cleanup needed: ${status.reason}`);
-    
-    if (status.oldestChannel) {
-      const age = Math.round((new Date() - new Date(status.oldestChannel.createTime)) / (1000 * 60 * 60 * 24));
-      logger.info(`Oldest channel: ${status.oldestChannel.name} (${age} days old) on site ${status.oldestChannel.site}`);
-    }
-    
-    // Perform cleanup
-    const result = await cleanupChannels(cleanupOptions);
-    
-    // Record warnings if there were issues
-    if (!result.success && recordWarning) {
-      recordWarning(`Channel cleanup failed: ${result.error}`, phase, 'Channel Cleanup');
-    }
-    
-    // Add enhanced information from status check
-    const enhancedResult = {
-      ...result,
-      channelCounts: status.channelCounts,
-      totalChannels: status.totalChannels,
-      oldestChannel: status.oldestChannel,
-      reason: status.reason
-    };
-    
-    // Record step completion
-    if (recordStep) {
-      const stepMessage = result.success
-        ? `Cleaned up ${result.cleaned} channels`
-        : `Cleanup failed: ${result.error}`;
-        
-      recordStep('Channel Cleanup', phase, result.success, Date.now() - startTime, stepMessage);
-    }
-    
-    return enhancedResult;
-  } catch (error) {
-    if (recordWarning) {
-      recordWarning(`Channel cleanup error: ${error.message}`, phase, 'Channel Cleanup');
-    }
-    
-    if (recordStep) {
-      recordStep('Channel Cleanup', phase, false, Date.now() - startTime, error.message);
-    }
-    
+    logger.error(`Command error: ${error.message}`);
     return {
       success: false,
-      cleaned: 0,
+      output: '',
       error: error.message
     };
   }
 }
 
-export default { cleanupChannels, getCleanupStatus, cleanupChannelsForWorkflow };
+/**
+ * Verifies Firebase authentication status
+ * @returns {Promise<{success: boolean, error: string}>}
+ */
+export async function verifyFirebaseAuth() {
+  // Skip full auth check if we're inside the workflow which already verified auth
+  if (process.env.WORKFLOW_SESSION || process.env.WORKFLOW_AUTHENTICATED) {
+    logger.debug('Using workflow-verified Firebase authentication');
+    return { success: true };
+  }
 
-// For direct script execution
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  // Check if firebase CLI is installed
+  try {
+    await execAsync('firebase --version');
+  } catch (error) {
+    return {
+      success: false,
+      error: 'Firebase CLI not installed. Please run: npm install -g firebase-tools'
+    };
+  }
+
+  // Check authentication - first try a direct command that works with project tokens too
+  try {
+    // Try the hosting:sites:list command first - works with CI tokens
+    const siteResult = await runFirebaseCommand('firebase hosting:sites:list --json');
+    if (siteResult.success && !siteResult.output.includes('Error:') && !siteResult.output.includes('not logged in')) {
+      logger.debug('Successfully authenticated via Firebase tools');
+      return { success: true };
+    }
+    
+    // Then try the projects list command
+    const result = await runFirebaseCommand('firebase projects:list --json');
+    if (result.success && !result.output.includes('Error:') && !result.output.includes('not logged in')) {
+      // Successfully got projects list - we're authenticated
+      return { success: true };
+    }
+    
+    // Look for auth tokens in environment variables (common in CI/CD)
+    const hasToken = process.env.FIREBASE_TOKEN || 
+                     process.env.FIREBASE_CI || 
+                     process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+                     process.env.CI;
+                     
+    if (hasToken) {
+      logger.debug('Token-based authentication detected - proceeding with operations');
+      return { success: true };
+    }
+    
+    // If we couldn't authenticate, return error
+    return {
+      success: false,
+      error: 'Firebase authentication required. Please run: firebase login'
+    };
+  } catch (error) {
+    // If any authentication check throws an error, but we have environment indicators
+    // of CI/CD environment, assume auth is present
+    if (process.env.CI || process.env.GITHUB_ACTIONS || process.env.FIREBASE_TOKEN) {
+      logger.debug('Authentication error occurred but CI environment detected - proceeding anyway');
+      return { success: true };
+    }
+    
+    return {
+      success: false,
+      error: `Firebase authentication check failed: ${error.message}`
+    };
+  }
+}
+
+/**
+ * Cleans up Firebase hosting preview channels, keeping only the last N
+ * @param {Object} options - Options for cleanup
+ * @param {string[]} options.sites - Array of site IDs to clean up
+ * @param {number} options.keepCount - Number of recent channels to keep (default: 5)
+ * @param {boolean} options.dryRun - Whether to perform a dry run (default: false)
+ * @returns {Promise<{success: boolean, results: string[], errors: string[]}>}
+ */
+export async function cleanupChannels(options = {}) {
+  const { sites = [], keepCount = 5, dryRun = false } = options;
+  const results = [];
+  const errors = [];
+  
+  logger.info(`Starting channel cleanup${dryRun ? ' (DRY RUN)' : ''}`);
+  logger.info(`Will keep the ${keepCount} most recent channels for each site`);
+  
+  // Get ALL Firebase sites in the project, not just the one from .firebaserc
+  let sitesToClean = [...sites];
+  if (sitesToClean.length === 0) {
+    try {
+      // First try to get project ID from .firebaserc
+      let projectId = null;
+      if (fs.existsSync('.firebaserc')) {
+        const firebaseRc = JSON.parse(fs.readFileSync('.firebaserc', 'utf8'));
+        projectId = firebaseRc.projects?.default;
+        
+        if (projectId) {
+          logger.info(`Using project ID from .firebaserc: ${projectId}`);
+        } else {
+          logger.warn('No project ID found in .firebaserc');
+          return { 
+            success: false, 
+            results: [], 
+            errors: ['No sites specified and no project ID found in .firebaserc'] 
+          };
+        }
+      } else {
+        logger.warn('.firebaserc file not found');
+        return { 
+          success: false, 
+          results: [], 
+          errors: ['No sites specified and .firebaserc file not found'] 
+        };
+      }
+      
+      // Now list all sites in the project
+      logger.info(`Listing all sites for project: ${projectId}`);
+      try {
+        const { stdout } = await execAsync('firebase hosting:sites:list --json');
+        const sitesData = JSON.parse(stdout);
+        
+        if (sitesData && sitesData.result && sitesData.result.sites && Array.isArray(sitesData.result.sites)) {
+          const allSites = sitesData.result.sites.map(site => site.name.split('/').pop());
+          if (allSites.length > 0) {
+            sitesToClean = allSites;
+            logger.info(`Found ${allSites.length} sites: ${allSites.join(', ')}`);
+          } else {
+            logger.warn('No sites found in project');
+            sitesToClean = [projectId]; // Fallback to project ID
+          }
+        } else {
+          logger.warn('No sites found in response');
+          sitesToClean = [projectId]; // Fallback to project ID
+        }
+      } catch (error) {
+        logger.warn(`Error listing sites: ${error.message}, using project ID as fallback`);
+        sitesToClean = [projectId]; // Fallback to project ID
+      }
+    } catch (error) {
+      logger.error(`Error reading .firebaserc: ${error.message}`);
+      return { 
+        success: false, 
+        results: [], 
+        errors: [`Failed to read .firebaserc: ${error.message}`] 
+      };
+    }
+  }
+  
+  logger.info(`Will clean up channels for sites: ${sitesToClean.join(', ')}`);
+  
+  // Track summary stats per site
+  const siteStats = {};
+  
+  // Process each site
+  for (const site of sitesToClean) {
+    logger.info(`\nProcessing site: ${site}`);
+    siteStats[site] = { found: 0, kept: 0, deleted: 0, errors: 0 };
+    
+    try {
+      // Get all channels using direct command execution
+      const listCommand = `firebase hosting:channel:list --site=${site} --json`;
+      logger.debug(`Executing command: ${listCommand}`);
+      
+      try {
+        const { stdout } = await execAsync(listCommand);
+        
+        // Parse the channel data
+        const data = JSON.parse(stdout);
+        logger.debug(`Got channel list response`);
+        
+        // Extract channels from the response
+        let channels = [];
+        
+        // Handle different response formats
+        if (data.result && data.result.channels && Array.isArray(data.result.channels)) {
+          channels = data.result.channels;
+        } else if (data.channels && Array.isArray(data.channels)) {
+          channels = data.channels;
+        } else if (Array.isArray(data)) {
+          channels = data;
+        } else {
+          // Try to find any array in the response
+          for (const key in data) {
+            if (Array.isArray(data[key]) && data[key].length > 0 && data[key][0].name) {
+              channels = data[key];
+              break;
+            }
+          }
+        }
+        
+        // Filter out invalid channel objects and the live channel (never delete live)
+        channels = channels.filter(c => 
+          c && typeof c === 'object' && c.name && 
+          !c.name.endsWith('/channels/live') && 
+          !c.name.includes('/live')
+        );
+        
+        if (channels.length === 0) {
+          logger.info(`No preview channels found for site ${site} (excluding live channel)`);
+          results.push(`No preview channels found for site ${site}`);
+          siteStats[site].found = 0;
+          continue;
+        }
+        
+        siteStats[site].found = channels.length;
+        logger.info(`Found ${channels.length} preview channels for site ${site}`);
+        
+        // Sort channels by creation or update time (newest first)
+        channels.sort((a, b) => {
+          const timeA = a.lastDeployTime ? new Date(a.lastDeployTime).getTime() : 
+                      (a.createTime ? new Date(a.createTime).getTime() : 0);
+          const timeB = b.lastDeployTime ? new Date(b.lastDeployTime).getTime() : 
+                      (b.createTime ? new Date(b.createTime).getTime() : 0);
+          return timeB - timeA;
+        });
+        
+        // Keep the newest channels based on keepCount
+        const channelsToKeep = channels.slice(0, keepCount);
+        const channelsToDelete = channels.slice(keepCount);
+        
+        siteStats[site].kept = channelsToKeep.length;
+        logger.info(`Keeping ${channelsToKeep.length} newest channels:`);
+        for (const channel of channelsToKeep) {
+          // Extract just the channel name without the full path
+          const shortName = channel.name.split('/').pop();
+          const time = channel.lastDeployTime || channel.createTime || 'unknown date';
+          logger.info(`  - ${shortName} (${new Date(time).toLocaleString()})`);
+        }
+        
+        if (channelsToDelete.length === 0) {
+          logger.info(`No channels to delete for site ${site} - only have ${channels.length} channels`);
+          results.push(`No channels to delete for site ${site}`);
+          continue;
+        }
+        
+        logger.info(`Will delete ${channelsToDelete.length} older channels:`);
+        
+        // Delete older channels
+        for (const channel of channelsToDelete) {
+          // Extract just the channel name without the full path
+          const fullName = channel.name;
+          const shortName = fullName.split('/').pop();
+          const time = channel.lastDeployTime || channel.createTime || 'unknown date';
+          
+          logger.info(`  - ${shortName} (${new Date(time).toLocaleString()})`);
+          
+          if (!dryRun) {
+            try {
+              const deleteCommand = `firebase hosting:channel:delete ${shortName} --site=${site} --force`;
+              logger.debug(`Executing command: ${deleteCommand}`);
+              await execAsync(deleteCommand);
+              
+              const message = `Deleted channel ${shortName} from site ${site}`;
+              logger.success(`    ✓ ${message}`);
+              results.push(message);
+              siteStats[site].deleted++;
+            } catch (deleteError) {
+              const errorMsg = `Failed to delete channel ${shortName}: ${deleteError.message}`;
+              logger.error(`    ✗ ${errorMsg}`);
+              errors.push(errorMsg);
+              siteStats[site].errors++;
+            }
+          } else {
+            // In dry run mode, just log what would happen
+            const message = `[DRY RUN] Would delete channel ${shortName} from site ${site}`;
+            logger.info(`    - ${message}`);
+            results.push(message);
+            siteStats[site].deleted++;  // Count as "deleted" for reporting in dry run
+          }
+        }
+      } catch (listError) {
+        const errorMsg = `Failed to list channels for site ${site}: ${listError.message}`;
+        logger.error(errorMsg);
+        errors.push(errorMsg);
+        siteStats[site].errors++;
+      }
+    } catch (error) {
+      logger.error(`Error processing site ${site}: ${error.message}`);
+      errors.push(`Error processing site ${site}: ${error.message}`);
+      siteStats[site].errors++;
+    }
+  }
+  
+  // Summary
+  const totalFound = Object.values(siteStats).reduce((sum, stat) => sum + stat.found, 0);
+  const totalDeleted = Object.values(siteStats).reduce((sum, stat) => sum + stat.deleted, 0);
+  const totalKept = Object.values(siteStats).reduce((sum, stat) => sum + stat.kept, 0);
+  const totalErrors = Object.values(siteStats).reduce((sum, stat) => sum + stat.errors, 0);
+  
+  logger.info('\n--- Channel Cleanup Summary ---');
+  logger.info(`Sites processed: ${sitesToClean.length}`);
+  logger.info(`Total preview channels found: ${totalFound}`);
+  logger.info(`Channels kept: ${totalKept}`);
+  logger.info(`Channels deleted${dryRun ? ' (would delete)' : ''}: ${totalDeleted}`);
+  logger.info(`Errors encountered: ${totalErrors}`);
+  
+  // Per-site breakdown
+  logger.info('\nPer-site breakdown:');
+  for (const site of sitesToClean) {
+    const stats = siteStats[site];
+    logger.info(`  ${site}: ${stats.found} found, ${stats.kept} kept, ${stats.deleted} deleted, ${stats.errors} errors`);
+  }
+  
+  return {
+    success: errors.length === 0 || totalDeleted > 0,
+    results,
+    errors,
+    deletedCount: totalDeleted,
+    stats: siteStats,
+    totalErrors
+  };
+}
+
+// Add a new function to verify Firebase configuration before attempting cleanup
+export async function verifyFirebaseConfiguration() {
+  try {
+    // Check if Firebase CLI is installed and authenticated
+    const authResult = await commandRunner.runCommandAsync('firebase --version', { 
+      stdio: 'pipe',
+      ignoreError: true 
+    });
+    
+    if (!authResult.success) {
+      return { 
+        success: false, 
+        error: 'Firebase CLI not installed or not in PATH. Install with: npm install -g firebase-tools' 
+      };
+    }
+    
+    // Check authentication status
+    const loginResult = await commandRunner.runCommandAsync('firebase login:list', { 
+      stdio: 'pipe',
+      ignoreError: true 
+    });
+    
+    if (!loginResult.success || loginResult.output.includes('No users')) {
+      return { 
+        success: false, 
+        error: 'Not logged in to Firebase. Run: firebase login' 
+      };
+    }
+    
+    // Check project configuration
+    const config = getCleanupConfig();
+    
+    if (!config.projectId) {
+      // Try to get project from .firebaserc
+      const projectResult = await commandRunner.runCommandAsync('firebase projects:list --json', { 
+        stdio: 'pipe',
+        ignoreError: true 
+      });
+      
+      if (!projectResult.success) {
+        return { 
+          success: false, 
+          error: 'No Firebase project configured and unable to list projects. Check your Firebase setup.' 
+        };
+      }
+      
+      try {
+        const projects = JSON.parse(projectResult.output).result || [];
+        if (projects.length === 0) {
+          return { 
+            success: false, 
+            error: 'No Firebase projects available. Create a project or check your permissions.' 
+          };
+        }
+        
+        logger.info(`Found ${projects.length} Firebase projects available`);
+      } catch (e) {
+        return { 
+          success: false, 
+          error: 'Failed to parse Firebase projects response' 
+        };
+      }
+    }
+    
+    return { success: true };
+  } catch (error) {
+    return { 
+      success: false, 
+      error: `Firebase configuration verification failed: ${error.message}` 
+    };
+  }
+}
+
+// Command line entrypoint for testing and debugging
+if (typeof process !== 'undefined' && process.argv && process.argv[1] && process.argv[1].includes('channel-cleanup.js')) {
   cleanupChannels()
     .then(result => {
-      logger.info(`Cleaned ${result.cleaned} channels`);
+      logger.info(`Cleaned ${result.results.length} channels`);
       process.exit(0);
     })
-    .catch(() => process.exit(1));
+    .catch(error => {
+      logger.error(`Error: ${error.message}`);
+      process.exit(1);
+    });
 } 

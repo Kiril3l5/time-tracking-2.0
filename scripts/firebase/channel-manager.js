@@ -18,8 +18,6 @@
 import { logger } from '../core/logger.js';
 import { commandRunner } from '../core/command-runner.js';
 
-/* global process */
-
 /**
  * List all preview channels for a site
  * @param {Object} options - Options
@@ -120,6 +118,16 @@ export async function listChannels(options) {
         
         if (!quiet) {
           logger.info(`Found ${channels.length} channels for site ${site}`);
+          
+          // Display URLs if requested
+          if (displayUrls && channels.length > 0) {
+            logger.info('Channel URLs:');
+            for (const channel of channels) {
+              if (channel.url) {
+                logger.info(`  - ${channel.id}: ${channel.url}`);
+              }
+            }
+          }
         }
         
         // Generate dashboard output if requested

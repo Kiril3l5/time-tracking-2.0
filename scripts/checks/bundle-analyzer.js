@@ -185,18 +185,54 @@ function generateHTMLReport(current, historical, issues, reportPath) {
  */
 export async function analyzeBundles(options) {
   const {
-    directories,
+    directories = [],
     thresholds = {
       totalIncrease: 10,   // percent
       chunkIncrease: 20,   // percent
       maxInitialLoad: 1000  // KB (1MB)
     },
     generateReport = true,
-    reportPath = './bundle-report.html',
+    reportPath = getHtmlReportPath('bundle'),
     baselineSource = null // Optional path to use a specific baseline file
   } = options;
   
   logger.info('Analyzing bundle sizes...');
+  
+  // Ensure directories is an array
+  const dirsToAnalyze = Array.isArray(directories) ? directories : 
+    (directories ? [directories] : []);
+  
+  // If no directories specified, try to use default build directories
+  if (dirsToAnalyze.length === 0) {
+    logger.info('No directories specified for bundle analysis, using default build directories');
+    const defaultDirs = [
+      path.join(process.cwd(), 'packages/admin/dist'),
+      path.join(process.cwd(), 'packages/hours/dist')
+    ];
+    
+    // Only add directories that exist
+    for (const dir of defaultDirs) {
+      if (fs.existsSync(dir)) {
+        logger.info(`Found build directory: ${dir}`);
+        dirsToAnalyze.push(dir);
+      }
+    }
+    
+    if (dirsToAnalyze.length === 0) {
+      logger.warn('No build directories found for bundle analysis');
+      return {
+        success: false,
+        error: 'No build directories found for analysis',
+        current: {},
+        historical: {},
+        issues: [{
+          severity: 'error',
+          message: 'No build directories found',
+          details: 'Make sure to build the application before running bundle analysis'
+        }]
+      };
+    }
+  }
   
   // Load historical data (either from default or specified source)
   let historical = {};
@@ -216,7 +252,7 @@ export async function analyzeBundles(options) {
   const issues = [];
   
   // Analyze each directory
-  for (const dir of directories) {
+  for (const dir of dirsToAnalyze) {
     const dirName = path.basename(dir);
     current[dirName] = getDirectorySize(dir);
     

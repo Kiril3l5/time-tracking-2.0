@@ -311,9 +311,57 @@ async function collectAndGenerateReport(options = {}) {
     if (performanceData) logger.info('✓ Performance metrics loaded');
     if (previewUrls) logger.info('✓ Preview URLs loaded');
     
+    // Transform bundle data to expected dashboard format
+    let transformedBundleData = null;
+    if (bundleData) {
+      // Calculate total size across all packages
+      const calculateTotalSize = (data) => {
+        if (!data) return '0 KB';
+        let total = 0;
+        Object.values(data).forEach(pkg => {
+          if (pkg.total) total += pkg.total;
+        });
+        return `${(total / 1024).toFixed(2)} KB`;
+      };
+      
+      // Transform packages data for dashboard
+      const transformPackages = (data) => {
+        if (!data) return {};
+        const result = {};
+        Object.entries(data).forEach(([name, pkg]) => {
+          result[name] = {
+            totalSize: `${(pkg.total / 1024).toFixed(2)} KB`,
+            fileCount: Object.keys(pkg.files || {}).length,
+            files: Object.entries(pkg.files || {}).map(([filename, size]) => ({
+              name: filename,
+              size: `${(size / 1024).toFixed(2)} KB`
+            })).sort((a, b) => {
+              // Extract numeric size for sorting
+              const sizeA = parseFloat(a.size);
+              const sizeB = parseFloat(b.size);
+              return sizeB - sizeA; // Sort largest first
+            })
+          };
+        });
+        return result;
+      };
+      
+      // Create dashboard-friendly format
+      transformedBundleData = {
+        totalSize: calculateTotalSize(bundleData.current),
+        duration: bundleData.metrics?.duration || 0,
+        packages: transformPackages(bundleData.current),
+        history: bundleData.historical,
+        issues: bundleData.issues || [],
+        isValid: bundleData.valid !== false
+      };
+      
+      logger.debug('Bundle data transformed for dashboard format');
+    }
+    
     // Generate consolidated report
     const success = await generateConsolidatedReport({
-      bundleData,
+      bundleData: transformedBundleData,
       docQualityData,
       deadCodeData,
       vulnerabilityData,

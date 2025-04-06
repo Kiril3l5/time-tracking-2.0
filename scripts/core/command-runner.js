@@ -11,10 +11,14 @@
  * - Timeout support for long-running commands
  */
 
-import { exec, execSync } from 'child_process';
+import { exec, execSync, spawn } from 'child_process';
 import { promisify } from 'util';
 import { logger } from './logger.js';
 import readline from 'readline';
+import { setTimeout, clearTimeout } from 'timers';
+import path, { dirname } from 'path';
+import fs from 'fs';
+import * as fsPromises from 'fs/promises'; // Import promise-based fs methods
 
 /* global process, console */
 
@@ -69,7 +73,7 @@ export function runCommand(command, options = {}) {
 }
 
 /**
- * Run a command asynchronously
+ * Run a command asynchronously with better process control
  * 
  * @async
  * @param {string} command - Command to run
@@ -81,6 +85,7 @@ export function runCommand(command, options = {}) {
  * @param {number} [options.timeout] - Timeout in milliseconds
  * @param {boolean} [options.captureOutput=false] - Capture output even if stdio is not pipe
  * @param {boolean} [options.silent=false] - Suppress all output to console
+ * @param {boolean} [options.forceKillOnTimeout=false] - Force kill the process on timeout (more reliable for hanging processes)
  * @returns {Promise<Object>} Command result object with:
  *   - success {boolean}: Whether the command completed successfully
  *   - output {string}: Command output (if stdio is not 'inherit')
@@ -95,7 +100,8 @@ export async function runCommandAsync(command, options = {}) {
     timeout = 0,
     shell = false,
     captureOutput = false,
-    silent = false
+    silent = false,
+    forceKillOnTimeout = false
   } = options;
   
   const startTime = Date.now();
@@ -103,7 +109,148 @@ export async function runCommandAsync(command, options = {}) {
   let error = '';
   let success = false;
   
+  // For webpack specifically, we want to ensure we can kill it if it hangs
+  const isWebpack = command.includes('webpack');
+  const shouldForceKill = forceKillOnTimeout || isWebpack;
+  
   try {
+    // If we need more control over the process (like forcing termination),
+    // use spawn instead of exec
+    if (shouldForceKill && timeout > 0) {
+      return new Promise((resolve, reject) => {
+        let killed = false;
+        const shellToUse = shell === true || process.platform === 'win32';
+        
+        // Split command into command and args for spawn
+        const parts = command.split(' ');
+        const cmd = parts[0];
+        const args = parts.slice(1);
+        
+        if (!silent) {
+          logger.debug(`Running command with spawn: ${command}`);
+        }
+        
+        // Define variables to hold potentially modified command/args/shell options
+        let spawnCmd = cmd;
+        let spawnArgs = args;
+        let spawnShell = shellToUse;
+        
+        // Standard execution for all commands - no special handling needed now
+        spawnCmd = cmd;
+        spawnArgs = args;
+        spawnShell = shellToUse;
+        
+        // Use spawn for better process control
+        const childProcess = spawn(spawnCmd, spawnArgs, {
+          cwd,
+          env,
+          shell: spawnShell,
+          stdio: captureOutput ? 'pipe' : (silent ? 'ignore' : stdio)
+        });
+        
+        // Add logging to trace process events (Optional but recommended for debugging)
+        const taskName = command.substring(0, 30); // Short name for logging
+        logger.debug(`[${taskName}] Spawned process PID: ${childProcess.pid}`);
+
+        childProcess.stdout?.on('data', (data) => {
+            logger.debug(`[${taskName}] stdout: ${data.toString().trim()}`);
+            if (captureOutput) output += data.toString();
+        });
+
+        childProcess.stderr?.on('data', (data) => {
+            logger.debug(`[${taskName}] stderr: ${data.toString().trim()}`);
+            if (captureOutput) error += data.toString();
+        });
+
+        childProcess.on('exit', (code, signal) => {
+             logger.debug(`[${taskName}] Process event: exit, code=${code}, signal=${signal}`);
+        });
+        // --- End of added logging ---
+        
+        // Setup timeout
+        const timeoutId = setTimeout(() => {
+          if (!silent) {
+            logger.error(`Command timed out after ${timeout}ms: ${command}`);
+          }
+          
+          // Kill the process and its children
+          try {
+            killed = true;
+            childProcess.kill('SIGTERM');
+            
+            // Force kill after 2 seconds if still running
+            setTimeout(() => {
+              try {
+                if (!childProcess.killed) {
+                  childProcess.kill('SIGKILL');
+                }
+              } catch (e) {
+                // Ignore kill errors
+              }
+            }, 2000);
+          } catch (e) {
+            // Ignore kill errors
+          }
+        }, timeout);
+        
+        // Handle process exit
+        childProcess.on('close', (code) => {
+          clearTimeout(timeoutId);
+          const duration = Date.now() - startTime;
+          // Added log for debugging completion timing
+          logger.debug(`[${taskName}] Process event: close, code=${code}, duration=${duration}ms. Resolving promise now.`);
+          
+          if (!silent) {
+            logger.debug(`Command completed in ${duration}ms with code ${code}`);
+          }
+          
+          if (killed) {
+            resolve({
+              success: false,
+              output,
+              error: `Command timed out after ${timeout}ms`,
+              duration,
+              timedOut: true
+            });
+          } else if (code === 0 || ignoreError) {
+            resolve({
+              success: code === 0,
+              output,
+              error,
+              duration
+            });
+          } else {
+            resolve({
+              success: false,
+              output,
+              error: error || `Command failed with exit code ${code}`,
+              duration
+            });
+          }
+        });
+        
+        // Handle process errors
+        childProcess.on('error', (err) => {
+          clearTimeout(timeoutId);
+          const duration = Date.now() - startTime;
+          // Added log for debugging completion timing
+          logger.error(`[${taskName}] Process event: error, message=${err.message}, duration=${duration}ms. Resolving promise now.`);
+          
+          if (!silent) {
+            logger.error(`Command failed after ${duration}ms: ${err.message}`);
+          }
+          
+          resolve({
+            success: false,
+            output,
+            error: err.message,
+            duration
+          });
+        });
+      });
+    }
+    
+    // Use the original exec implementation for standard commands
     // Determine stdio mode
     const effectiveStdio = captureOutput || stdio === 'pipe'
       ? 'pipe'
@@ -243,4 +390,92 @@ export const commandRunner = {
   runCommandAsync,
   promptText,
   promptWorkflowOptions
-}; 
+};
+
+// --- File Rotation Logic --- START ---
+
+/**
+ * Rotates files in a directory, keeping only the most recent ones.
+ *
+ * @async
+ * @param {string} directoryPath - The absolute path to the directory.
+ * @param {string} filePrefix - The prefix of the files to rotate (e.g., 'workflow-report-').
+ * @param {string} fileSuffix - The suffix/extension of the files to rotate (e.g., '.json').
+ * @param {number} keepCount - The number of most recent files to keep.
+ * @param {string[]} [exclude=[]] - An array of exact filenames to exclude from deletion.
+ * @returns {Promise<{deletedCount: number, keptCount: number}>} Object indicating deleted and kept counts.
+ */
+export async function rotateFiles(directoryPath, filePrefix, fileSuffix, keepCount, exclude = []) {
+  logger.debug(`Rotating files in ${directoryPath} matching ${filePrefix}*${fileSuffix}, keeping ${keepCount}`);
+  let deletedCount = 0;
+  let keptCount = 0;
+
+  try {
+    // 1. Read directory contents
+    let files;
+    try {
+      files = await fsPromises.readdir(directoryPath);
+    } catch (readdirError) {
+      if (readdirError.code === 'ENOENT') {
+        logger.debug(`Directory not found, skipping rotation: ${directoryPath}`);
+        return { deletedCount: 0, keptCount: 0 };
+      }
+      throw readdirError; // Re-throw other errors
+    }
+
+    // 2. Filter relevant files
+    const relevantFiles = files.filter(file =>
+      file.startsWith(filePrefix) && file.endsWith(fileSuffix)
+    );
+
+    if (relevantFiles.length <= keepCount) {
+      logger.debug(`Found ${relevantFiles.length} files, which is less than or equal to keepCount (${keepCount}). No rotation needed.`);
+      return { deletedCount: 0, keptCount: relevantFiles.length };
+    }
+
+    // 3. Get modification times and filter out excluded files
+    const fileStats = [];
+    for (const file of relevantFiles) {
+      const filePath = path.join(directoryPath, file);
+      // Check if file should be excluded
+      if (exclude.includes(file)) {
+        logger.debug(`Excluding file from rotation: ${file}`);
+        keptCount++;
+        continue;
+      }
+      try {
+        const stats = await fsPromises.stat(filePath);
+        fileStats.push({ name: file, path: filePath, mtime: stats.mtime });
+      } catch (statError) {
+        logger.warn(`Could not get stats for file ${filePath}, skipping: ${statError.message}`);
+      }
+    }
+
+    // 4. Sort by modification time (newest first)
+    fileStats.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+    // 5. Identify files to delete
+    const filesToDelete = fileStats.slice(keepCount);
+    keptCount += fileStats.length - filesToDelete.length;
+
+    // 6. Delete old files
+    for (const fileInfo of filesToDelete) {
+      try {
+        await fsPromises.unlink(fileInfo.path);
+        logger.debug(`Deleted old file: ${fileInfo.name}`);
+        deletedCount++;
+      } catch (unlinkError) {
+        logger.warn(`Failed to delete file ${fileInfo.path}: ${unlinkError.message}`);
+      }
+    }
+
+    logger.debug(`Rotation complete. Deleted: ${deletedCount}, Kept: ${keptCount}`);
+    return { deletedCount, keptCount };
+
+  } catch (error) {
+    logger.error(`Error during file rotation in ${directoryPath}: ${error.message}`);
+    return { deletedCount: 0, keptCount: 0 }; // Return zero counts on error
+  }
+}
+
+// --- File Rotation Logic --- END --- 
