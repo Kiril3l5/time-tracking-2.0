@@ -30,82 +30,335 @@ const defaultTemplate = `
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{TITLE}}</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; margin: 0; padding: 20px; color: #333; }
-        h1, h2, h3 { color: #000; }
-        h1 { border-bottom: 1px solid #eee; padding-bottom: 10px; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .section { margin-bottom: 30px; }
-        pre { background: #f5f5f5; padding: 10px; border-radius: 4px; overflow: auto; }
-        .step-success { color: green; }
-        .step-failure { color: red; }
-        .warning { background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 10px; margin: 10px 0; }
-        .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 20px; }
-        .tab { padding: 10px 15px; cursor: pointer; }
-        .tab.active { border-bottom: 2px solid #0066cc; color: #0066cc; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .empty-state .info-message {
-          font-size: 14px;
-          color: #0366d6;
-          background-color: #f1f8ff;
-          padding: 8px 16px;
-          border-radius: 4px;
-          display: inline-block;
-        }
-    </style>
+    <link rel="stylesheet" href="dashboard.css">
 </head>
 <body>
-    <div class="container">
-        <h1>{{TITLE}}</h1>
-        <p>Generated on: {{TIMESTAMP}}</p>
+    <div class="dashboard">
+        <header>
+            <h1>{{TITLE}}</h1>
+            <div class="metadata">{{TIMESTAMP}}</div>
+        </header>
         
-        <div class="section">
-            {{PREVIEW_URLS}}
+        <!-- Status Panel -->
+        <div class="overview">
+            <div class="column">
+                <div class="panel">
+                    <div class="status-indicator">
+                        <div class="status-icon {{STATUS_CLASS}}">{{STATUS_ICON}}</div>
+                        <div class="status-text">{{STATUS_TEXT}}</div>
+                    </div>
+                    
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="metric-label">Total Duration</div>
+                            <div class="metric-value">{{DURATION}}</div>
+                        </div>
+                        
+                        <div class="metric">
+                            <div class="metric-label">Warnings</div>
+                            <div class="metric-value">{{WARNING_COUNT}}</div>
+                        </div>
+                        
+                        <div class="metric">
+                            <div class="metric-label">Errors</div>
+                            <div class="metric-value">{{ERROR_COUNT}}</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Critical Errors - Always visible at the top if there are errors -->
+                {{CRITICAL_ERRORS}}
+            </div>
+            
+            <div class="column">
+                <!-- Preview URLs - If available -->
+                {{PREVIEW_URLS}}
+            </div>
         </div>
         
-        <div class="tabs">
-            {{TABS}}
+        <!-- Workflow Timeline -->
+        <div class="panel">
+            <h2>Workflow Timeline</h2>
+            <div class="timeline-chart" id="timeline-container">
+                <!-- Timeline chart will be rendered by JavaScript -->
+            </div>
         </div>
         
-        <div class="tab-contents">
-            {{TAB_CONTENT}}
+        <!-- Warnings Panel -->
+        <div class="panel">
+            <h2>Warnings & Notices</h2>
+            <ul class="warnings-list">
+                {{WARNINGS}}
+            </ul>
         </div>
         
-        <div class="section">
-            <h2>Workflow Steps</h2>
-            {{WORKFLOW_STEPS}}
+        <!-- Build Status -->
+        <div class="panel">
+            <h2>Build Status</h2>
+            <div class="status-indicator">
+                <div class="status-icon {{BUILD_STATUS_CLASS}}">{{BUILD_STATUS_ICON}}</div>
+                <div class="status-text">
+                    <div>{{BUILD_STATUS_TEXT}}</div>
+                    <div class="metric-label">Duration: {{BUILD_DURATION}}</div>
+                </div>
+            </div>
+            
+            <!-- Always show build details -->
+            {{BUILD_DETAILS}}
         </div>
         
-        <div class="section">
-            <h2>Warnings</h2>
-            {{WARNINGS}}
-        </div>
+        <!-- Advanced Check Results -->
+        {{ADVANCED_CHECKS}}
         
-        <div class="section">
+        <!-- Workflow Options -->
+        <div class="panel">
             <h2>Workflow Options</h2>
-            {{WORKFLOW_OPTIONS}}
+            <pre>{{WORKFLOW_OPTIONS}}</pre>
         </div>
         
-        <div class="section">
+        <!-- Channel Cleanup -->
+        <div class="panel">
+            <h2>Channel Cleanup Results</h2>
             {{CHANNEL_CLEANUP}}
-        </div>
-        
-        <div class="section">
-            {{PERFORMANCE_METRICS}}
         </div>
     </div>
     
     <script>
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-                
-                tab.classList.add('active');
-                document.getElementById(tab.dataset.tab).classList.add('active');
-            });
+        // Initialize the dashboard when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            // Create timeline visualization
+            renderWorkflowTimeline();
+            
+            // Setup accordions
+            setupAccordions();
+            
+            // Add warning action handlers
+            setupWarningActions();
         });
+        
+        // Setup accordion functionality
+        function setupAccordions() {
+            const accordionHeaders = document.querySelectorAll('.accordion-header');
+            
+            accordionHeaders.forEach(header => {
+                header.addEventListener('click', () => {
+                    // Toggle active class
+                    const accordionItem = header.parentElement;
+                    accordionItem.classList.toggle('active');
+                    
+                    // Toggle content visibility
+                    const content = accordionItem.querySelector('.accordion-content');
+                    if (content) {
+                        content.style.maxHeight = content.style.maxHeight ? null : content.scrollHeight + 'px';
+                    }
+                    
+                    // Toggle arrow
+                    const arrow = header.querySelector('.toggle');
+                    if (arrow) {
+                        arrow.textContent = arrow.textContent === '▼' ? '▲' : '▼';
+                    }
+                });
+            });
+        }
+        
+        // Handle warning action buttons
+        function setupWarningActions() {
+            document.querySelectorAll('.warning-actions .action-button').forEach(button => {
+                button.addEventListener('click', function() {
+                    const action = this.textContent.toLowerCase();
+                    const warningElement = this.closest('.warning-item');
+                    
+                    if (action.includes('dismiss')) {
+                        warningElement.style.display = 'none';
+                    } else if (action.includes('fix')) {
+                        alert('This would open the file in your editor');
+                    } else if (action.includes('docs')) {
+                        alert('This would open documentation');
+                    } else if (action.includes('details')) {
+                        alert('This would show additional details');
+                    }
+                });
+            });
+        }
+        
+        // Create a better workflow timeline visualization
+        function renderWorkflowTimeline() {
+            const container = document.getElementById('timeline-container');
+            if (!container) return;
+            
+            console.log("WORKFLOW_STEPS_JSON available:", typeof WORKFLOW_STEPS_JSON !== 'undefined');
+            
+            // Check if WORKFLOW_STEPS_JSON is available
+            if (typeof WORKFLOW_STEPS_JSON === 'undefined' || !WORKFLOW_STEPS_JSON || WORKFLOW_STEPS_JSON.length === 0) {
+                container.innerHTML = '<div class="empty-timeline">No workflow steps available</div>';
+                return;
+            }
+            
+            console.log("Steps found:", WORKFLOW_STEPS_JSON.length);
+            
+            // Group steps by phase
+            const phases = {};
+            let totalDuration = 0;
+            
+            WORKFLOW_STEPS_JSON.forEach(step => {
+                if (!phases[step.phase]) {
+                    phases[step.phase] = {
+                        name: step.phase,
+                        steps: [],
+                        totalDuration: 0
+                    };
+                }
+                
+                phases[step.phase].steps.push(step);
+                phases[step.phase].totalDuration += step.duration;
+                totalDuration += step.duration;
+            });
+            
+            console.log("Phases:", Object.keys(phases));
+            
+            // Create SVG for visualization
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.setAttribute("width", "100%");
+            // Adjust SVG height based on the number of steps
+            const phaseCount = Object.keys(phases).length;
+            const stepCount = WORKFLOW_STEPS_JSON.length;
+            // Height calculation: 50px padding + (60px per phase + 30px per step)
+            const svgHeight = 50 + (phaseCount * 60) + (stepCount * 30);
+            svg.setAttribute("height", svgHeight);
+            svg.classList.add("timeline-svg");
+            container.appendChild(svg);
+            
+            // Create timeline
+            const timelineStartX = 250; // Increased from 150px to give more space for step names
+            const timelineWidth = container.clientWidth - timelineStartX - 20;
+            let yPosition = 30;
+            
+            // Draw timeline header
+            const timelineHeader = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            timelineHeader.setAttribute("x1", timelineStartX);
+            timelineHeader.setAttribute("y1", 20);
+            timelineHeader.setAttribute("x2", timelineStartX + timelineWidth);
+            timelineHeader.setAttribute("y2", 20);
+            timelineHeader.setAttribute("stroke", "#e1e4e8");
+            timelineHeader.setAttribute("stroke-width", "2");
+            svg.appendChild(timelineHeader);
+            
+            // Add time markers
+            const timeMarkers = [0, 0.25, 0.5, 0.75, 1];
+            timeMarkers.forEach(marker => {
+                const xPos = timelineStartX + (timelineWidth * marker);
+                
+                // Marker line
+                const markerLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                markerLine.setAttribute("x1", xPos);
+                markerLine.setAttribute("y1", 15);
+                markerLine.setAttribute("x2", xPos);
+                markerLine.setAttribute("y2", 25);
+                markerLine.setAttribute("stroke", "#586069");
+                markerLine.setAttribute("stroke-width", "1");
+                svg.appendChild(markerLine);
+                
+                // Marker text
+                const markerText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                markerText.setAttribute("x", xPos);
+                markerText.setAttribute("y", 10);
+                markerText.setAttribute("text-anchor", "middle");
+                markerText.setAttribute("font-size", "12");
+                markerText.setAttribute("fill", "#586069");
+                markerText.textContent = Math.round(marker * 100) + "%";
+                svg.appendChild(markerText);
+            });
+            
+            // Draw phases
+            Object.values(phases).forEach(phase => {
+                // Phase header
+                const phaseText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                phaseText.setAttribute("x", "10");
+                phaseText.setAttribute("y", yPosition + 20);
+                phaseText.setAttribute("font-size", "14");
+                phaseText.setAttribute("font-weight", "bold");
+                phaseText.textContent = phase.name;
+                svg.appendChild(phaseText);
+                
+                // Phase timeline
+                const phaseTimeline = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                phaseTimeline.setAttribute("x", timelineStartX);
+                phaseTimeline.setAttribute("y", yPosition + 10);
+                phaseTimeline.setAttribute("width", (phase.totalDuration / totalDuration) * timelineWidth);
+                phaseTimeline.setAttribute("height", "20");
+                phaseTimeline.setAttribute("fill", "#0366d6");
+                phaseTimeline.setAttribute("rx", "3");
+                svg.appendChild(phaseTimeline);
+                
+                // Phase duration text
+                const phaseDuration = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                phaseDuration.setAttribute("x", timelineStartX + (phase.totalDuration / totalDuration) * timelineWidth + 5);
+                phaseDuration.setAttribute("y", yPosition + 25);
+                phaseDuration.setAttribute("font-size", "12");
+                phaseDuration.setAttribute("fill", "#24292e");
+                phaseDuration.textContent = formatDuration(phase.totalDuration);
+                svg.appendChild(phaseDuration);
+                
+                yPosition += 40;
+                
+                // Draw steps
+                let stepOffset = 0;
+                phase.steps.forEach(step => {
+                    // Step text
+                    const stepText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                    stepText.setAttribute("x", "30");
+                    stepText.setAttribute("y", yPosition + 15);
+                    stepText.setAttribute("font-size", "12");
+                    stepText.textContent = step.name;
+                    svg.appendChild(stepText);
+                    
+                    // Step timeline bar
+                    const stepWidth = (step.duration / totalDuration) * timelineWidth;
+                    const stepX = timelineStartX + (stepOffset / totalDuration) * timelineWidth;
+                    
+                    const stepTimeline = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                    stepTimeline.setAttribute("x", stepX);
+                    stepTimeline.setAttribute("y", yPosition + 5);
+                    stepTimeline.setAttribute("width", Math.max(stepWidth, 2)); // Ensure visibility
+                    stepTimeline.setAttribute("height", "15");
+                    stepTimeline.setAttribute("fill", step.success ? "#2cbe4e" : "#cb2431");
+                    stepTimeline.setAttribute("rx", "2");
+                    svg.appendChild(stepTimeline);
+                    
+                    // Step duration text (if enough space)
+                    if (stepWidth > 30) {
+                        const stepDuration = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                        stepDuration.setAttribute("x", stepX + 5);
+                        stepDuration.setAttribute("y", yPosition + 16);
+                        stepDuration.setAttribute("font-size", "10");
+                        stepDuration.setAttribute("fill", "white");
+                        stepDuration.textContent = formatDuration(step.duration);
+                        svg.appendChild(stepDuration);
+                    }
+                    
+                    stepOffset += step.duration;
+                    yPosition += 30;
+                });
+                
+                // Add space between phases
+                yPosition += 20;
+            });
+        }
+        
+        // Helper function to format duration
+        function formatDuration(ms) {
+            if (typeof ms !== 'number' || isNaN(ms)) return '0ms';
+            
+            if (ms < 1000) {
+                return ms + 'ms';
+            } else if (ms < 60000) {
+                return (ms / 1000).toFixed(1) + 's';
+            } else {
+                const minutes = Math.floor(ms / 60000);
+                const seconds = Math.floor((ms % 60000) / 1000);
+                return minutes + 'm ' + (seconds > 0 ? seconds + 's' : '');
+            }
+        }
     </script>
 </body>
 </html>
@@ -180,1266 +433,356 @@ export async function generateReport(data, buildMetrics) {
       logger.debug('No steps found in report data');
     }
     
-    // Filter out informational build metrics from warnings
-    if (report.warnings) {
-      // First, properly categorize messages by severity
-      report.warnings.forEach(warning => {
-        // Auto-detect severity for build messages if not already set
-        if (!warning.severity) {
-          if (warning.phase === 'Build') {
-            // These are informational messages, not warnings
-            if (warning.message.startsWith('Starting build') || 
-                warning.message.startsWith('Cleaned build') ||
-                warning.message.startsWith('TypeScript check passed') ||
-                warning.message.startsWith('Build completed') ||
-                warning.message.startsWith('Entry point') ||
-                warning.message.includes('files, ') ||
-                warning.message.includes('KB total') ||
-                warning.message.startsWith('Build output:') ||
-                warning.message.startsWith('Build configuration:') ||
-                warning.message.startsWith('Building all packages') ||
-                warning.message.startsWith('Running build')) {
-              warning.severity = 'info';
-            }
-          }
-        }
-      });
-
-      // Only count actual warnings in the warning tab
-      report.warnings = report.warnings.filter(warning => 
-        warning.severity !== 'info'
-      );
-    }
+    // Calculate status based on steps and warnings
+    const hasErrors = (report.errors && report.errors.length > 0) || failedSteps.length > 0;
+    const hasWarnings = report.warnings && report.warnings.filter(w => w.severity === 'warning').length > 0;
     
-    // Separate informational messages from warnings
-    const infoMessages = data.warnings ? data.warnings.filter(w => w.severity === 'info') : [];
-    report.infoMessages = infoMessages;
+    const statusClass = hasErrors ? 'failure' : (hasWarnings ? 'warning' : 'success');
+    const statusIcon = hasErrors ? '✗' : (hasWarnings ? '⚠' : '✓');
+    const statusText = hasErrors ? 'Workflow Failed' : (hasWarnings ? 'Completed with Warnings' : 'Workflow Successful');
     
-    // Calculate warning stats
-    const warningsByCategory = {};
-    if (report.warnings) {
-      report.warnings.forEach(warning => {
-        const category = warning.phase || 'General';
-        if (!warningsByCategory[category]) {
-          warningsByCategory[category] = [];
-        }
-        warningsByCategory[category].push(warning);
-      });
-    }
-
-    // Calculate info message stats
-    const infoByCategory = {};
-    if (report.infoMessages) {
-      report.infoMessages.forEach(info => {
-        const category = info.phase || 'General';
-        if (!infoByCategory[category]) {
-          infoByCategory[category] = [];
-        }
-        infoByCategory[category].push(info);
-      });
-    }
+    // Build metrics processing
+    const buildSuccess = report.buildMetrics && report.buildMetrics.success !== false;
+    const buildStatusClass = buildSuccess ? 'success' : 'failure';
+    const buildStatusIcon = buildSuccess ? '✓' : '✗';
+    const buildStatusText = buildSuccess ? 'Build Successful' : 'Build Failed';
+    const buildDuration = report.buildMetrics && report.buildMetrics.duration 
+      ? formatDuration(report.buildMetrics.duration) 
+      : 'N/A';
     
-    // Generate unique report ID for linking
-    const reportId = createHash('md5')
-      .update(report.timestamp + Math.random().toString())
-      .digest('hex')
-      .substring(0, 8);
+    // Prepare warnings and errors for the dashboard
+    const formattedWarnings = [];
+    const criticalErrors = [];
+    const buildInfoItems = []; // New array for build info messages
     
-    // Format duration
-    const formatDuration = (milliseconds) => {
-      if (!milliseconds) return '0s';
+    // Process all warnings and errors
+    [...(report.warnings || []), ...(report.errors || [])].forEach(item => {
+      const severity = item.severity || (report.errors && report.errors.includes(item) ? 'error' : 'warning');
+      const source = item.source || item.phase || 'System';
+      const message = typeof item === 'string' ? item : item.message;
       
-      if (milliseconds < 1000) return `${milliseconds}ms`;
-      
-      const seconds = Math.floor(milliseconds / 1000) % 60;
-      const minutes = Math.floor(milliseconds / (1000 * 60)) % 60;
-      
-      if (minutes > 0) {
-        return `${minutes}m ${seconds}s`;
+      // Skip build information messages - they'll be shown in the build section
+      if (source === 'Build' && (
+          message.startsWith('Starting build') || 
+          message.startsWith('Building package') ||
+          message.startsWith('Build output:') ||
+          message.startsWith('Build progress:') ||
+          message.includes('files, ') ||
+          message.includes('KB total')
+      )) {
+        buildInfoItems.push({
+          severity: 'info',
+          source,
+          message
+        });
+        return; // Skip adding to warnings
       }
       
-      return `${seconds}s`;
+      const formattedItem = {
+        severity,
+        source,
+        message
+      };
+      
+      if (severity === 'error') {
+        criticalErrors.push(formattedItem);
+      } else {
+        formattedWarnings.push(formattedItem);
+      }
+    });
+    
+    // Also add failed steps as errors
+    failedSteps.forEach(step => {
+      const errorItem = {
+        severity: 'error',
+        source: step.phase || 'Workflow',
+        message: `Step "${step.name}" failed: ${step.error || 'Unknown error'}`
+      };
+      criticalErrors.push(errorItem);
+    });
+    
+    // Generate critical errors HTML if there are any
+    const criticalErrorsHtml = criticalErrors.length > 0 
+      ? `
+        <div class="panel">
+          <h2>⚠️ Critical Errors (${criticalErrors.length})</h2>
+          <div class="accordion">
+            <div class="accordion-item">
+              <div class="accordion-header">
+                <span class="category">Errors</span>
+                <span class="count">${criticalErrors.length}</span>
+                <span class="toggle">▼</span>
+              </div>
+              <div class="accordion-content">
+                <ul class="warnings-list">
+                  ${criticalErrors.map(error => `
+                    <li class="warning-item">
+                      <div class="warning-message">${error.message}</div>
+                      <div class="warning-source">${error.source}</div>
+                      <div class="warning-actions">
+                        <button class="action-button">Fix Now</button>
+                        <button class="action-button">View Details</button>
+                        <button class="action-button">Dismiss</button>
+                      </div>
+                    </li>
+                  `).join('')}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      ` 
+      : '';
+    
+    // Generate warnings HTML
+    const warningsHtml = formattedWarnings.length > 0
+      ? formattedWarnings.map(warning => `
+        <li class="warning-item">
+          <div class="warning-message">${warning.message}</div>
+          <div class="warning-source">${warning.source}</div>
+          <div class="warning-actions">
+            ${generateWarningActions(warning)}
+          </div>
+        </li>
+      `).join('')
+      : '<li class="warning-item">No warnings or notices</li>';
+    
+    // Generate detailed build info for failed builds
+    const buildDetailsHtml = buildSuccess
+      ? `
+        <div class="build-details">
+          <h3>Build Information</h3>
+          <ul class="build-info-list">
+            ${buildInfoItems.map(item => `
+              <li class="build-info-item">
+                <div class="build-info-message">${item.message}</div>
+              </li>
+            `).join('')}
+            ${data.performance ? `
+              <li class="build-info-item">
+                <div class="build-info-message">Setup Phase: ${formatDuration(data.performance.phaseDurations.setup)}</div>
+              </li>
+              <li class="build-info-item">
+                <div class="build-info-message">Validation Phase: ${formatDuration(data.performance.phaseDurations.validation)}</div>
+              </li>
+              <li class="build-info-item">
+                <div class="build-info-message">Build Phase: ${formatDuration(data.performance.phaseDurations.build)}</div>
+              </li>
+              <li class="build-info-item">
+                <div class="build-info-message">Deploy Phase: ${formatDuration(data.performance.phaseDurations.deploy)}</div>
+              </li>
+              <li class="build-info-item">
+                <div class="build-info-message">Results Phase: ${formatDuration(data.performance.phaseDurations.results)}</div>
+              </li>
+            ` : ''}
+            ${buildInfoItems.length === 0 && !data.performance ? '<li>No detailed build information available</li>' : ''}
+          </ul>
+        </div>
+      `
+      : `
+        <div class="build-details">
+          <h3>Build Failure Details</h3>
+          ${report.buildMetrics.error 
+            ? `<pre class="error-log">${report.buildMetrics.error}</pre>` 
+            : '<p>No detailed error information available</p>'}
+        </div>
+      `;
+    
+    // Prepare workflow steps data for the timeline
+    // First, collect all possible workflow steps for debugging
+    const allStepSources = {
+      steps: data.steps && Array.isArray(data.steps) ? data.steps.length : 0,
+      stepData: Array.isArray(stepData) ? stepData.length : 0,
+      workflowSteps: data.workflowSteps && typeof data.workflowSteps.values === 'function' 
+        ? Array.from(data.workflowSteps.values()).length : 0,
+      workflowStepsObject: data.workflow && data.workflow.steps && !Array.isArray(data.workflow.steps)
+        ? Object.keys(data.workflow.steps).length : 0,
+      workflowStepsArray: data.workflow && data.workflow.steps && Array.isArray(data.workflow.steps)
+        ? data.workflow.steps.length : 0
     };
     
-    // Before generating the HTML content, let's add a debug statement to check the report structure
-    logger.debug(`Report data received: ${Object.keys(report).join(', ')}`);
-    if (report.buildMetrics) {
-      logger.debug(`Build metrics present: ${JSON.stringify(report.buildMetrics, null, 2)}`);
-    } else {
-      logger.debug('Build metrics not found in report data');
-    }
+    logger.debug(`Step sources: ${JSON.stringify(allStepSources, null, 2)}`);
     
-    // Generate HTML content
-    const htmlContent = `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Workflow Dashboard</title>
-      <link rel="stylesheet" href="dashboard.css">
-    </head>
-    <body>
-      <div class="dashboard">
-        <header>
-          <h1>Workflow Dashboard</h1>
-          <div class="metadata">
-            <p>Generated: ${new Date(report.timestamp).toLocaleString()}</p>
-            <p>Report ID: ${reportId}</p>
-          </div>
-        </header>
-        
-        <div class="overview">
-          <div class="column">
-            <div class="panel success">
-              <h2>Status</h2>
-              <div class="status-indicator">
-                <span class="status-icon ${(report.errors && report.errors.length > 0) || failedSteps.length > 0 ? 'warning' : 'success'}">
-                  ${(report.errors && report.errors.length > 0) || failedSteps.length > 0 ? '⚠️' : '✓'}
-                </span>
-                <span class="status-text">${(report.errors && report.errors.length > 0) || failedSteps.length > 0 ? 'Completed with Warnings' : 'Success'}</span>
+    // Get all possible steps from all sources
+    const allPossibleSteps = [
+      ...(data.steps || []),
+      ...(Array.isArray(stepData) ? stepData : []),
+      ...(data.workflowSteps && typeof data.workflowSteps.values === 'function' 
+        ? Array.from(data.workflowSteps.values()) : []),
+      ...(data.workflow && data.workflow.steps && Array.isArray(data.workflow.steps)
+        ? data.workflow.steps : []),
+      ...(data.workflow && data.workflow.steps && !Array.isArray(data.workflow.steps)
+        ? Object.values(data.workflow.steps) : [])
+    ];
+    
+    logger.debug(`Total combined steps: ${allPossibleSteps.length}`);
+    
+    // Filter duplicates by name+phase
+    const uniqueMap = new Map();
+    allPossibleSteps.forEach(step => {
+      if (!step) return;
+      const key = `${step.name}|${step.phase}`;
+      if (!uniqueMap.has(key) || step.duration > (uniqueMap.get(key).duration || 0)) {
+        uniqueMap.set(key, step);
+      }
+    });
+    
+    const uniqueSteps = Array.from(uniqueMap.values());
+    logger.debug(`Unique steps after deduplication: ${uniqueSteps.length}`);
+    
+    const workflowStepsJson = JSON.stringify(
+      uniqueSteps.map(step => ({
+        name: step.name || 'Unknown Step',
+        phase: step.phase || 'Other',
+        duration: parseInt(step.duration || 0, 10),
+        success: step.success !== undefined ? step.success : (step.result ? step.result.success : true),
+        error: step.error || null,
+        timestamp: step.timestamp || new Date().toISOString()
+      }))
+    );
+    
+    logger.debug(`Generated workflow steps JSON, found ${JSON.parse(workflowStepsJson).length} steps`);
+    
+    // Generate preview URLs section if available
+    const previewUrlsHtml = report.preview && report.preview.urls && report.preview.urls.length > 0
+      ? `
+        <div class="panel">
+          <h2>Preview URLs</h2>
+          <div class="preview-links">
+            ${report.preview.urls.map(link => `
+              <div class="preview-link">
+                <div class="preview-label">${link.label || 'Preview'}</div>
+                <a href="${link.url}" target="_blank" class="preview-url">${link.url}</a>
+                ${link.channel ? `<div class="preview-channel">${link.channel}</div>` : ''}
               </div>
-              <div class="metrics">
-                <div class="metric">
-                  <span class="metric-label">Duration</span>
-                  <span class="metric-value">${formatDuration(report.metrics.duration)}</span>
-                </div>
-                <div class="metric">
-                  <span class="metric-label">Warnings</span>
-                  <span class="metric-value">${report.warnings ? report.warnings.length : 0}</span>
-                </div>
-                <div class="metric">
-                  <span class="metric-label">Errors</span>
-                  <span class="metric-value">${(report.errors ? report.errors.length : 0) + failedSteps.length}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          ${report.preview ? `
-          <div class="column">
-            <div class="panel preview">
-              <h2>Preview URLs</h2>
-              <div class="preview-links">
-                ${report.preview.hours ? `
-                <div class="preview-link">
-                  <span class="preview-label">Hours App:</span>
-                  <a href="${report.preview.hours}" target="_blank" class="preview-url">${report.preview.hours}</a>
-                </div>
-                ` : ''}
-                
-                ${report.preview.admin ? `
-                <div class="preview-link">
-                  <span class="preview-label">Admin App:</span>
-                  <a href="${report.preview.admin}" target="_blank" class="preview-url">${report.preview.admin}</a>
-                </div>
-                ` : ''}
-                
-                ${report.preview.channelId ? `
-                <div class="preview-link">
-                  <span class="preview-label">Channel ID:</span>
-                  <span class="preview-channel">${report.preview.channelId}</span>
-                </div>
-                ` : ''}
-              </div>
-            </div>
-          </div>
-          ` : ''}
-        </div>
-        
-        <div class="main-content">
-          ${report.warnings && report.warnings.length > 0 ? `
-          <div class="panel warnings">
-            <h2>Warnings & Alerts</h2>
-            <div class="accordion">
-              ${Object.entries(warningsByCategory).map(([category, warnings]) => {
-                // Filter for actual warnings (severity is 'error' or 'warning')
-                const actualWarnings = warnings.filter(w => w.severity === 'error' || w.severity === 'warning' || !w.severity);
-                
-                return actualWarnings.length > 0 ? `
-              <div class="accordion-item">
-                <div class="accordion-header">
-                  <span class="category">${category}</span>
-                    <span class="count">${actualWarnings.length}</span>
-                  <span class="toggle">▼</span>
-                </div>
-                <div class="accordion-content">
-                  <ul class="warnings-list">
-                      ${actualWarnings.map(warning => `
-                      <li class="warning-item ${warning.severity || 'warning'}">
-                      <div class="warning-message">${warning.message}</div>
-                      ${warning.step ? `<div class="warning-source">Source: ${warning.step}</div>` : ''}
-                    </li>
-                    `).join('')}
-                  </ul>
-                </div>
-              </div>
-                ` : '';
-              }).join('')}
-            </div>
-          </div>
-          
-          <div class="panel info-messages">
-            <h2>Build Information</h2>
-            <div class="accordion">
-              ${Object.entries(infoByCategory).map(([category, infoMessages]) => {
-                return infoMessages.length > 0 ? `
-                <div class="accordion-item">
-                  <div class="accordion-header">
-                    <span class="category">${category}</span>
-                    <span class="count">${infoMessages.length}</span>
-                    <span class="toggle">▼</span>
-                  </div>
-                  <div class="accordion-content">
-                    <ul class="warnings-list">
-                      ${infoMessages.map(info => `
-                      <li class="warning-item info">
-                        <div class="warning-message">${info.message}</div>
-                        ${info.step ? `<div class="warning-source">Source: ${info.step}</div>` : ''}
-                      </li>
-              `).join('')}
-                    </ul>
-                  </div>
-                </div>
-                ` : '';
-              }).join('')}
-            </div>
-          </div>
-          ` : `
-          <div class="panel success-panel">
-            <h2>No Warnings</h2>
-            <p>All checks passed successfully without any warnings!</p>
-          </div>
-          `}
-          
-          ${report.buildMetrics && (report.buildMetrics.isValid || report.buildMetrics.totalSize) ? `
-          <div class="panel build-metrics">
-            <h2>Build Metrics</h2>
-            
-            <div class="metrics-grid">
-              <div class="metric-card">
-                <div class="metric-icon">📦</div>
-                <div class="metric-title">Total Bundle Size</div>
-                <div class="metric-value">
-                  ${report.buildMetrics.totalSizeFormatted || 
-                    (report.buildMetrics.totalSize ? formatFileSize(report.buildMetrics.totalSize) : '0 B')}
-                </div>
-              </div>
-              
-              <div class="metric-card">
-                <div class="metric-icon">⏱️</div>
-                <div class="metric-title">Build Time</div>
-                <div class="metric-value">
-                  ${report.buildMetrics.durationFormatted || 
-                    (report.buildMetrics.duration ? formatDuration(report.buildMetrics.duration) : '0s')}
-                </div>
-              </div>
-              
-              <div class="metric-card">
-                <div class="metric-icon">🗂️</div>
-                <div class="metric-title">Total Files</div>
-                <div class="metric-value">
-                  ${report.buildMetrics.fileCount || 
-                    Object.values(report.buildMetrics.packages || {})
-                      .reduce((sum, pkg) => sum + (parseInt(pkg.fileCount) || 0), 0) || 
-                    '0'}
-                </div>
-              </div>
-            </div>
-            
-            ${report.buildMetrics.issues && report.buildMetrics.issues.length > 0 ? `
-            <div class="bundle-issues">
-              <h3>Bundle Issues</h3>
-              <ul class="issues-list">
-                ${report.buildMetrics.issues.map(issue => `
-                <li class="issue-item ${issue.severity || 'warning'}">
-                  <div class="issue-message">${issue.message}</div>
-                  ${issue.details ? `<div class="issue-details">${issue.details}</div>` : ''}
-                </li>
-                `).join('')}
-              </ul>
-            </div>
-            ` : ''}
-            
-            ${report.buildMetrics.history ? generateBundleSizeTrendChart(report.buildMetrics) : ''}
-            
-            ${report.buildMetrics.packages ? `
-            <div class="package-section">
-              <h3>Package Details</h3>
-              <div class="packages-grid">
-                ${Object.entries(report.buildMetrics.packages).map(([name, pkg]) => `
-                <div class="package-card">
-                  <div class="package-name">${name}</div>
-                  <div class="package-metrics">
-                    <div class="package-metric">
-                      <span class="metric-label">Size</span>
-                      <span class="metric-value">
-                        ${pkg.totalSize || 
-                          (pkg.rawSize ? formatFileSize(pkg.rawSize) : '0 B')}
-                      </span>
-                    </div>
-                    <div class="package-metric">
-                      <span class="metric-label">Files</span>
-                      <span class="metric-value">${pkg.fileCount || '0'}</span>
-                    </div>
-                    <div class="package-metric">
-                      <span class="metric-label">Build Time</span>
-                      <span class="metric-value">
-                        ${pkg.duration || 
-                          (pkg.rawDuration ? formatDuration(pkg.rawDuration) : '0s')}
-                      </span>
-                    </div>
-                  </div>
-                  ${pkg.files && pkg.files.length > 0 ? `
-                  <div class="package-files">
-                    <h4>Largest Files</h4>
-                    <ul class="files-list">
-                      ${pkg.files.slice(0, 5).map(file => `
-                      <li class="file-item">
-                        <span class="file-name">${file.name}</span>
-                        <span class="file-size">${file.size}</span>
-                      </li>
-                      `).join('')}
-                    </ul>
-                  </div>
-                  ` : ''}
-                </div>
-                `).join('')}
-              </div>
-            </div>
-            ` : ''}
-          </div>
-          ` : ''}
-          
-          ${report.advancedChecks && Object.keys(report.advancedChecks).length > 0 ? `
-          <div class="panel advanced-checks">
-            <h2>Advanced Check Results</h2>
-            <div class="accordion">
-              ${Object.entries(report.advancedChecks).map(([checkName, checkResult]) => {
-                // FIX: Better detection of actually skipped checks vs. those that were run
-                // For TypeScript and Lint specifically, check additional properties that
-                // would indicate the check was actually run
-                let wasActuallyRun = !checkResult.skipped;
-                
-                // Special case for TypeScript and Lint checks
-                if (checkName.toLowerCase() === 'typescript' || checkName.toLowerCase() === 'lint') {
-                  // If we have data, success, or warning properties, the check was run
-                  wasActuallyRun = wasActuallyRun || 
-                                   checkResult.data || 
-                                   checkResult.success === true || 
-                                   checkResult.warning === true;
-                }
-                
-                const displayStatus = wasActuallyRun ? 
-                  (checkResult.success ? 'Passed' : (checkResult.warning ? 'Warning' : 'Failed')) :
-                  'Skipped';
-                  
-                return `
-                <div class="accordion-item">
-                  <div class="accordion-header">
-                    <span class="category">${formatDisplayName(checkName)}</span>
-                    <span class="status ${wasActuallyRun ? (checkResult.success ? 'success' : (checkResult.warning ? 'warning' : 'failure')) : ''}">
-                      ${displayStatus}
-                    </span>
-                    <span class="toggle">▼</span>
-                  </div>
-                  <div class="accordion-content">
-                    <div class="check-details">
-                      ${checkResult.message ? `<p class="check-message">${checkResult.message}</p>` : ''}
-                      ${checkResult.error ? `<p class="check-error">Error: ${checkResult.error}</p>` : ''}
-                      ${checkResult.data ? `
-                        <div class="check-data">
-                          <h4>Details</h4>
-                          <pre>${JSON.stringify(checkResult.data, null, 2)}</pre>
-                        </div>
-                      ` : ''}
-                    </div>
-                  </div>
-                </div>
-              `}).join('')}
-            </div>
-          </div>
-          ` : ''}
-          
-          <div class="panel workflow">
-            <h2>Workflow Steps</h2>
-            <div class="timeline">
-              ${Object.keys(stepsByPhase).length > 0 ? 
-                Object.entries(stepsByPhase).map(([phase, steps]) => `
-              <div class="phase">
-                <h3 class="phase-name">${phase}</h3>
-                <div class="steps">
-                  ${steps.map(step => `
-                    <div class="step ${
-                      (step.success !== undefined && step.success === false) || 
-                      (step.result && step.result.success === false) ? 'failure' : 'success'
-                    }">
-                    <div class="step-header">
-                      <span class="step-name">${step.name}</span>
-                        <span class="step-indicator">${
-                          (step.success !== undefined && step.success === false) || 
-                          (step.result && step.result.success === false) ? '✗' : '✓'
-                        }</span>
-                    </div>
-                    <div class="step-details">
-                      <span class="step-duration">${formatDuration(step.duration)}</span>
-                        ${step.error || (step.result && step.result.error) ? 
-                          `<div class="step-error">Error: ${step.error || step.result.error}</div>` : ''
-                        }
-                    </div>
-                  </div>
-                  `).join('')}
-                </div>
-              </div>
-                `).join('') : 
-                `<div class="empty-state">
-                  <p>No workflow steps recorded.</p>
-                  <span class="info-message">Steps will appear here when workflow is run.</span>
-                </div>`
-              }
-            </div>
+            `).join('')}
           </div>
         </div>
-        
-        <footer>
-          <p>Time Tracking Workflow - ${new Date().getFullYear()}</p>
-        </footer>
-      </div>
-      
-      <script>
-        // Simple accordion functionality
-        document.querySelectorAll('.accordion-header').forEach(header => {
-          header.addEventListener('click', () => {
-            const content = header.nextElementSibling;
-            const isOpen = content.style.maxHeight;
-            
-            // Close all accordions
-            document.querySelectorAll('.accordion-content').forEach(item => {
-              item.style.maxHeight = null;
-            });
-            document.querySelectorAll('.toggle').forEach(toggle => {
-              toggle.textContent = '▼';
-            });
-            
-            // Open clicked accordion if it was closed
-            if (!isOpen) {
-              content.style.maxHeight = content.scrollHeight + 'px';
-              header.querySelector('.toggle').textContent = '▲';
-            }
-          });
-        });
-        
-        // Add search and filter functionality
-        function setupFilters() {
-          // Create filter bar
-          const filterBar = document.createElement('div');
-          filterBar.className = 'filter-bar';
-          
-          // Use string concatenation instead of template literals
-          filterBar.innerHTML = 
-            '<div class="filter-item">' +
-              '<input type="text" id="search-input" placeholder="Search dashboard...">' +
-            '</div>' +
-            '<div class="filter-item">' +
-              '<select id="filter-severity">' +
-                '<option value="all">All Severities</option>' +
-                '<option value="error">Errors</option>' +
-                '<option value="warning">Warnings</option>' +
-                '<option value="info">Info</option>' +
-              '</select>' +
-            '</div>' +
-            '<div class="filter-item">' +
-              '<select id="filter-phase">' +
-                '<option value="all">All Phases</option>' +
-                '<option value="Build">Build</option>' +
-                '<option value="Deploy">Deploy</option>' +
-                '<option value="Validation">Validation</option>' +
-                '<option value="Results">Results</option>' +
-              '</select>' +
-            '</div>';
-          
-          // Insert at the top of the main content
-          const mainContent = document.querySelector('.main-content');
-          if (mainContent) {
-            mainContent.insertBefore(filterBar, mainContent.firstChild);
-          }
-          
-          // Setup event listeners
-          const searchInput = document.getElementById('search-input');
-          const filterSeverity = document.getElementById('filter-severity');
-          const filterPhase = document.getElementById('filter-phase');
-          
-          if (searchInput && filterSeverity && filterPhase) {
-            const filterElements = () => {
-              const searchTerm = searchInput.value.toLowerCase();
-              const severity = filterSeverity.value;
-              const phase = filterPhase.value;
-              
-              // Get all warning items
-              document.querySelectorAll('.warning-item').forEach(item => {
-                const itemText = item.textContent.toLowerCase();
-                const itemSeverity = item.classList.contains('error') ? 'error' : 
-                                      item.classList.contains('warning') ? 'warning' : 'info';
-                
-                // Get phase from closest accordion
-                const accordionHeader = item.closest('.accordion-content')?.previousElementSibling;
-                const itemPhase = accordionHeader?.querySelector('.category')?.textContent || '';
-                
-                // Check if item matches all filters
-                const matchesSearch = searchTerm === '' || itemText.includes(searchTerm);
-                const matchesSeverity = severity === 'all' || itemSeverity === severity;
-                const matchesPhase = phase === 'all' || itemPhase.includes(phase);
-                
-                // Show/hide based on filter
-                item.style.display = matchesSearch && matchesSeverity && matchesPhase ? 'block' : 'none';
-                
-                // Update parent accordion if needed
-                const accordion = item.closest('.accordion-item');
-                if (accordion) {
-                  const visibleItems = Array.from(accordion.querySelectorAll('.warning-item')).some(i => i.style.display !== 'none');
-                  accordion.style.display = visibleItems ? 'block' : 'none';
-                }
-              });
-            };
-            
-            // Attach event listeners
-            searchInput.addEventListener('input', filterElements);
-            filterSeverity.addEventListener('change', filterElements);
-            filterPhase.addEventListener('change', filterElements);
-          }
-        }
-        
-        // Generate timeline chart for workflow steps
-        function generateWorkflowTimeline() {
-          const timelineSection = document.querySelector('.timeline');
-          if (!timelineSection) return;
-          
-          // Get all steps
-          const allSteps = [];
-          document.querySelectorAll('.step').forEach(step => {
-            const name = step.querySelector('.step-name')?.textContent || '';
-            const durationText = step.querySelector('.step-duration')?.textContent || '0ms';
-            const isSuccess = !step.classList.contains('failure');
-            const phase = step.closest('.phase')?.querySelector('.phase-name')?.textContent || '';
-            
-            // Parse duration to ms
-            let durationMs = 0;
-            if (durationText.includes('ms')) {
-              durationMs = parseInt(durationText.replace('ms', ''));
-            } else if (durationText.includes('s')) {
-              durationMs = parseInt(durationText.replace('s', '')) * 1000;
-            } else if (durationText.includes('m')) {
-              const parts = durationText.split('m');
-              durationMs = parseInt(parts[0]) * 60 * 1000;
-              if (parts[1]) {
-                durationMs += parseInt(parts[1].replace('s', '')) * 1000;
-              }
-            }
-            
-            allSteps.push({ name, durationMs, isSuccess, phase });
-          });
-          
-          // Create chart container
-          const chartContainer = document.createElement('div');
-          chartContainer.className = 'timeline-chart';
-          chartContainer.innerHTML = '<h3>Step Duration Chart</h3>';
-          
-          // Determine optimal chart dimensions based on step count
-          const stepCount = allSteps.length;
-          const barHeight = 20;
-          const barGap = 10;
-          const requiredHeight = topPadding + (stepCount * (barHeight + barGap));
-          const canvasHeight = Math.max(400, requiredHeight); // Ensure it's at least 400px tall
-          
-          // Create SVG for the chart instead of canvas for better text handling
-          const svgNS = "http://www.w3.org/2000/svg";
-          const svg = document.createElementNS(svgNS, "svg");
-          svg.setAttribute("width", "100%");
-          svg.setAttribute("height", canvasHeight);
-          svg.setAttribute("viewBox", "0 0 1000 " + canvasHeight);
-          svg.style.display = "block";
-          svg.style.maxWidth = "100%";
-          chartContainer.appendChild(svg);
-          
-          // Insert before the timeline
-          timelineSection.parentNode.insertBefore(chartContainer, timelineSection);
-          
-          const leftPadding = 250; // More space for step names
-          const topPadding = 40;
-          const barWidth = 600;
-          const maxDuration = Math.max(...allSteps.map(s => s.durationMs), 1000); // Minimum 1s for scale
-          
-          // Draw title
-          const title = document.createElementNS(svgNS, "text");
-          title.setAttribute("x", "10");
-          title.setAttribute("y", "20");
-          title.setAttribute("font-weight", "bold");
-          title.setAttribute("font-size", "16px");
-          title.textContent = "Step Duration";
-          svg.appendChild(title);
-          
-          // Draw legend
-          const successRect = document.createElementNS(svgNS, "rect");
-          successRect.setAttribute("x", (leftPadding + barWidth + 20).toString());
-          successRect.setAttribute("y", "10");
-          successRect.setAttribute("width", "15");
-          successRect.setAttribute("height", "15");
-          successRect.setAttribute("fill", "#28a745");
-          svg.appendChild(successRect);
-          
-          const failureRect = document.createElementNS(svgNS, "rect");
-          failureRect.setAttribute("x", (leftPadding + barWidth + 20).toString());
-          failureRect.setAttribute("y", "30");
-          failureRect.setAttribute("width", "15");
-          failureRect.setAttribute("height", "15");
-          failureRect.setAttribute("fill", "#d73a49");
-          svg.appendChild(failureRect);
-          
-          const successText = document.createElementNS(svgNS, "text");
-          successText.setAttribute("x", (leftPadding + barWidth + 40).toString());
-          successText.setAttribute("y", "20");
-          successText.setAttribute("font-size", "12px");
-          successText.textContent = "Success";
-          svg.appendChild(successText);
-          
-          const failureText = document.createElementNS(svgNS, "text");
-          failureText.setAttribute("x", (leftPadding + barWidth + 40).toString());
-          failureText.setAttribute("y", "40");
-          failureText.setAttribute("font-size", "12px");
-          failureText.textContent = "Failure";
-          svg.appendChild(failureText);
-          
-          // Draw each bar
-          allSteps.forEach((step, index) => {
-            const y = topPadding + index * (barHeight + barGap);
-            
-            // Draw step name (truncate if necessary)
-            const nameText = document.createElementNS(svgNS, "text");
-            nameText.setAttribute("x", (leftPadding - 10).toString());
-            nameText.setAttribute("y", (y + barHeight / 2 + 4).toString());
-            nameText.setAttribute("font-size", "12px");
-            nameText.setAttribute("text-anchor", "end");
-            nameText.setAttribute("title", step.name); // For tooltip on hover
-            
-            // Limit text length
-            nameText.textContent = step.name.length > 30 ? step.name.substring(0, 27) + "..." : step.name;
-            svg.appendChild(nameText);
-            
-            // Draw bar background
-            const bgRect = document.createElementNS(svgNS, "rect");
-            bgRect.setAttribute("x", leftPadding.toString());
-            bgRect.setAttribute("y", y.toString());
-            bgRect.setAttribute("width", barWidth.toString());
-            bgRect.setAttribute("height", barHeight.toString());
-            bgRect.setAttribute("fill", "#f5f5f5");
-            svg.appendChild(bgRect);
-            
-            // Draw bar value
-            const stepWidth = (step.durationMs / maxDuration) * barWidth;
-            const barRect = document.createElementNS(svgNS, "rect");
-            barRect.setAttribute("x", leftPadding.toString());
-            barRect.setAttribute("y", y.toString());
-            barRect.setAttribute("width", stepWidth.toString());
-            barRect.setAttribute("height", barHeight.toString());
-            barRect.setAttribute("fill", step.isSuccess ? "#28a745" : "#d73a49");
-            svg.appendChild(barRect);
-            
-            // Draw duration text
-            const durationText = document.createElementNS(svgNS, "text");
-            if (stepWidth > 50) {
-              durationText.setAttribute("x", (leftPadding + 5).toString());
-              durationText.setAttribute("y", (y + barHeight / 2 + 4).toString());
-              durationText.setAttribute("fill", "#fff");
-            } else {
-              durationText.setAttribute("x", (leftPadding + stepWidth + 5).toString());
-              durationText.setAttribute("y", (y + barHeight / 2 + 4).toString());
-              durationText.setAttribute("fill", "#333");
-            }
-            durationText.setAttribute("font-size", "10px");
-            
-            // Format duration for better readability
-            let formattedDuration;
-            if (step.durationMs >= 60000) {
-              formattedDuration = Math.round(step.durationMs / 1000 / 60) + "m";
-              if (step.durationMs % 60000 > 0) {
-                formattedDuration += " " + Math.round((step.durationMs % 60000) / 1000) + "s";
-              }
-            } else if (step.durationMs >= 1000) {
-              formattedDuration = (step.durationMs / 1000).toFixed(1) + "s";
-            } else {
-              formattedDuration = step.durationMs + "ms";
-            }
-            
-            durationText.textContent = formattedDuration;
-            svg.appendChild(durationText);
-          });
-        }
-        
-        // Add export functionality
-        function setupExportButton() {
-          const header = document.querySelector('header');
-          if (!header) return;
-          
-          const exportButton = document.createElement('button');
-          exportButton.className = 'export-button';
-          exportButton.textContent = 'Export Results';
-          
-          exportButton.addEventListener('click', () => {
-            // Create export data object
-            const exportData = {
-              timestamp: document.querySelector('.metadata p')?.textContent || '',
-              status: document.querySelector('.status-text')?.textContent || '',
-              metrics: {
-                duration: document.querySelector('.metric-value')?.textContent || '',
-                warnings: document.querySelectorAll('.warning-item').length,
-                errors: document.querySelectorAll('.warning-item.error').length
-              },
-              steps: Array.from(document.querySelectorAll('.step')).map(step => ({
-                name: step.querySelector('.step-name')?.textContent || '',
-                phase: step.closest('.phase')?.querySelector('.phase-name')?.textContent || '',
-                success: !step.classList.contains('failure'),
-                duration: step.querySelector('.step-duration')?.textContent || ''
-              })),
-              warnings: Array.from(document.querySelectorAll('.warning-item')).map(item => ({
-                message: item.querySelector('.warning-message')?.textContent || '',
-                severity: item.classList.contains('error') ? 'error' : 
-                          item.classList.contains('warning') ? 'warning' : 'info',
-                source: item.querySelector('.warning-source')?.textContent || ''
-              }))
-            };
-            
-            // Create and download file
-            const dataStr = JSON.stringify(exportData, null, 2);
-            const dataBlob = new Blob([dataStr], { type: 'application/json' });
-            const url = URL.createObjectURL(dataBlob);
-            
-            const link = document.createElement('a');
-            link.download = 'workflow-results-' + new Date().toISOString().slice(0, 10) + '.json';
-            link.href = url;
-            link.click();
-            
-            URL.revokeObjectURL(url);
-          });
-          
-          header.appendChild(exportButton);
-        }
-        
-        // Add function to improve warnings with actions
-        function enhanceWarnings() {
-          // Get all warning items
-          const warningItems = document.querySelectorAll('.warning-item');
-          
-          warningItems.forEach(item => {
-            const message = item.querySelector('.warning-message')?.textContent || '';
-            const category = item.querySelector('.warning-source')?.textContent || '';
-            
-            // Create action button container
-            const actionContainer = document.createElement('div');
-            actionContainer.className = 'warning-actions';
-            
-            // Add specific actions based on warning type
-            if (message.includes('TypeScript')) {
-              addActionButton(actionContainer, 'Fix Type Issue', () => {
-                // Open relevant file if mentioned
-                // Extract filename with a simple split operation instead of regex
-                const parts = message.split(':');
-                const filename = parts.length > 1 ? parts[0].trim() : null;
-                if (filename) {
-                  alert("Would open " + filename + " in editor");
-                }
-              });
-            } 
-            else if (message.includes('Lint')) {
-              addActionButton(actionContainer, 'Run ESLint Fix', () => {
-                alert('Would run: npm run lint:fix');
-              });
-            }
-            else if (message.includes('Documentation')) {
-              addActionButton(actionContainer, 'View Docs', () => {
-                // Extract filename with string manipulation instead of regex
-                const start = message.indexOf('(');
-                const end = message.indexOf(')');
-                const filename = start >= 0 && end > start ? 
-                  message.substring(start + 1, end).trim() : null;
-                if (filename) {
-                  alert("Would open " + filename + " in editor");
-                }
-              });
-            }
-            else if (message.includes('Build')) {
-              addActionButton(actionContainer, 'View Build Log', () => {
-                alert('Would open build log');
-              });
-            }
-            
-            // Add general "Dismiss" button
-            addActionButton(actionContainer, 'Dismiss', () => {
-              item.style.display = 'none';
-            });
-            
-            // Add the action container to the warning item
-            item.appendChild(actionContainer);
-          });
-        }
-        
-        // Helper function to create action buttons
-        function addActionButton(container, text, clickHandler) {
-          const button = document.createElement('button');
-          button.className = 'action-button';
-          button.textContent = text;
-          button.addEventListener('click', clickHandler);
-          container.appendChild(button);
-        }
-        
-        // Initialize all dashboard enhancements when DOM is ready
-        window.addEventListener('DOMContentLoaded', () => {
-          setupFilters();
-          generateWorkflowTimeline();
-          setupExportButton();
-          enhanceWarnings();
-          
-          // Move build metrics to a secondary tab
-          const buildMetricsPanel = document.querySelector('.build-metrics');
-          if (buildMetricsPanel) {
-            // Create tabs container
-            const tabsContainer = document.createElement('div');
-            tabsContainer.className = 'tabs-container';
-            
-            // Create tabs
-            const tabs = document.createElement('div');
-            tabs.className = 'tabs';
-            
-            const mainTab = document.createElement('div');
-            mainTab.className = 'tab active';
-            mainTab.textContent = 'Workflow';
-            mainTab.dataset.tab = 'workflow';
-            
-            const buildTab = document.createElement('div');
-            buildTab.className = 'tab';
-            buildTab.textContent = 'Build Metrics';
-            buildTab.dataset.tab = 'build';
-            
-            tabs.appendChild(mainTab);
-            tabs.appendChild(buildTab);
-            
-            // Create tab content containers
-            const tabContents = document.createElement('div');
-            tabContents.className = 'tab-contents';
-            
-            const workflowContent = document.createElement('div');
-            workflowContent.className = 'tab-content active';
-            workflowContent.dataset.tab = 'workflow';
-            
-            const buildContent = document.createElement('div');
-            buildContent.className = 'tab-content';
-            buildContent.dataset.tab = 'build';
-            
-            // Move build metrics into the build tab
-            buildContent.appendChild(buildMetricsPanel);
-            
-            // Add everything else to the workflow tab
-            const dashboard = document.querySelector('.dashboard');
-            Array.from(dashboard.children).forEach(child => {
-              if (child !== buildMetricsPanel && child.className !== 'tabs-container') {
-                workflowContent.appendChild(child.cloneNode(true));
-              }
-            });
-            
-            // Clear original dashboard and add tabs
-            dashboard.innerHTML = '';
-            tabContents.appendChild(workflowContent);
-            tabContents.appendChild(buildContent);
-            tabsContainer.appendChild(tabs);
-            tabsContainer.appendChild(tabContents);
-            dashboard.appendChild(tabsContainer);
-            
-            // Add tab switching logic
-            tabs.querySelectorAll('.tab').forEach(tab => {
-              tab.addEventListener('click', () => {
-                // Remove active class from all tabs and contents
-                tabs.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                tabContents.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-                
-                // Add active class to clicked tab and corresponding content
-                tab.classList.add('active');
-                const tabContent = tabContents.querySelector(".tab-content[data-tab='" + tab.dataset.tab + "']");
-                if (tabContent) tabContent.classList.add('active');
-              });
-            });
-          }
-          
-          // Open the first accordion by default
-          const firstAccordion = document.querySelector('.accordion-header');
-          if (firstAccordion) {
-            firstAccordion.click();
-          }
-        });
-      </script>
-    </body>
-    </html>
-    `;
+      `
+      : '';
     
-    // CSS styles for dashboard
-    const cssContent = `
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    // Generate workflow options
+    const workflowOptionsHtml = data.options && Object.keys(data.options).length > 0
+      ? `
+        <ul class="options-list">
+          ${Object.entries(data.options).map(([key, value]) => `
+            <li class="option-item">
+              <span class="option-key">${key}:</span>
+              <span class="option-value">${value === true ? 'Yes' : value === false ? 'No' : value}</span>
+            </li>
+          `).join('')}
+        </ul>
+      `
+      : '<p>No workflow options specified</p>';
     
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.6;
-      color: #333;
-      background-color: #f5f7fa;
-    }
+    // Generate channel cleanup results if available
+    const channelCleanupHtml = data.channelCleanup && Object.keys(data.channelCleanup).length > 0
+      ? `
+        <div class="channel-cleanup-summary">
+          <div class="cleanup-stat">
+            <span class="stat-label">Sites Processed:</span>
+            <span class="stat-value">${data.channelCleanup.sitesProcessed || 0}</span>
+          </div>
+          <div class="cleanup-stat">
+            <span class="stat-label">Channels Found:</span>
+            <span class="stat-value">${data.channelCleanup.totalChannels || 0}</span>
+          </div>
+          <div class="cleanup-stat">
+            <span class="stat-label">Channels Deleted:</span>
+            <span class="stat-value">${data.channelCleanup.deletedCount || 0}</span>
+          </div>
+          <div class="cleanup-stat">
+            <span class="stat-label">Errors:</span>
+            <span class="stat-value">${data.channelCleanup.errors && data.channelCleanup.errors.length || 0}</span>
+          </div>
+        </div>
+      `
+      : '<p>No channel cleanup data available</p>';
     
-    .dashboard {
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 20px;
-    }
+    // Generate advanced checks HTML
+    const advancedChecksHtml = _generateAdvancedChecksHtml(report.advancedChecks);
     
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
-      padding-bottom: 20px;
-      border-bottom: 1px solid #e1e4e8;
-    }
+    // Replace template placeholders
+    const htmlContent = defaultTemplate
+      .replace(/{{TITLE}}/g, 'Workflow Dashboard')
+      .replace(/{{TIMESTAMP}}/g, new Date(report.timestamp).toLocaleString())
+      .replace(/{{DURATION}}/g, formatDuration(report.metrics.duration))
+      .replace(/{{WARNING_COUNT}}/g, formattedWarnings.length)
+      .replace(/{{ERROR_COUNT}}/g, criticalErrors.length)
+      .replace(/{{STATUS_CLASS}}/g, statusClass)
+      .replace(/{{STATUS_ICON}}/g, statusIcon)
+      .replace(/{{STATUS_TEXT}}/g, statusText)
+      .replace(/{{CRITICAL_ERRORS}}/g, criticalErrorsHtml)
+      .replace(/{{PREVIEW_URLS}}/g, previewUrlsHtml)
+      .replace(/{{WARNINGS}}/g, warningsHtml)
+      .replace(/{{WORKFLOW_STEPS_JSON}}/g, `var WORKFLOW_STEPS_JSON = ${workflowStepsJson};`)
+      .replace(/{{BUILD_STATUS_CLASS}}/g, buildStatusClass)
+      .replace(/{{BUILD_STATUS_ICON}}/g, buildStatusIcon)
+      .replace(/{{BUILD_STATUS_TEXT}}/g, buildStatusText)
+      .replace(/{{BUILD_DURATION}}/g, buildDuration)
+      .replace(/{{BUILD_DETAILS}}/g, buildDetailsHtml)
+      .replace(/{{ADVANCED_CHECKS}}/g, advancedChecksHtml)
+      .replace(/{{WORKFLOW_OPTIONS}}/g, workflowOptionsHtml)
+      .replace(/{{CHANNEL_CLEANUP}}/g, channelCleanupHtml);
     
-    h1 {
-      font-size: 24px;
-      color: #24292e;
-    }
+    // Debugging - output what we're using to create the timeline
+    logger.debug(`Timeline will use ${JSON.parse(workflowStepsJson).length} workflow steps`);
     
-    .metadata {
-      font-size: 14px;
-      color: #6a737d;
-    }
+    // Write the HTML to a file
+    const outputPath = data.outputPath || join(process.cwd(), 'dashboard.html');
+    await writeFile(outputPath, htmlContent, 'utf8');
+    logger.info(`✨ Dashboard generated at: ${outputPath}`);
     
-    .overview {
-      display: flex;
-      gap: 20px;
-      margin-bottom: 20px;
-    }
-    
-    .column {
-      flex: 1;
-    }
-    
-    .panel {
-      background-color: white;
-      border-radius: 8px;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-      padding: 20px;
-      margin-bottom: 20px;
-    }
-    
-    .panel h2 {
-      font-size: 18px;
-      margin-bottom: 15px;
-      color: #24292e;
-    }
-    
-    .status-indicator {
-      display: flex;
-      align-items: center;
-      margin-bottom: 15px;
-    }
-    
-    .status-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      margin-right: 10px;
-    }
-    
-    .status-icon.success {
-      background-color: #28a745;
-      color: white;
-    }
-    
-    .status-icon.warning {
-      background-color: #ff9800;
-      color: white;
-    }
-    
-    .status-icon.failure {
-      background-color: #d73a49;
-      color: white;
-    }
-    
-    .status-text {
-      font-size: 16px;
-      font-weight: 500;
-    }
-    
-    .metrics {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-      gap: 15px;
-    }
-    
-    .metric {
-      display: flex;
-      flex-direction: column;
-    }
-    
-    .metric-label {
-      font-size: 14px;
-      color: #6a737d;
-    }
-    
-    .metric-value {
-      font-size: 18px;
-      font-weight: 500;
-      color: #24292e;
-    }
-    
-    .preview-links {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    
-    .preview-link {
-      display: flex;
-      flex-direction: column;
-    }
-    
-    .preview-label {
-      font-size: 14px;
-      color: #6a737d;
-    }
-    
-    .preview-url {
-      font-size: 14px;
-      color: #0366d6;
-      text-decoration: none;
-      word-break: break-all;
-    }
-    
-    .preview-url:hover {
-      text-decoration: underline;
-    }
-    
-    .preview-channel {
-      font-family: monospace;
-      background-color: #f6f8fa;
-      padding: 2px 5px;
-      border-radius: 3px;
-    }
-    
-    .accordion-item {
-      border: 1px solid #e1e4e8;
-      border-radius: 6px;
-      margin-bottom: 10px;
-      overflow: hidden;
-    }
-    
-    .accordion-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 12px 15px;
-      background-color: #f6f8fa;
-      cursor: pointer;
-    }
-    
-    .category {
-      font-weight: 500;
-    }
-    
-    .count {
-      background-color: #e1e4e8;
-      border-radius: 10px;
-      padding: 2px 8px;
-      font-size: 12px;
-    }
-    
-    .status {
-      border-radius: 10px;
-      padding: 2px 8px;
-      font-size: 12px;
-      font-weight: 500;
-    }
-    
-    .status.success {
-      background-color: #dcffe4;
-      color: #28a745;
-    }
-    
-    .status.warning {
-      background-color: #fff5e6;
-      color: #ff9800;
-    }
-    
-    .status.failure {
-      background-color: #ffeef0;
-      color: #d73a49;
-    }
-    
-    .toggle {
-      color: #6a737d;
-    }
-    
-    .accordion-content {
-      max-height: 0;
-      overflow: hidden;
-      transition: max-height 0.3s ease;
-    }
-    
-    .warnings-list {
-      list-style-type: none;
-      padding: 15px;
-    }
-    
-    .warning-item {
-      padding: 10px;
-      border-bottom: 1px solid #eaecef;
-      display: flex;
-      flex-direction: column;
-    }
-    
-    .warning-item:last-child {
-      border-bottom: none;
-    }
-    
-    .warning-message {
-      margin-bottom: 5px;
-    }
-    
-    .warning-source {
-      font-size: 12px;
-      color: #6a737d;
-    }
-    
-    .warning-actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 10px;
-    }
-    
-    .action-button {
-      padding: 4px 8px;
-      border: 1px solid #e1e4e8;
-      border-radius: 4px;
-      background-color: #f6f8fa;
-      color: #0366d6;
-      font-size: 12px;
-      cursor: pointer;
-      transition: background-color 0.2s;
-    }
-    
-    .action-button:hover {
-      background-color: #e1e4e8;
-    }
-    
-    .timeline-chart {
-      width: 100%;
-      margin-bottom: 20px;
-      overflow: visible;
-    }
-    
-    .timeline-chart h3 {
-      margin-bottom: 10px;
-    }
-    
-    /* Tabs styling */
-    .tabs-container {
-      width: 100%;
-    }
-    
-    .tabs {
-      display: flex;
-      border-bottom: 1px solid #e1e4e8;
-      margin-bottom: 20px;
-    }
-    
-    .tab {
-      padding: 10px 20px;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      font-weight: 500;
-    }
-    
-    .tab.active {
-      border-bottom-color: #0366d6;
-      color: #0366d6;
-    }
-    
-    .tab-content {
-      display: none;
-    }
-    
-    .tab-content.active {
-      display: block;
-    }
-    
-    .export-button {
-      padding: 8px 16px;
-      background-color: #0366d6;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 14px;
-      transition: background-color 0.2s;
-    }
-    
-    .export-button:hover {
-      background-color: #0255b3;
-    }
-    
-    /* Responsive adjustments */
-    @media (max-width: 768px) {
-      .overview {
-        flex-direction: column;
+    // Open the HTML in the browser if not in a CI environment
+    if (process.env.CI !== 'true') {
+      try {
+        await open(outputPath);
+        logger.info('✨ Dashboard opened in your browser');
+      } catch (error) {
+        logger.warn(`Could not open browser: ${error.message}`);
       }
-      
-      .timeline-chart svg {
-        height: auto;
-      }
-    }
-    `;
-    
-    // CSS path
-    const CSS_PATH = join(process.cwd(), 'dashboard.css');
-    
-    // Write HTML and CSS files
-    fs.writeFileSync(CSS_PATH, cssContent, 'utf8');
-    
-    // Save HTML content to file
-    const DASHBOARD_PATH = join(process.cwd(), 'dashboard.html');
-    fs.writeFileSync(DASHBOARD_PATH, htmlContent, 'utf8');
-    
-    logger.debug(`Dashboard generated at: ${DASHBOARD_PATH}`);
-    
-    // Open dashboard in browser
-    try {
-      await open(DASHBOARD_PATH);
-      logger.success('Dashboard opened in your browser');
-  } catch (error) {
-      logger.warn(`Could not open dashboard automatically: ${error.message}`);
-      logger.info(`Dashboard available at: ${DASHBOARD_PATH}`);
     }
     
     return {
-      path: DASHBOARD_PATH,
-      reportId,
-      warnings: report.warnings ? report.warnings.length : 0,
-      errors: (report.errors ? report.errors.length : 0) + failedSteps.length,
-      timestamp: report.timestamp
+      outputPath,
+      data: report
     };
   } catch (error) {
-    logger.error(`Failed to generate report: ${error.message}`);
+    logger.error(`Error generating consolidated report: ${error.message}`);
+    logger.debug(error);
     throw error;
   }
+}
+
+/**
+ * Generate appropriate action buttons for a warning
+ * @param {Object} warning - Warning object
+ * @returns {string} HTML for action buttons
+ */
+function generateWarningActions(warning) {
+  const actions = [];
+  const message = warning.message || '';
+  
+  if (message.includes('TypeScript') || message.includes('type')) {
+    actions.push('<button class="action-button">Fix Type Issue</button>');
+  }
+  
+  if (message.includes('Lint') || message.includes('ESLint')) {
+    actions.push('<button class="action-button">Run ESLint Fix</button>');
+  }
+  
+  if (message.includes('Documentation')) {
+    actions.push('<button class="action-button">View Docs</button>');
+  }
+  
+  if (message.includes('Build')) {
+    actions.push('<button class="action-button">View Build Log</button>');
+  }
+  
+  // Always add dismiss option
+  actions.push('<button class="action-button">Dismiss</button>');
+  
+  return actions.join('');
 }
 
 /**
@@ -2003,7 +1346,7 @@ function _generateAdvancedChecksHtml(advancedChecks) {
   }
   
   return `
-  <div class="panel advanced-checks">
+  <div class="panel">
     <h2>Advanced Check Results</h2>
     <div class="accordion">
       ${Object.entries(advancedChecks).map(([checkName, checkResult]) => {
@@ -2014,26 +1357,26 @@ function _generateAdvancedChecksHtml(advancedChecks) {
                                !checkResult.success && 
                                !checkResult.warning;
         
+        // Determine status class
+        const statusClass = isReallySkipped ? '' : 
+                          (checkResult.success ? 'success' : 
+                           (checkResult.warning ? 'warning' : 'failure'));
+        
         return `
         <div class="accordion-item">
           <div class="accordion-header">
             <span class="category">${formatDisplayName(checkName)}</span>
-            <span class="status ${checkResult.success ? 'success' : (checkResult.warning ? 'warning' : 'failure')}">
+            <span class="status ${statusClass}">
               ${isReallySkipped ? 'Skipped' : (checkResult.success ? 'Passed' : (checkResult.warning ? 'Warning' : 'Failed'))}
             </span>
             <span class="toggle">▼</span>
           </div>
           <div class="accordion-content">
-            <div class="check-details">
-              ${checkResult.message ? `<p class="check-message">${checkResult.message}</p>` : ''}
-              ${checkResult.error ? `<p class="check-error">Error: ${checkResult.error}</p>` : ''}
-              ${checkResult.data ? `
-                <div class="check-data">
-                  <h4>Details</h4>
-                  <pre>${JSON.stringify(checkResult.data, null, 2)}</pre>
-                </div>
-              ` : ''}
-            </div>
+            ${checkResult.message ? `<p>${checkResult.message}</p>` : ''}
+            ${checkResult.error ? `<p>Error: ${checkResult.error}</p>` : ''}
+            ${checkResult.data ? `
+              <pre>${JSON.stringify(checkResult.data, null, 2)}</pre>
+            ` : ''}
           </div>
         </div>`;
       }).join('')}

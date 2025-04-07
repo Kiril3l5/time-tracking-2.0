@@ -54,6 +54,17 @@ jobs:
       - name: Test
         run: pnpm run test
       
+      # Add security check step
+      - name: Security Check
+        run: |
+          echo "Running security vulnerability scan..."
+          # Run the health checker with security-only mode
+          node scripts/checks/health-checker.js --security-only
+          
+          # Run npm audit for additional security checks
+          echo "Running npm audit..."
+          pnpm audit
+      
       # For feature branches, we only want to validate with lint and tests
       # No need to build or deploy since that's done locally by improved-workflow.js
       - name: Feature Branch Validation
@@ -149,4 +160,21 @@ jobs:
           VITE_USE_FIREBASE_EMULATOR: "false"
         run: |
           pnpm add -g firebase-tools
-          firebase hosting:channel:deploy pr-${{ github.event.number }} --json
+          
+          # Create a PR-specific channel ID
+          CHANNEL_ID="pr-${{ github.event.pull_request.number }}"
+          
+          # Deploy to the PR-specific channel
+          echo "Deploying to PR preview channel: $CHANNEL_ID"
+          firebase hosting:channel:deploy $CHANNEL_ID --project=${{ secrets.FIREBASE_PROJECT_ID }}
+          
+          # Get the preview URL
+          PREVIEW_URL=$(firebase hosting:channel:list --project=${{ secrets.FIREBASE_PROJECT_ID }} | grep $CHANNEL_ID | awk '{print $3}')
+          
+          # Add the preview URL as a comment to the PR
+          echo "PR_PREVIEW_URL=$PREVIEW_URL" >> $GITHUB_ENV
+          
+          # Comment on the PR with the preview URL
+          gh pr comment ${{ github.event.pull_request.number }} --body "Preview deployment is ready! 🚀
+          
+          Visit the preview at: $PREVIEW_URL"

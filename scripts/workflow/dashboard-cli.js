@@ -5,159 +5,152 @@
  * 
  * A command line interface for the dashboard generator.
  * This script allows for direct interaction with dashboard generation and management.
+ * 
+ * Features:
+ * - Generate dashboard from workflow data file
+ * - Customize output path
+ * - Control browser opening
+ * - Verbose logging
+ * 
+ * @module dashboard-cli
  */
 
 // Core imports
 import { logger } from '../core/logger.js';
 import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-import { generateDashboard } from './dashboard-generator.js';
+import { dirname, join } from 'path';
+import fs from 'fs';
+import { generateWorkflowDashboard } from './dashboard-integration.js';
 import process from 'process';
 
 // Get the script's directory for resolving paths
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Parse command line arguments
-function parseArgs() {
-  const args = process.argv.slice(2);
-  const command = args[0] || 'generate';
-  
+/**
+ * Parse command line arguments
+ * 
+ * @param {string[]} args - Command line arguments
+ * @returns {Object} Parsed options
+ * @returns {boolean} options.verbose - Whether to enable verbose logging
+ * @returns {string} options.input - Path to input workflow data file
+ * @returns {string} options.output - Path to output dashboard file
+ * @returns {boolean} options.open - Whether to open the dashboard in browser
+ * @throws {Error} If required arguments are missing
+ */
+function parseArgs(args) {
   const options = {
-    command,
-    help: args.includes('--help') || args.includes('-h'),
-    verbose: args.includes('--verbose'),
-    skipOpen: args.includes('--skip-open'),
-    cleanup: args.includes('--cleanup')
+    verbose: false,
+    input: null,
+    output: null,
+    open: true
   };
+  
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    
+    if (arg === '--verbose' || arg === '-v') {
+      options.verbose = true;
+    } else if (arg === '--input' || arg === '-i') {
+      options.input = args[++i];
+    } else if (arg === '--output' || arg === '-o') {
+      options.output = args[++i];
+    } else if (arg === '--no-open') {
+      options.open = false;
+    } else if (arg === '--help' || arg === '-h') {
+      showHelp();
+      process.exit(0);
+    }
+  }
   
   return options;
 }
 
-// Show help information
+/**
+ * Show help information
+ */
 function showHelp() {
   logger.info(`
-Dashboard CLI
-==============
+Dashboard Generator CLI
 
-Generate and manage consolidated dashboard reports.
-
-Usage: node scripts/workflow/dashboard-cli.js [command] [options]
-
-Commands:
-  generate    Generate a dashboard report (default)
-  open        Open an existing dashboard
-  cleanup     Clean up dashboard and report files
+Usage: node scripts/workflow/dashboard-cli.js [options]
 
 Options:
-  --help, -h   Show this help message
-  --verbose    Show verbose output
-  --skip-open  Don't open dashboard in browser
-  --cleanup    Clean up old reports before generating new ones
+  --verbose, -v       Enable verbose logging
+  --input, -i         Input JSON file with workflow data
+  --output, -o        Output HTML file path (default: dashboard.html)
+  --no-open           Don't open the dashboard in browser
+  --help, -h          Show this help information
 
 Examples:
-  node scripts/workflow/dashboard-cli.js
-  node scripts/workflow/dashboard-cli.js generate
-  node scripts/workflow/dashboard-cli.js open
-  node scripts/workflow/dashboard-cli.js cleanup
-  node scripts/workflow/dashboard-cli.js generate --skip-open
+  node scripts/workflow/dashboard-cli.js --input workflow-data.json
+  node scripts/workflow/dashboard-cli.js --input workflow-data.json --output custom-dashboard.html
+  node scripts/workflow/dashboard-cli.js --verbose
   `);
 }
 
-// Handle generate command
-async function handleGenerate(options) {
-  logger.info("Generating dashboard...");
-  
-  if (options.cleanup) {
-    await generateDashboard.cleanupDashboard();
-  }
-  
-  const result = await generateDashboard.generateDashboard({
-    openInBrowser: !options.skipOpen,
-    verbose: options.verbose
-  });
-  
-  if (result.success) {
-    logger.success("Dashboard generated successfully!");
-    logger.info(`Dashboard path: ${result.dashboardPath}`);
-    return true;
-  } else {
-    logger.error(`Dashboard generation failed: ${result.error}`);
-    return false;
+/**
+ * Load workflow data from file
+ * 
+ * @param {string} filePath - Path to workflow data file
+ * @returns {Promise<Object>} Parsed workflow data
+ * @throws {Error} If file cannot be read or parsed
+ */
+async function loadWorkflowData(filePath) {
+  try {
+    const data = await fs.promises.readFile(filePath, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    logger.error(`Failed to load workflow data from ${filePath}:`, error);
+    process.exit(1);
   }
 }
 
-// Handle open command
-async function handleOpen() {
-  logger.info("Opening dashboard...");
-  
-  // Load preview URLs
-  const previewUrls = generateDashboard.loadPreviewUrls();
-  
-  const result = await generateDashboard.generateDashboard({
-    previewUrls,
-    openInBrowser: true
-  });
-  
-  if (result.success) {
-    logger.success("Dashboard opened successfully!");
-    return true;
-  } else {
-    logger.error(`Failed to open dashboard: ${result.error}`);
-    return false;
-  }
-}
-
-// Handle cleanup command
-async function handleCleanup() {
-  logger.info("Cleaning up dashboard and report files...");
-  
-  const result = await generateDashboard.cleanupDashboard();
-  
-  if (result.success) {
-    logger.success("Dashboard and reports cleaned up successfully!");
-    return true;
-  } else {
-    logger.error(`Cleanup failed: ${result.error}`);
-    return false;
-  }
-}
-
-// Main function
+/**
+ * Main CLI function
+ * 
+ * @returns {Promise<void>}
+ * @throws {Error} If dashboard generation fails
+ */
 async function main() {
-  const options = parseArgs();
+  // Parse command line arguments
+  const options = parseArgs(process.argv.slice(2));
   
-  if (options.help) {
+  // Set up logger
+  logger.setVerbose(options.verbose);
+  
+  // Check if input file is provided
+  if (!options.input) {
+    logger.error('Input file is required. Use --input to specify a JSON file with workflow data.');
     showHelp();
-    return;
+    process.exit(1);
   }
   
-  let success = false;
+  // Load workflow data
+  logger.info(`Loading workflow data from ${options.input}...`);
+  const workflowData = await loadWorkflowData(options.input);
   
-  switch (options.command) {
-    case 'generate':
-      success = await handleGenerate(options);
-      break;
-    case 'open':
-      success = await handleOpen();
-      break;
-    case 'cleanup':
-      success = await handleCleanup();
-      break;
-    default:
-      logger.error(`Unknown command: ${options.command}`);
-      showHelp();
-      process.exit(1);
+  // Generate dashboard using the integration module
+  logger.info('Generating dashboard...');
+  const result = await generateWorkflowDashboard(workflowData, {
+    verbose: options.verbose,
+    noOpen: !options.open,
+    outputPath: options.output
+  });
+  
+  if (!result.success) {
+    logger.error('Failed to generate dashboard:', result.error);
+    process.exit(1);
   }
   
-  process.exit(success ? 0 : 1);
+  logger.success(`Dashboard generated at: ${result.path}`);
+  process.exit(0);
 }
 
-// Run if executed directly
-if (__filename === process.argv[1]) {
+// Run CLI if called directly
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch(error => {
-    logger.error(`Uncaught error: ${error.message}`);
-    logger.debug(error.stack || error);
+    logger.error('CLI failed:', error);
     process.exit(1);
   });
 }

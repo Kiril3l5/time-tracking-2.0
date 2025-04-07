@@ -14,7 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import process from 'node:process';
 import { logger } from '../core/logger.js';
-import { generateReport as generateConsolidatedReport } from '../workflow/consolidated-report.js';
+import { generateWorkflowDashboard } from '../workflow/dashboard-integration.js';
 import { parseArgs } from 'node:util';
 import { execSync } from 'child_process';
 import convertReports from './html-to-json.js';
@@ -410,7 +410,7 @@ async function collectAndGenerateReport(options = {}) {
     }
     
     // Generate consolidated report
-    const success = await generateConsolidatedReport({
+    const success = await generateWorkflowDashboard({
       bundleData: transformedBundleData,
       docQualityData,
       deadCodeData,

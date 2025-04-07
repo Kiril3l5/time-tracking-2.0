@@ -247,9 +247,35 @@ class WorkflowState {
    * @param {Object} metrics - Metrics to update
    */
   updateMetrics(metrics) {
+    // Ensure we have a valid metrics object
+    if (!metrics || typeof metrics !== 'object') {
+      logger.warn('Invalid metrics object provided to updateMetrics');
+      return;
+    }
+
+    // Update metrics with proper type checking
     this.state.metrics = {
       ...this.state.metrics,
-      ...metrics
+      ...Object.entries(metrics).reduce((acc, [key, value]) => {
+        // Handle special cases
+        if (key === 'deploymentStatus') {
+          acc[key] = {
+            ...this.state.metrics?.deploymentStatus,
+            ...value
+          };
+        } else if (key === 'channelCleanup') {
+          acc[key] = {
+            ...this.state.metrics?.channelCleanup,
+            ...value,
+            status: value.status || 'pending',
+            cleanedChannels: value.cleanedChannels || 0,
+            failedChannels: value.failedChannels || 0
+          };
+        } else {
+          acc[key] = value;
+        }
+        return acc;
+      }, {})
     };
     
     this._saveState();
@@ -260,17 +286,25 @@ class WorkflowState {
    * @param {Object} urls - Preview URLs object with hours and admin properties
    */
   setPreviewUrls(urls) {
+    if (!urls || typeof urls !== 'object') {
+      logger.warn('Invalid preview URLs provided to setPreviewUrls');
+      return;
+    }
+
+    // Update preview URLs with proper validation
     this.state.previewUrls = {
       ...this.state.previewUrls,
-      ...urls
+      ...Object.entries(urls).reduce((acc, [key, value]) => {
+        if (key === 'hours' || key === 'admin') {
+          acc[key] = value || null;
+        }
+        return acc;
+      }, {})
     };
     
     // Also add to metrics for easier tracking
     this.updateMetrics({
-      previewUrls: {
-        ...this.state.previewUrls,
-        ...urls
-      }
+      previewUrls: this.state.previewUrls
     });
     
     this._saveState();

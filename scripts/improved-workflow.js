@@ -12,7 +12,6 @@ import { PackageCoordinator } from './workflow/package-coordinator.js';
 import { deployPackage, createChannelId, deployPackageWithWorkflowIntegration } from './workflow/deployment-manager.js';
 import * as progressTracker from './core/progress-tracker.js';
 import { colors, styled } from './core/colors.js';
-import { generateReport } from './workflow/consolidated-report.js';
 import { performanceMonitor } from './core/performance-monitor.js';
 import { setTimeout } from 'timers/promises';
 import { runAllAdvancedChecks, runSingleCheckWithWorkflowIntegration } from './workflow/advanced-checker.js';
@@ -28,6 +27,7 @@ import path from 'path';
 import { rotateFiles } from './core/command-runner.js';
 import { createHash } from 'crypto';
 import { cleanupChannels } from './firebase/channel-cleanup.js';
+import { generateWorkflowDashboard } from './workflow/dashboard-integration.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -126,15 +126,49 @@ class Workflow {
     // Store results from advanced checks
     this.advancedCheckResults = {};
     
+    // Initialize packages array
+    this.packages = [];
+    
     // Create metrics object to track start times and durations
     this.metrics = {
+      // Phase timings
       setupStart: null,
       validationStart: null,
       buildStart: null,
       deployStart: null,
       resultsStart: null,
       cleanupStart: null,
-      workflowStart: Date.now()
+      
+      // Calculated durations
+      duration: 0,
+      phaseDurations: {
+        setup: 0,
+        validation: 0,
+        build: 0,
+        deploy: 0,
+        results: 0,
+        cleanup: 0
+      },
+      
+      // Build performance
+      buildPerformance: {
+        totalBuildTime: 0,
+        averageBuildTime: 0,
+        buildSuccessRate: 0
+      },
+      
+      // Package metrics
+      packageMetrics: {},
+      
+      // Test results
+      testResults: {},
+      
+      // Deployment status
+      deploymentStatus: {
+        status: 'pending',
+        timestamp: null,
+        details: {}
+      }
     };
     
     // Record start time
@@ -296,7 +330,7 @@ class Workflow {
       await this.deploy();
       
       // 5. Results Phase (Pass buildMetrics)
-      const _reportPath = await this.generateResults(buildMetrics);
+      const _reportPath = await this.generateResults();
       
       // 6. Cleanup Phase (New)
       await this.cleanup();
@@ -443,6 +477,12 @@ class Workflow {
 
       this.progressTracker.completeStep(true, 'Environment setup complete');
       this.recordWorkflowStep('Setup Phase', 'Setup', true, Date.now() - phaseStartTime);
+
+      // Calculate phase duration
+      const phaseEndTime = Date.now();
+      this.metrics.phaseDurations.setup = phaseEndTime - phaseStartTime;
+      
+      return true;
     } catch (error) {
       this.progressTracker.completeStep(false, `Setup failed: ${error.message}`);
       
@@ -792,6 +832,12 @@ class Workflow {
       
       this.progressTracker.completeStep(true, 'Validation completed');
       this.recordWorkflowStep('Validation Phase', 'Validation', true, Date.now() - phaseStartTime);
+
+      // Calculate phase duration
+      const phaseEndTime = Date.now();
+      this.metrics.phaseDurations.validation = phaseEndTime - phaseStartTime;
+      
+      return true;
     } catch (error) {
       this.progressTracker.completeStep(false, `Validation failed: ${error.message}`);
       this.recordWorkflowStep('Validation Phase', 'Validation', false, Date.now() - phaseStartTime, error.message);
@@ -805,61 +851,70 @@ class Workflow {
   async build() {
     this.progressTracker.startStep('Build Phase');
     this.logger.sectionHeader('Building Application');
-    const phaseStartTime = Date.now();
     
-    // Store the start time in metrics
+    const phaseStartTime = Date.now();
     this.metrics.buildStart = phaseStartTime;
-
-    // Skip build if requested
-    if (this.options.skipBuild) {
-      this.logger.warn('Skipping build due to --skip-build flag');
-      this.progressTracker.completeStep(true, 'Build skipped');
-      this.recordWorkflowStep('Package Build', 'Build', true, 0, 'Skipped'); // Record skip
-      this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
-      return;
-    }
-
-    // Cache Check (moved outside main try block)
-    let cacheResult = { fromCache: false };
-    if (!this.options.noCache) {
-      try {
-        const { tryUseBuildCache } = await import('./workflow/workflow-cache.js');
-        cacheResult = await tryUseBuildCache(this.cache, this.options);
-      } catch (cacheError) {
-        this.recordWarning(`Build cache check failed: ${cacheError.message}`, 'Build', 'Cache Check');
-      }
-    }
-
-    // If using cache, record steps and return
-    if (cacheResult.fromCache) {
-      // Load metrics from cache as well
-      const cachedMetrics = cacheResult.data?.buildMetrics;
-      this.logger.debug(`[Build Cache Hit] Loaded buildMetrics from cache: ${JSON.stringify(cachedMetrics)}`);
-
-      // Record success steps from cache
-      if (cacheResult.data?.steps) {
-          for (const step of cacheResult.data.steps) {
-            this.recordWorkflowStep(step.name, step.phase, step.success, step.duration);
-          }
-      } else {
-          // If cache is corrupt or missing steps, record a generic success
-          this.recordWorkflowStep('Package Build', 'Build', true, 0, 'From Cache');
-      }
-      this.progressTracker.completeStep(true, 'Build completed from cache');
-      this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
-      return cachedMetrics || {}; // Return metrics from cache (or empty object)
-    }
-
-    // Main Build Logic
+    
     try {
+      // Skip build if requested
+      if (this.options.skipBuild) {
+        this.logger.warn('Skipping build due to --skip-build flag');
+        this.progressTracker.completeStep(true, 'Build skipped');
+        this.recordWorkflowStep('Package Build', 'Build', true, 0, 'Skipped'); // Record skip
+        this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
+        return;
+      }
+
+      // Cache Check (moved outside main try block)
+      let cacheResult = { fromCache: false };
+      if (!this.options.noCache) {
+        try {
+          const { tryUseBuildCache } = await import('./workflow/workflow-cache.js');
+          cacheResult = await tryUseBuildCache(this.cache, this.options);
+        } catch (cacheError) {
+          this.recordWarning(`Build cache check failed: ${cacheError.message}`, 'Build', 'Cache Check');
+        }
+      }
+
+      // If using cache, record steps and return
+      if (cacheResult.fromCache) {
+        // Load metrics from cache as well
+        const cachedMetrics = cacheResult.data?.buildMetrics;
+        this.logger.debug(`[Build Cache Hit] Loaded buildMetrics from cache: ${JSON.stringify(cachedMetrics)}`);
+
+        // Record success steps from cache
+        if (cacheResult.data?.steps) {
+            for (const step of cacheResult.data.steps) {
+              this.recordWorkflowStep(step.name, step.phase, step.success, step.duration);
+            }
+        } else {
+            // If cache is corrupt or missing steps, record a generic success
+            this.recordWorkflowStep('Package Build', 'Build', true, 0, 'From Cache');
+        }
+        this.progressTracker.completeStep(true, 'Build completed from cache');
+        this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
+        return cachedMetrics || {}; // Return metrics from cache (or empty object)
+      }
+
+      // Main Build Logic
       this.logger.info('Building application (cache miss or disabled)...');
+
+      // Define packages to build
+      const packagesToBuild = ['admin', 'hours'];
+      
+      // Populate the packages array with the packages we're building
+      this.packages = packagesToBuild.map(name => ({
+        name,
+        buildResult: null,
+        testResults: null
+      }));
 
       const buildResult = await buildPackageWithWorkflowIntegration({
         target: 'development', // Or determine target based on needs
         minify: true,
         sourceMaps: false,
         parallel: !process.env.CI, // Disable parallel in CI for simpler logs, enable locally
-        packages: ['admin', 'hours'],
+        packages: packagesToBuild,
         recordWarning: this.recordWarning.bind(this),
         recordStep: this.recordWorkflowStep.bind(this),
         phase: 'Build'
@@ -877,8 +932,65 @@ class Workflow {
       this.progressTracker.completeStep(true, 'Build complete');
       this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
 
-      // Return metrics from live build
-      return buildResult.buildMetrics || {};
+      // Collect package metrics
+      if (this.packages && this.packages.length > 0) {
+        for (const pkg of this.packages) {
+          const pkgMetrics = {
+            buildTime: 0,
+            buildStatus: 'pending',
+            testResults: {
+              passed: 0,
+              failed: 0,
+              total: 0
+            }
+          };
+          
+          // Update metrics after package build
+          if (buildResult.buildResults && buildResult.buildResults[pkg.name]) {
+            const result = buildResult.buildResults[pkg.name];
+            pkgMetrics.buildTime = result.duration || 0;
+            pkgMetrics.buildStatus = result.success ? 'success' : 'error';
+          }
+          
+          // Update test results if available
+          if (pkg.testResults) {
+            pkgMetrics.testResults = {
+              passed: pkg.testResults.passed || 0,
+              failed: pkg.testResults.failed || 0,
+              total: pkg.testResults.total || 0
+            };
+          }
+          
+          this.metrics.packageMetrics[pkg.name] = pkgMetrics;
+        }
+        
+        // Calculate build success rate
+        const totalPackages = Object.keys(this.metrics.packageMetrics).length;
+        const successfulBuilds = Object.values(this.metrics.packageMetrics)
+          .filter(m => m.buildStatus === 'success').length;
+        this.metrics.buildPerformance.buildSuccessRate = (successfulBuilds / totalPackages) * 100;
+      } else {
+        // No packages to build, set default metrics
+        this.metrics.packageMetrics = {
+          'default': {
+            buildTime: 0,
+            buildStatus: 'skipped',
+            testResults: {
+              passed: 0,
+              failed: 0,
+              total: 0
+            }
+          }
+        };
+        this.metrics.buildPerformance.buildSuccessRate = 100;
+      }
+      
+      // Calculate phase duration and update build metrics
+      const phaseEndTime = Date.now();
+      this.metrics.phaseDurations.build = phaseEndTime - phaseStartTime;
+      this.metrics.buildPerformance.totalBuildTime = phaseEndTime - phaseStartTime;
+      
+      return true;
     } catch (error) {
       // Catch the error thrown by buildPackageWithWorkflowTracking
       this.logger.error('🔴 Build Phase Failed:');
@@ -956,6 +1068,19 @@ class Workflow {
       
       this.progressTracker.completeStep(true, 'Deployment complete');
       this.recordWorkflowStep('Deploy Phase', 'Deploy', true, Date.now() - phaseStartTime);
+
+      // Calculate phase duration and update deployment status
+      const phaseEndTime = Date.now();
+      this.metrics.phaseDurations.deploy = phaseEndTime - phaseStartTime;
+      this.metrics.deploymentStatus = {
+        status: 'success',
+        timestamp: phaseEndTime,
+        details: {
+          duration: phaseEndTime - phaseStartTime
+        }
+      };
+      
+      return true;
     } catch (error) {
       this.progressTracker.completeStep(false, `Deployment failed: ${error.message}`);
       
@@ -969,198 +1094,66 @@ class Workflow {
       }
       
       this.recordWorkflowStep('Deploy Phase', 'Deploy', false, Date.now() - phaseStartTime, error.message);
+
+      // Update deployment status on error
+      this.metrics.deploymentStatus = {
+        status: 'error',
+        timestamp: Date.now(),
+        details: {
+          error: error.message
+        }
+      };
       throw error;
     }
   }
 
   /**
-   * Results Phase
+   * Generate results and dashboard
+   * 
+   * This method is responsible for generating the final dashboard from the workflow execution data.
+   * It cleans up Firebase channels, generates the dashboard, and records metrics about the results phase.
+   * 
+   * @returns {Promise<boolean>} Success status of the dashboard generation
    */
-  async generateResults(buildMetrics) {
-    this.progressTracker.startStep('Results Phase');
-    this.logger.sectionHeader('Workflow Results');
-    this.logger.debug(`[Generate Results] Received buildMetrics: ${JSON.stringify(buildMetrics)}`);
+  async generateResults() {
     const phaseStartTime = Date.now();
-    
-    // Store the start time in metrics
     this.metrics.resultsStart = phaseStartTime;
     
     try {
-      // --- Firebase Channel Cleanup --- START ---
-      const cleanupStartTime = Date.now();
-      let cleanupResult = { deletedCount: 0, errors: [] }; // Default result
-      try {
-        this.logger.info('Starting Firebase preview channel cleanup...');
-        // Get config, potentially falling back to defaults in cleanupChannels itself
-        const config = getWorkflowConfig();
-        cleanupResult = await cleanupChannels({
-          sites: config.firebaseSites || [], // Pass detected sites or let function auto-detect
-          keepCount: config.previewKeepCount || 5, // Use configured or default
-          // keepDays: config.previewExpireDays || 7, // Uncomment if keepDays logic is confirmed/added in cleanupChannels
-          dryRun: false
-        });
-        this.logger.info(`Channel cleanup finished. Deleted: ${cleanupResult.deletedCount}`);
-        this.recordWorkflowStep('Channel Cleanup', 'Results', cleanupResult.errors.length === 0, Date.now() - cleanupStartTime, cleanupResult.errors.join('; ') || null);
-
-        // Record specific errors from cleanup as warnings
-        if (cleanupResult.errors.length > 0) {
-          cleanupResult.errors.forEach(errMsg => this.recordWarning(errMsg, 'Results', 'Channel Cleanup', 'error'));
-        }
-      } catch (cleanupError) {
-        const errorMsg = `Channel cleanup failed: ${cleanupError.message}`;
-        this.logger.error(errorMsg);
-        this.recordWarning(errorMsg, 'Results', 'Channel Cleanup', 'error');
-        this.recordWorkflowStep('Channel Cleanup', 'Results', false, Date.now() - cleanupStartTime, errorMsg);
-        // Do not re-throw, allow report generation to proceed
-      }
-      // --- Firebase Channel Cleanup --- END ---
-
-      // Generate the dashboard
-      this.logger.info('Generating dashboard...');
-      const reportData = await generateReport({
-        steps: Array.from(this.workflowSteps.values()),
-        warnings: this.workflowWarnings,
-        metrics: {
-          duration: Date.now() - this.startTime
-        },
-        timestamp: new Date().toISOString(),
-        advancedChecks: this.advancedCheckResults || {},
-        preview: this.previewUrls
-          ? {
-              hours: this.previewUrls.hours,
-              admin: this.previewUrls.admin,
-              channelId: this.options.channelId
-            }
-          : null,
-        buildMetrics: buildMetrics,
-        // Add errors explicitly
-        errors: this.workflowErrors || [],
-        // Add performance metrics
-        performance: {
-          totalDuration: Date.now() - this.startTime,
-          phaseDurations: {
-            setup: performanceMonitor.measure('setup') || 0,
-            validation: performanceMonitor.measure('validation') || 0,
-            build: performanceMonitor.measure('build') || 0,
-            deploy: performanceMonitor.measure('deploy') || 0,
-            results: Date.now() - phaseStartTime
-          }
-        }
+      // Clean up Firebase channels
+      await cleanupChannels();
+      
+      // Generate dashboard with proper options
+      const dashboardResult = await generateWorkflowDashboard(this, {
+        isCI: process.env.CI === 'true',
+        outputPath: join(process.cwd(), 'dashboard.html'),
+        noOpen: process.env.CI === 'true'
       });
       
-      this.reportUrl = reportData.path;
-      this.logger.success(`Dashboard generated at: ${this.reportUrl}`);
-
-      // Display preview URLs
-      if (this.previewUrls) {
-        this.logger.info('\nPreview URLs:');
-        this.logger.info(`Hours App: ${this.previewUrls.hours || 'Not available'}`);
-        this.logger.info(`Admin App: ${this.previewUrls.admin || 'Not available'}`);
+      if (dashboardResult.success) {
+        this.logger.success(`Dashboard generated at: ${dashboardResult.path}`);
+        this.metrics.dashboardPath = dashboardResult.path;
+        this.progressTracker.completeStep(true, 'Dashboard generated successfully');
+        this.recordWorkflowStep('Results Phase', 'Results', true, Date.now() - phaseStartTime);
+      } else {
+        const errorMessage = dashboardResult.error?.message || 'Unknown error';
+        this.logger.error(`Failed to generate dashboard: ${errorMessage}`);
+        this.progressTracker.completeStep(false, `Dashboard generation failed: ${errorMessage}`);
+        this.recordWorkflowStep('Results Phase', 'Results', false, Date.now() - phaseStartTime, errorMessage);
       }
       
-      // Don't show warnings in console, just mention to check dashboard
-      if (this.workflowWarnings && this.workflowWarnings.length > 0) {
-        // Categorize warnings and info messages separately
-        const warningsByCategory = {};
-        const infoByCategory = {};
-        
-        this.workflowWarnings.forEach(warning => {
-          const category = warning.phase || 'General';
-          // Auto-detect severity for build messages if not already set
-          if (!warning.severity) {
-            if (warning.phase === 'Build') {
-              if (warning.message.startsWith('Starting build') || 
-                  warning.message.startsWith('Cleaned build') ||
-                  warning.message.startsWith('TypeScript check passed') ||
-                  warning.message.startsWith('Build completed') ||
-                  warning.message.includes('files, ') ||
-                  warning.message.includes('KB total') ||
-                  warning.message.startsWith('Build output:') ||
-                  warning.message.startsWith('Build configuration:') ||
-                  warning.message.startsWith('Building all packages') ||
-                  warning.message.startsWith('Running build')) {
-                warning.severity = 'info';
-              }
-            }
-          }
-          
-          // Sort into appropriate category
-          if (warning.severity === 'info') {
-            if (!infoByCategory[category]) {
-              infoByCategory[category] = [];
-            }
-            infoByCategory[category].push(warning);
-          } else {
-            if (!warningsByCategory[category]) {
-              warningsByCategory[category] = [];
-            }
-            warningsByCategory[category].push(warning);
-          }
-        });
-        
-        // Only show actual warnings in console summary
-        const hasRealWarnings = Object.values(warningsByCategory).some(warnings => warnings.length > 0);
-        
-        if (hasRealWarnings) {
-          this.logger.info('\nWarnings and suggestions: (see dashboard for details)');
-          Object.entries(warningsByCategory).forEach(([category, warnings]) => {
-            if (warnings.length > 0) {
-              this.logger.info(`• ${category}: ${warnings.length} items`);
-            }
-          });
-        }
-      }
+      // Calculate total duration and final phase duration
+      const phaseEndTime = Date.now();
+      this.metrics.phaseDurations.results = phaseEndTime - phaseStartTime;
+      this.metrics.duration = phaseEndTime - this.metrics.setupStart;
       
-      this.progressTracker.completeStep(true, 'Results generated');
-      this.recordWorkflowStep('Results Phase', 'Results', true, Date.now() - phaseStartTime);
-      
-      // The dashboard is already opened by the generateReport function
-      return this.reportUrl;
+      return dashboardResult.success;
     } catch (error) {
-      this.logger.error(`Results generation failed: ${error.message}`);
-      this.progressTracker.completeStep(false, `Results generation failed: ${error.message}`);
-      
-      // Enhanced error logging - but minimal in console
-      this.logger.error('\nResults Phase Failed');
-      this.logger.error(`Please check the dashboard for complete details`);
-      
-      this.recordWorkflowStep('Results Phase', 'Results', false, Date.now() - phaseStartTime, error.message);
-      
-      // Try to create a minimal dashboard with the error info
-      try {
-        const _failureReport = await generateReport({
-          timestamp: new Date().toISOString(),
-          preview: this.previewUrls,
-          workflow: {
-            options: this.options,
-            git: {
-              branch: await getCurrentBranch(),
-            },
-            steps: this.workflowSteps
-          },
-          warnings: this.workflowWarnings || [],
-          errors: [{ message: error.message, stack: error.stack }],
-          advancedChecks: this.advancedCheckResults
-        });
-        this.logger.info('Error dashboard generated - check your browser');
-      } catch (e) {
-        // Only show preview URLs if dashboard generation fails completely
-        if (this.previewUrls) {
-          this.logger.info('\nPreview URLs:');
-          this.logger.info(`Hours App: ${this.previewUrls.hours || 'Not available'}`);
-          this.logger.info(`Admin App: ${this.previewUrls.admin || 'Not available'}`);
-        }
-      }
-      
-      return {
-        error: error.message,
-        timestamp: new Date().toISOString(),
-        previewUrls: this.previewUrls,
-        workflow: {
-          steps: this.workflowSteps,
-          warnings: this.workflowWarnings
-        }
-      };
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Results generation failed: ${errorMessage}`);
+      this.progressTracker.completeStep(false, `Results generation failed: ${errorMessage}`);
+      this.recordWorkflowStep('Results Phase', 'Results', false, Date.now() - phaseStartTime, errorMessage);
+      return false;
     }
   }
 

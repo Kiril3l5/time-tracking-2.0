@@ -449,35 +449,25 @@ export async function buildPackageWithWorkflowIntegration(options = {}) {
       const results = await Promise.all(buildPromises);
       
       // Process results
-      results.forEach(result => {
-        if (!result.success) {
-          throw new Error(`Build failed for package "${result.packageName}"`);
-        }
+      results.forEach((result, index) => {
+        const packageName = allPackages[index];
+        buildResults[packageName] = result;
         
-        buildResults[result.packageName] = result;
-        
-        // Add to metrics - ensure we have valid data
-        const packageTotalSize = result.totalSize || 0;
-        const packageFileCount = result.fileCount || 0;
-        const packageDuration = result.duration || 0;
-        
-        buildMetrics.packages[result.packageName] = {
-          totalSize: formatFileSize(packageTotalSize),
-          rawSize: packageTotalSize,
-          fileCount: packageFileCount,
-          duration: formatDuration(packageDuration),
-          rawDuration: packageDuration
+        // Add package metrics
+        buildMetrics.packages[packageName] = {
+          duration: result.duration || 0,
+          size: result.totalSize || 0,
+          fileCount: result.fileCount || 0,
+          success: result.success
         };
         
-        buildMetrics.totalSize += packageTotalSize;
-        buildMetrics.fileCount += packageFileCount;
+        // Update totals
+        buildMetrics.totalSize += result.totalSize || 0;
+        buildMetrics.fileCount += result.fileCount || 0;
         
-        if (packageDuration > buildMetrics.duration) {
-          buildMetrics.duration = packageDuration;
-        }
-        
-        if (recordWarning) {
-          recordWarning(`Build progress: ${Object.keys(buildResults).length}/${allPackages.length} packages`, phase, 'Package Build', 'info');
+        // Check if any package failed
+        if (!result.success) {
+          buildMetrics.isValid = false;
         }
       });
     } else {
@@ -495,60 +485,39 @@ export async function buildPackageWithWorkflowIntegration(options = {}) {
           timeout
         });
         
-        if (!result.success) {
-          throw new Error(`Build failed for package "${packageName}"`);
-        }
-        
         buildResults[packageName] = result;
         
-        // Add to metrics - ensure we have valid data
-        const packageTotalSize = result.totalSize || 0;
-        const packageFileCount = result.fileCount || 0;
-        const packageDuration = result.duration || 0;
-        
+        // Add package metrics
         buildMetrics.packages[packageName] = {
-          totalSize: formatFileSize(packageTotalSize),
-          rawSize: packageTotalSize,
-          fileCount: packageFileCount,
-          duration: formatDuration(packageDuration),
-          rawDuration: packageDuration
+          duration: result.duration || 0,
+          size: result.totalSize || 0,
+          fileCount: result.fileCount || 0,
+          success: result.success
         };
         
-        buildMetrics.totalSize += packageTotalSize;
-        buildMetrics.fileCount += packageFileCount;
-        buildMetrics.duration += packageDuration;
+        // Update totals
+        buildMetrics.totalSize += result.totalSize || 0;
+        buildMetrics.fileCount += result.fileCount || 0;
         
-        if (recordWarning) {
-          recordWarning(`Build progress: ${Object.keys(buildResults).length}/${allPackages.length} packages`, phase, 'Package Build', 'info');
+        // Check if any package failed
+        if (!result.success) {
+          buildMetrics.isValid = false;
         }
       }
     }
     
-    // Format the total metrics
-    buildMetrics.totalSizeFormatted = formatFileSize(buildMetrics.totalSize);
-    buildMetrics.durationFormatted = formatDuration(buildMetrics.duration);
+    // Calculate total duration
+    buildMetrics.duration = Date.now() - startTime;
     
-    // Log the metrics to help debug
-    logger.debug(`Build metrics: totalSize=${buildMetrics.totalSize} (${buildMetrics.totalSizeFormatted}), ` +
-                 `duration=${buildMetrics.duration} (${buildMetrics.durationFormatted}), ` +
-                 `fileCount=${buildMetrics.fileCount}`);
-    
-    // Store metrics history 
-    await saveToHistory(buildMetrics);
-    
-    // Record step
+    // Record final step
     if (recordStep) {
-      recordStep('Package Build', phase, true, buildMetrics.duration);
+      recordStep('Package Build', phase, buildMetrics.isValid, buildMetrics.duration);
     }
     
-    const finalDuration = Date.now() - startTime;
-    
-    // Return the combined results
     return {
-      success: true,
+      success: buildMetrics.isValid,
       buildResults,
-      buildMetrics,
-      duration: finalDuration
+      buildMetrics
     };
   } catch (error) {
     // Record step failure
