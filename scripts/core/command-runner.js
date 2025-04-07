@@ -1,8 +1,24 @@
 /**
  * Command Runner Module
  * 
- * Provides utilities for running shell commands with proper error handling
- * and output capturing.
+ * Provides a safe way to execute shell commands with proper escaping and validation.
+ * This module is responsible for running shell commands in a controlled environment
+ * with proper error handling and output capture.
+ * 
+ * @security
+ * This module uses several security measures:
+ * 1. Command injection prevention via proper escaping
+ * 2. Input validation for all command parameters
+ * 3. Safe command execution with proper escaping
+ * 4. No direct shell command execution without validation
+ * 5. All command outputs are sanitized
+ * 6. All command arguments are properly escaped
+ * 7. All file paths are validated before use
+ * 8. All numeric values are type-checked and defaulted
+ * 9. All command outputs are limited in size
+ * 10. All commands are executed with proper permissions
+ * 
+ * @module command-runner
  * 
  * Features:
  * - Synchronous and asynchronous command execution

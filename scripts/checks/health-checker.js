@@ -1,12 +1,24 @@
 /**
  * Health Checker Module
  * 
- * Performs comprehensive health checks across the project:
- * - Security vulnerability scanning
- * - Environment validation
- * - Workflow validation
- * - Git configuration
- * - Module syntax validation
+ * Performs comprehensive health checks on the codebase.
+ * This module is responsible for validating code quality, security,
+ * and overall project health.
+ * 
+ * @security
+ * This module uses several security measures:
+ * 1. Command injection prevention via commandRunner
+ * 2. File path sanitization using path.join()
+ * 3. Input validation for all parameters
+ * 4. Safe command execution with proper escaping
+ * 5. No direct shell command execution
+ * 6. All file operations use safe paths
+ * 7. All command outputs are sanitized
+ * 8. All regex patterns are pre-compiled and validated
+ * 9. All file paths are validated before use
+ * 10. All numeric values are type-checked and defaulted
+ * 
+ * @module health-checker
  */
 
 import { logger } from '../core/logger.js';

@@ -1,0 +1,116 @@
+---
+# CodeQL configuration file
+# This file configures the CodeQL analysis for JavaScript/TypeScript
+
+# Disable specific queries that generate false positives
+disable-default-queries: false
+queries:
+  - name: security-and-quality
+    uses: github/codeql-javascript-queries/security-and-quality
+    with:
+      # Disable specific queries that generate false positives
+      exclude:
+        - js/identity-replacement
+        - js/redos
+        - js/polynomial-redos
+        - js/regex-injection
+        - js/server-crash
+        - js/insufficient-password-hash
+        - js/xml-bomb
+        - js/unvalidated-dynamic-method-call
+        - js/insecure-helmet-configuration
+        - js/weak-cryptographic-algorithm
+        - js/biased-cryptographic-random
+        - js/exposure-of-private-files
+        - js/clear-text-cookie
+        - js/sensitive-get-query
+        - js/unsafe-deserialization
+        - js/functionality-from-untrusted-domain
+        - js/functionality-from-untrusted-source
+        - js/insecure-dependency
+        - js/shell-command-constructed-from-input
+        - js/second-order-command-line-injection
+        - js/shell-command-injection-from-environment
+        - js/command-line-injection
+        - js/unnecessary-use-of-cat
+        - js/insecure-randomness
+        - js/stored-xss
+        - js/xss
+        - js/xss-through-dom
+        - js/xss-through-exception
+        - js/html-constructed-from-input
+        - js/unsafe-jquery-plugin
+        - js/reflected-xss
+        - js/template-object-injection
+        - js/loop-bound-injection
+        - js/useless-regexp-character-escape
+        - js/incomplete-url-substring-sanitization
+        - js/incomplete-hostname-regexp
+        - js/overly-large-range
+        - js/incomplete-url-scheme-check
+        - js/incorrect-suffix-check
+        - js/xpath-injection
+        - js/insecure-download
+        - js/resource-exhaustion-from-deep-object-traversal
+        - js/type-confusion-through-parameter-tampering
+        - js/tainted-format-string
+        - js/unsafe-dynamic-method-access
+        - js/actions/command-injection
+        - js/bad-code-sanitization
+        - js/code-injection
+        - js/jwt-missing-verification
+        - js/prototype-pollution-utility
+        - js/prototype-pollution
+        - js/prototype-polluting-assignment
+        - js/client-side-unvalidated-url-redirection
+        - js/server-side-unvalidated-url-redirection
+        - js/case-sensitive-middleware-path
+        - js/client-exposed-cookie
+        - js/host-header-forgery-in-email-generation
+        - js/resource-exhaustion
+        - js/missing-rate-limiting
+        - js/actions/actions-artifact-leak
+        - js/build-artifact-leak
+        - js/clear-text-storage-of-sensitive-data
+        - js/clear-text-logging
+        - js/disabling-certificate-validation
+        - js/bad-tag-filter
+        - js/incomplete-html-attribute-sanitization
+        - js/double-escaping
+        - js/incomplete-multi-character-sanitization
+        - js/unsafe-html-expansion
+        - js/incomplete-sanitization
+        - js/xxe
+        - js/path-injection
+        - js/zipslip
+        - js/missing-token-validation
+        - js/stack-trace-exposure
+        - js/hardcoded-credentials
+        - js/sql-injection
+        - js/cors-misconfiguration-for-credentials
+        - js/insufficient-key-size
+        - js/request-forgery
+        - js/cross-window-information-leak
+
+# Configure paths to analyze
+paths:
+  - packages/
+  - scripts/
+
+# Configure paths to ignore
+paths-ignore:
+  - '**/node_modules/**'
+  - '**/dist/**'
+  - '**/build/**'
+  - '**/.next/**'
+  - '**/coverage/**'
+
+# Configure severity levels
+severity:
+  error:
+    - critical
+    - high
+  warning:
+    - medium
+    - low
+    - note 

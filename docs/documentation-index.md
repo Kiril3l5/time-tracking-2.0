@@ -25,6 +25,9 @@ Last updated: 2024-06-18
 | [Database Schema](schema/database-schema.md) | Comprehensive documentation of Firestore collections, fields, relationships, and security considerations | 9 KB | COMPLETED |
 | [Permissions System](schema/permissions-system.md) | Detailed explanation of the role-based access control system and permission implementation | 6 KB | COMPLETED |
 | [Schema Documentation Index](schema/README.md) | Index page for all schema-related documentation with implementation status | 2 KB | COMPLETED |
+| [Security Policy](security/security-policy.md) | Comprehensive security policy, vulnerability reporting procedures, and security measures | 8 KB | COMPLETED |
+| [Firestore Rules](security/firestore-rules.md) | Security rules and access control for Firestore database | 4 KB | COMPLETED |
+| [Migration Plan](security/migration-plan.md) | Security migration plan and implementation timeline | 2 KB | COMPLETED |
 
 ## Workflow
 

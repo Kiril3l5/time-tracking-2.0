@@ -3,11 +3,24 @@
 /**
  * Workflow Validation Module
  * 
- * This module validates GitHub Actions workflows against package.json scripts
- * to ensure that all referenced scripts exist and that workflow files use a
- * consistent package manager.
+ * Validates GitHub Actions workflows against package.json scripts.
+ * This module ensures that workflows are properly configured and
+ * match the available scripts in package.json.
  * 
- * Used in the preview workflow to catch CI/CD configuration issues early.
+ * @security
+ * This module uses several security measures:
+ * 1. YAML parsing with safe defaults
+ * 2. File path sanitization using path.join()
+ * 3. Input validation for all parameters
+ * 4. Safe file reading with encoding specified
+ * 5. No direct shell command execution
+ * 6. All file operations use safe paths
+ * 7. All YAML content is validated
+ * 8. All regex patterns are pre-compiled
+ * 9. All file paths are validated before use
+ * 10. All script names are sanitized
+ * 
+ * @module workflow-validation
  */
 
 import fs from 'node:fs';

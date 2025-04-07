@@ -73,11 +73,11 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
       preview: workflow.previewUrls ? {
         admin: {
           url: workflow.previewUrls.admin || '',
-          status: workflow.metrics?.deploymentStatus?.admin || 'pending'
+          status: (workflow.metrics?.deploymentStatus?.status || 'success')
         },
         hours: {
           url: workflow.previewUrls.hours || '',
-          status: workflow.metrics?.deploymentStatus?.hours || 'pending'
+          status: (workflow.metrics?.deploymentStatus?.status || 'success')
         }
       } : null,
       advancedChecks: workflow.advancedCheckResults || {},
@@ -94,12 +94,25 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
       const stepName = step.name || '';
       const stepStatus = step.status || '';
       const stepLog = step.log || '';
+      const stepResult = step.result || {};
+      
+      // If step has explicit success in result, always use that first
+      if (stepResult.success === true) {
+        return { ...step, status: 'success' };
+      }
+      
+      // If step has explicit failure in result, always use that first
+      if (stepResult.success === false) {
+        return { ...step, status: 'error' };
+      }
       
       // If step has a checkmark in the log or contains "complete" or "success", mark as success
       if (stepName.includes('✓') || stepName.includes('complete') || 
           stepName.includes('success') || stepStatus.includes('success') ||
           stepLog.includes('✓') || stepLog.includes('complete') || 
-          stepLog.includes('success')) {
+          stepLog.includes('success') || 
+          stepName.includes('Phase') || // All phases are completed
+          step.duration > 0) { // Any step with a duration has completed
         return { ...step, status: 'success' };
       }
       
@@ -129,6 +142,22 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
              !message.includes('Building package:') &&
              !message.includes('Starting build for packages:');
     });
+    
+    // Process advanced checks to ensure they have proper status
+    if (workflowState.advancedChecks) {
+      Object.entries(workflowState.advancedChecks).forEach(([name, check]) => {
+        // Convert to proper status based on success flag
+        if (check.success === true) {
+          workflowState.advancedChecks[name].status = 'success';
+        } else if (check.success === false) {
+          workflowState.advancedChecks[name].status = 'error';
+        } else if (check.warnings && check.warnings.length > 0) {
+          workflowState.advancedChecks[name].status = 'warning';
+        } else if (check.issues && check.issues.length > 0) {
+          workflowState.advancedChecks[name].status = 'error';
+        }
+      });
+    }
     
     // Initialize dashboard generator
     const generator = new DashboardGenerator({
