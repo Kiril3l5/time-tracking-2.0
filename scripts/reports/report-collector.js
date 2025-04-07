@@ -317,10 +317,30 @@ async function collectAndGenerateReport(options = {}) {
       // Calculate total size across all packages
       const calculateTotalSize = (data) => {
         if (!data) return '0 KB';
+        
+        // Handle different data formats
+        if (data.totalSize) {
+          // Direct totalSize property (from build-manager)
+          return `${(data.totalSize / 1024).toFixed(2)} KB`;
+        }
+        
+        // Handle format from bundle analyzer (sum all packages)
         let total = 0;
-        Object.values(data).forEach(pkg => {
-          if (pkg.total) total += pkg.total;
-        });
+        
+        if (data.packages) {
+          // New format with packages object
+          Object.values(data.packages).forEach(pkg => {
+            if (typeof pkg === 'object' && pkg !== null) {
+              total += pkg.totalSize || 0;
+            }
+          });
+        } else if (data.current) {
+          // Old format with 'current' object containing packages
+          Object.values(data.current).forEach(pkg => {
+            if (pkg.total) total += pkg.total;
+          });
+        }
+        
         return `${(total / 1024).toFixed(2)} KB`;
       };
       
@@ -328,30 +348,60 @@ async function collectAndGenerateReport(options = {}) {
       const transformPackages = (data) => {
         if (!data) return {};
         const result = {};
-        Object.entries(data).forEach(([name, pkg]) => {
-          result[name] = {
-            totalSize: `${(pkg.total / 1024).toFixed(2)} KB`,
-            fileCount: Object.keys(pkg.files || {}).length,
-            files: Object.entries(pkg.files || {}).map(([filename, size]) => ({
-              name: filename,
-              size: `${(size / 1024).toFixed(2)} KB`
-            })).sort((a, b) => {
-              // Extract numeric size for sorting
-              const sizeA = parseFloat(a.size);
-              const sizeB = parseFloat(b.size);
-              return sizeB - sizeA; // Sort largest first
-            })
-          };
-        });
+        
+        // Handle different package data formats
+        if (data.packages) {
+          // New format from build-manager
+          Object.entries(data.packages).forEach(([name, pkg]) => {
+            if (typeof pkg !== 'object' || pkg === null) return;
+            
+            result[name] = {
+              totalSize: `${(pkg.totalSize / 1024).toFixed(2)} KB`,
+              fileCount: pkg.fileCount || 0,
+              files: Array.isArray(pkg.files) ? pkg.files : 
+                Object.entries(pkg.files || {}).map(([filename, size]) => ({
+                  name: filename,
+                  size: typeof size === 'string' ? size : `${(size / 1024).toFixed(2)} KB`
+                })).sort((a, b) => {
+                  // Extract numeric size for sorting
+                  const sizeA = parseFloat(a.size);
+                  const sizeB = parseFloat(b.size);
+                  return sizeB - sizeA; // Sort largest first
+                })
+            };
+          });
+        } else if (data.current) {
+          // Old format from bundle analyzer
+          Object.entries(data.current).forEach(([name, pkg]) => {
+            result[name] = {
+              totalSize: `${(pkg.total / 1024).toFixed(2)} KB`,
+              fileCount: Object.keys(pkg.files || {}).length,
+              files: Object.entries(pkg.files || {}).map(([filename, size]) => ({
+                name: filename,
+                size: `${(size / 1024).toFixed(2)} KB`
+              })).sort((a, b) => {
+                // Extract numeric size for sorting
+                const sizeA = parseFloat(a.size);
+                const sizeB = parseFloat(b.size);
+                return sizeB - sizeA; // Sort largest first
+              })
+            };
+          });
+        }
+        
         return result;
       };
       
+      // Determine which data format we're working with
+      const dataSource = bundleData.packages ? bundleData : 
+                         (bundleData.current ? bundleData : { current: {} });
+      
       // Create dashboard-friendly format
       transformedBundleData = {
-        totalSize: calculateTotalSize(bundleData.current),
-        duration: bundleData.metrics?.duration || 0,
-        packages: transformPackages(bundleData.current),
-        history: bundleData.historical,
+        totalSize: calculateTotalSize(bundleData),
+        duration: bundleData.totalDuration || bundleData.metrics?.duration || 0,
+        packages: transformPackages(dataSource),
+        history: bundleData.historical || bundleData.history || [],
         issues: bundleData.issues || [],
         isValid: bundleData.valid !== false
       };
@@ -397,7 +447,7 @@ async function collectAndGenerateReport(options = {}) {
  * 
  * @param {string[]} filePaths - Paths to report files to clean up
  */
-function cleanupIndividualReports(filePaths) {
+function _cleanupReportFiles(filePaths) {
   filePaths.forEach(filePath => {
     try {
       if (fs.existsSync(filePath)) {
@@ -479,6 +529,16 @@ function parseArguments() {
   });
   
   return values;
+}
+
+/**
+ * Cleanup old individual reports
+ * @param {Object} options - Cleanup options
+ * @param {number} options._keepCount - Number of reports to keep
+ * @returns {Promise<{deleted: number, kept: number}>} Stats about cleanup
+ */
+function _cleanupIndividualReports({ _keepCount = 10 } = {}) {
+  // ... existing code ...
 }
 
 // If run directly

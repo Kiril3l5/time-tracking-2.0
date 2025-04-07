@@ -12,18 +12,15 @@ import fs from 'fs';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { writeFile } from 'fs/promises';
 import process from 'node:process';
-import { exec } from 'child_process';
-import path from 'path';
-import { execSync } from 'child_process';
-import { getReportPath, REPORT_PATHS as reportPaths } from '../reports/report-collector.js';
+import { exec as _exec } from 'child_process';
 import open from 'open';
 import { createHash } from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Default report path
-const DEFAULT_DASHBOARD_PATH = join(process.cwd(), 'preview-dashboard.html');
+// Default report path - unused but kept for future reference
+// const DEFAULT_DASHBOARD_PATH = join(process.cwd(), 'preview-dashboard.html');
 
 // Default template if the main template cannot be found
 const defaultTemplate = `
@@ -423,22 +420,30 @@ export async function generateReport(data, buildMetrics) {
               <div class="metric-card">
                 <div class="metric-icon">📦</div>
                 <div class="metric-title">Total Bundle Size</div>
-                <div class="metric-value">${report.buildMetrics.totalSize || '0 KB'}</div>
+                <div class="metric-value">
+                  ${report.buildMetrics.totalSizeFormatted || 
+                    (report.buildMetrics.totalSize ? formatFileSize(report.buildMetrics.totalSize) : '0 B')}
+                </div>
               </div>
               
               <div class="metric-card">
                 <div class="metric-icon">⏱️</div>
                 <div class="metric-title">Build Time</div>
-                <div class="metric-value">${formatDuration(report.buildMetrics.duration || 0)}</div>
+                <div class="metric-value">
+                  ${report.buildMetrics.durationFormatted || 
+                    (report.buildMetrics.duration ? formatDuration(report.buildMetrics.duration) : '0s')}
+                </div>
               </div>
               
               <div class="metric-card">
                 <div class="metric-icon">🗂️</div>
                 <div class="metric-title">Total Files</div>
-                <div class="metric-value">${
-                  Object.values(report.buildMetrics.packages || {})
-                    .reduce((sum, pkg) => sum + (pkg.fileCount || 0), 0)
-                }</div>
+                <div class="metric-value">
+                  ${report.buildMetrics.fileCount || 
+                    Object.values(report.buildMetrics.packages || {})
+                      .reduce((sum, pkg) => sum + (parseInt(pkg.fileCount) || 0), 0) || 
+                    '0'}
+                </div>
               </div>
             </div>
             
@@ -468,11 +473,21 @@ export async function generateReport(data, buildMetrics) {
                   <div class="package-metrics">
                     <div class="package-metric">
                       <span class="metric-label">Size</span>
-                      <span class="metric-value">${pkg.totalSize || '0 KB'}</span>
+                      <span class="metric-value">
+                        ${pkg.totalSize || 
+                          (pkg.rawSize ? formatFileSize(pkg.rawSize) : '0 B')}
+                      </span>
                     </div>
                     <div class="package-metric">
                       <span class="metric-label">Files</span>
-                      <span class="metric-value">${pkg.fileCount || 0}</span>
+                      <span class="metric-value">${pkg.fileCount || '0'}</span>
+                    </div>
+                    <div class="package-metric">
+                      <span class="metric-label">Build Time</span>
+                      <span class="metric-value">
+                        ${pkg.duration || 
+                          (pkg.rawDuration ? formatDuration(pkg.rawDuration) : '0s')}
+                      </span>
                     </div>
                   </div>
                   ${pkg.files && pkg.files.length > 0 ? `
@@ -493,6 +508,56 @@ export async function generateReport(data, buildMetrics) {
               </div>
             </div>
             ` : ''}
+          </div>
+          ` : ''}
+          
+          ${report.advancedChecks && Object.keys(report.advancedChecks).length > 0 ? `
+          <div class="panel advanced-checks">
+            <h2>Advanced Check Results</h2>
+            <div class="accordion">
+              ${Object.entries(report.advancedChecks).map(([checkName, checkResult]) => {
+                // FIX: Better detection of actually skipped checks vs. those that were run
+                // For TypeScript and Lint specifically, check additional properties that
+                // would indicate the check was actually run
+                let wasActuallyRun = !checkResult.skipped;
+                
+                // Special case for TypeScript and Lint checks
+                if (checkName.toLowerCase() === 'typescript' || checkName.toLowerCase() === 'lint') {
+                  // If we have data, success, or warning properties, the check was run
+                  wasActuallyRun = wasActuallyRun || 
+                                   checkResult.data || 
+                                   checkResult.success === true || 
+                                   checkResult.warning === true;
+                }
+                
+                const displayStatus = wasActuallyRun ? 
+                  (checkResult.success ? 'Passed' : (checkResult.warning ? 'Warning' : 'Failed')) :
+                  'Skipped';
+                  
+                return `
+                <div class="accordion-item">
+                  <div class="accordion-header">
+                    <span class="category">${formatDisplayName(checkName)}</span>
+                    <span class="status ${wasActuallyRun ? (checkResult.success ? 'success' : (checkResult.warning ? 'warning' : 'failure')) : ''}">
+                      ${displayStatus}
+                    </span>
+                    <span class="toggle">▼</span>
+                  </div>
+                  <div class="accordion-content">
+                    <div class="check-details">
+                      ${checkResult.message ? `<p class="check-message">${checkResult.message}</p>` : ''}
+                      ${checkResult.error ? `<p class="check-error">Error: ${checkResult.error}</p>` : ''}
+                      ${checkResult.data ? `
+                        <div class="check-data">
+                          <h4>Details</h4>
+                          <pre>${JSON.stringify(checkResult.data, null, 2)}</pre>
+                        </div>
+                      ` : ''}
+                    </div>
+                  </div>
+                </div>
+              `}).join('')}
+            </div>
           </div>
           ` : ''}
           
@@ -534,37 +599,6 @@ export async function generateReport(data, buildMetrics) {
               }
             </div>
           </div>
-          
-          ${report.advancedChecks && Object.keys(report.advancedChecks).length > 0 ? `
-          <div class="panel advanced-checks">
-            <h2>Advanced Check Results</h2>
-            <div class="accordion">
-              ${Object.entries(report.advancedChecks).map(([checkName, checkResult]) => `
-              <div class="accordion-item">
-                <div class="accordion-header">
-                  <span class="category">${checkName}</span>
-                  <span class="status ${checkResult.success ? 'success' : (checkResult.warning ? 'warning' : 'failure')}">${
-                    checkResult.skipped ? 'Skipped' : (checkResult.success ? 'Passed' : (checkResult.warning ? 'Warning' : 'Failed'))
-                  }</span>
-                  <span class="toggle">▼</span>
-                </div>
-                <div class="accordion-content">
-                  <div class="check-details">
-                    ${checkResult.message ? `<p class="check-message">${checkResult.message}</p>` : ''}
-                    ${checkResult.error ? `<p class="check-error">Error: ${checkResult.error}</p>` : ''}
-                    ${checkResult.data ? `
-                      <div class="check-data">
-                        <h4>Details</h4>
-                        <pre>${JSON.stringify(checkResult.data, null, 2)}</pre>
-                      </div>
-                    ` : ''}
-                  </div>
-                </div>
-              </div>
-              `).join('')}
-            </div>
-          </div>
-          ` : ''}
         </div>
         
         <footer>
@@ -593,6 +627,452 @@ export async function generateReport(data, buildMetrics) {
               header.querySelector('.toggle').textContent = '▲';
             }
           });
+        });
+        
+        // Add search and filter functionality
+        function setupFilters() {
+          // Create filter bar
+          const filterBar = document.createElement('div');
+          filterBar.className = 'filter-bar';
+          
+          // Use string concatenation instead of template literals
+          filterBar.innerHTML = 
+            '<div class="filter-item">' +
+              '<input type="text" id="search-input" placeholder="Search dashboard...">' +
+            '</div>' +
+            '<div class="filter-item">' +
+              '<select id="filter-severity">' +
+                '<option value="all">All Severities</option>' +
+                '<option value="error">Errors</option>' +
+                '<option value="warning">Warnings</option>' +
+                '<option value="info">Info</option>' +
+              '</select>' +
+            '</div>' +
+            '<div class="filter-item">' +
+              '<select id="filter-phase">' +
+                '<option value="all">All Phases</option>' +
+                '<option value="Build">Build</option>' +
+                '<option value="Deploy">Deploy</option>' +
+                '<option value="Validation">Validation</option>' +
+                '<option value="Results">Results</option>' +
+              '</select>' +
+            '</div>';
+          
+          // Insert at the top of the main content
+          const mainContent = document.querySelector('.main-content');
+          if (mainContent) {
+            mainContent.insertBefore(filterBar, mainContent.firstChild);
+          }
+          
+          // Setup event listeners
+          const searchInput = document.getElementById('search-input');
+          const filterSeverity = document.getElementById('filter-severity');
+          const filterPhase = document.getElementById('filter-phase');
+          
+          if (searchInput && filterSeverity && filterPhase) {
+            const filterElements = () => {
+              const searchTerm = searchInput.value.toLowerCase();
+              const severity = filterSeverity.value;
+              const phase = filterPhase.value;
+              
+              // Get all warning items
+              document.querySelectorAll('.warning-item').forEach(item => {
+                const itemText = item.textContent.toLowerCase();
+                const itemSeverity = item.classList.contains('error') ? 'error' : 
+                                      item.classList.contains('warning') ? 'warning' : 'info';
+                
+                // Get phase from closest accordion
+                const accordionHeader = item.closest('.accordion-content')?.previousElementSibling;
+                const itemPhase = accordionHeader?.querySelector('.category')?.textContent || '';
+                
+                // Check if item matches all filters
+                const matchesSearch = searchTerm === '' || itemText.includes(searchTerm);
+                const matchesSeverity = severity === 'all' || itemSeverity === severity;
+                const matchesPhase = phase === 'all' || itemPhase.includes(phase);
+                
+                // Show/hide based on filter
+                item.style.display = matchesSearch && matchesSeverity && matchesPhase ? 'block' : 'none';
+                
+                // Update parent accordion if needed
+                const accordion = item.closest('.accordion-item');
+                if (accordion) {
+                  const visibleItems = Array.from(accordion.querySelectorAll('.warning-item')).some(i => i.style.display !== 'none');
+                  accordion.style.display = visibleItems ? 'block' : 'none';
+                }
+              });
+            };
+            
+            // Attach event listeners
+            searchInput.addEventListener('input', filterElements);
+            filterSeverity.addEventListener('change', filterElements);
+            filterPhase.addEventListener('change', filterElements);
+          }
+        }
+        
+        // Generate timeline chart for workflow steps
+        function generateWorkflowTimeline() {
+          const timelineSection = document.querySelector('.timeline');
+          if (!timelineSection) return;
+          
+          // Get all steps
+          const allSteps = [];
+          document.querySelectorAll('.step').forEach(step => {
+            const name = step.querySelector('.step-name')?.textContent || '';
+            const durationText = step.querySelector('.step-duration')?.textContent || '0ms';
+            const isSuccess = !step.classList.contains('failure');
+            const phase = step.closest('.phase')?.querySelector('.phase-name')?.textContent || '';
+            
+            // Parse duration to ms
+            let durationMs = 0;
+            if (durationText.includes('ms')) {
+              durationMs = parseInt(durationText.replace('ms', ''));
+            } else if (durationText.includes('s')) {
+              durationMs = parseInt(durationText.replace('s', '')) * 1000;
+            } else if (durationText.includes('m')) {
+              const parts = durationText.split('m');
+              durationMs = parseInt(parts[0]) * 60 * 1000;
+              if (parts[1]) {
+                durationMs += parseInt(parts[1].replace('s', '')) * 1000;
+              }
+            }
+            
+            allSteps.push({ name, durationMs, isSuccess, phase });
+          });
+          
+          // Create chart container
+          const chartContainer = document.createElement('div');
+          chartContainer.className = 'timeline-chart';
+          chartContainer.innerHTML = '<h3>Step Duration Chart</h3>';
+          
+          // Determine optimal chart dimensions based on step count
+          const stepCount = allSteps.length;
+          const barHeight = 20;
+          const barGap = 10;
+          const requiredHeight = topPadding + (stepCount * (barHeight + barGap));
+          const canvasHeight = Math.max(400, requiredHeight); // Ensure it's at least 400px tall
+          
+          // Create SVG for the chart instead of canvas for better text handling
+          const svgNS = "http://www.w3.org/2000/svg";
+          const svg = document.createElementNS(svgNS, "svg");
+          svg.setAttribute("width", "100%");
+          svg.setAttribute("height", canvasHeight);
+          svg.setAttribute("viewBox", "0 0 1000 " + canvasHeight);
+          svg.style.display = "block";
+          svg.style.maxWidth = "100%";
+          chartContainer.appendChild(svg);
+          
+          // Insert before the timeline
+          timelineSection.parentNode.insertBefore(chartContainer, timelineSection);
+          
+          const leftPadding = 250; // More space for step names
+          const topPadding = 40;
+          const barWidth = 600;
+          const maxDuration = Math.max(...allSteps.map(s => s.durationMs), 1000); // Minimum 1s for scale
+          
+          // Draw title
+          const title = document.createElementNS(svgNS, "text");
+          title.setAttribute("x", "10");
+          title.setAttribute("y", "20");
+          title.setAttribute("font-weight", "bold");
+          title.setAttribute("font-size", "16px");
+          title.textContent = "Step Duration";
+          svg.appendChild(title);
+          
+          // Draw legend
+          const successRect = document.createElementNS(svgNS, "rect");
+          successRect.setAttribute("x", (leftPadding + barWidth + 20).toString());
+          successRect.setAttribute("y", "10");
+          successRect.setAttribute("width", "15");
+          successRect.setAttribute("height", "15");
+          successRect.setAttribute("fill", "#28a745");
+          svg.appendChild(successRect);
+          
+          const failureRect = document.createElementNS(svgNS, "rect");
+          failureRect.setAttribute("x", (leftPadding + barWidth + 20).toString());
+          failureRect.setAttribute("y", "30");
+          failureRect.setAttribute("width", "15");
+          failureRect.setAttribute("height", "15");
+          failureRect.setAttribute("fill", "#d73a49");
+          svg.appendChild(failureRect);
+          
+          const successText = document.createElementNS(svgNS, "text");
+          successText.setAttribute("x", (leftPadding + barWidth + 40).toString());
+          successText.setAttribute("y", "20");
+          successText.setAttribute("font-size", "12px");
+          successText.textContent = "Success";
+          svg.appendChild(successText);
+          
+          const failureText = document.createElementNS(svgNS, "text");
+          failureText.setAttribute("x", (leftPadding + barWidth + 40).toString());
+          failureText.setAttribute("y", "40");
+          failureText.setAttribute("font-size", "12px");
+          failureText.textContent = "Failure";
+          svg.appendChild(failureText);
+          
+          // Draw each bar
+          allSteps.forEach((step, index) => {
+            const y = topPadding + index * (barHeight + barGap);
+            
+            // Draw step name (truncate if necessary)
+            const nameText = document.createElementNS(svgNS, "text");
+            nameText.setAttribute("x", (leftPadding - 10).toString());
+            nameText.setAttribute("y", (y + barHeight / 2 + 4).toString());
+            nameText.setAttribute("font-size", "12px");
+            nameText.setAttribute("text-anchor", "end");
+            nameText.setAttribute("title", step.name); // For tooltip on hover
+            
+            // Limit text length
+            nameText.textContent = step.name.length > 30 ? step.name.substring(0, 27) + "..." : step.name;
+            svg.appendChild(nameText);
+            
+            // Draw bar background
+            const bgRect = document.createElementNS(svgNS, "rect");
+            bgRect.setAttribute("x", leftPadding.toString());
+            bgRect.setAttribute("y", y.toString());
+            bgRect.setAttribute("width", barWidth.toString());
+            bgRect.setAttribute("height", barHeight.toString());
+            bgRect.setAttribute("fill", "#f5f5f5");
+            svg.appendChild(bgRect);
+            
+            // Draw bar value
+            const stepWidth = (step.durationMs / maxDuration) * barWidth;
+            const barRect = document.createElementNS(svgNS, "rect");
+            barRect.setAttribute("x", leftPadding.toString());
+            barRect.setAttribute("y", y.toString());
+            barRect.setAttribute("width", stepWidth.toString());
+            barRect.setAttribute("height", barHeight.toString());
+            barRect.setAttribute("fill", step.isSuccess ? "#28a745" : "#d73a49");
+            svg.appendChild(barRect);
+            
+            // Draw duration text
+            const durationText = document.createElementNS(svgNS, "text");
+            if (stepWidth > 50) {
+              durationText.setAttribute("x", (leftPadding + 5).toString());
+              durationText.setAttribute("y", (y + barHeight / 2 + 4).toString());
+              durationText.setAttribute("fill", "#fff");
+            } else {
+              durationText.setAttribute("x", (leftPadding + stepWidth + 5).toString());
+              durationText.setAttribute("y", (y + barHeight / 2 + 4).toString());
+              durationText.setAttribute("fill", "#333");
+            }
+            durationText.setAttribute("font-size", "10px");
+            
+            // Format duration for better readability
+            let formattedDuration;
+            if (step.durationMs >= 60000) {
+              formattedDuration = Math.round(step.durationMs / 1000 / 60) + "m";
+              if (step.durationMs % 60000 > 0) {
+                formattedDuration += " " + Math.round((step.durationMs % 60000) / 1000) + "s";
+              }
+            } else if (step.durationMs >= 1000) {
+              formattedDuration = (step.durationMs / 1000).toFixed(1) + "s";
+            } else {
+              formattedDuration = step.durationMs + "ms";
+            }
+            
+            durationText.textContent = formattedDuration;
+            svg.appendChild(durationText);
+          });
+        }
+        
+        // Add export functionality
+        function setupExportButton() {
+          const header = document.querySelector('header');
+          if (!header) return;
+          
+          const exportButton = document.createElement('button');
+          exportButton.className = 'export-button';
+          exportButton.textContent = 'Export Results';
+          
+          exportButton.addEventListener('click', () => {
+            // Create export data object
+            const exportData = {
+              timestamp: document.querySelector('.metadata p')?.textContent || '',
+              status: document.querySelector('.status-text')?.textContent || '',
+              metrics: {
+                duration: document.querySelector('.metric-value')?.textContent || '',
+                warnings: document.querySelectorAll('.warning-item').length,
+                errors: document.querySelectorAll('.warning-item.error').length
+              },
+              steps: Array.from(document.querySelectorAll('.step')).map(step => ({
+                name: step.querySelector('.step-name')?.textContent || '',
+                phase: step.closest('.phase')?.querySelector('.phase-name')?.textContent || '',
+                success: !step.classList.contains('failure'),
+                duration: step.querySelector('.step-duration')?.textContent || ''
+              })),
+              warnings: Array.from(document.querySelectorAll('.warning-item')).map(item => ({
+                message: item.querySelector('.warning-message')?.textContent || '',
+                severity: item.classList.contains('error') ? 'error' : 
+                          item.classList.contains('warning') ? 'warning' : 'info',
+                source: item.querySelector('.warning-source')?.textContent || ''
+              }))
+            };
+            
+            // Create and download file
+            const dataStr = JSON.stringify(exportData, null, 2);
+            const dataBlob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(dataBlob);
+            
+            const link = document.createElement('a');
+            link.download = 'workflow-results-' + new Date().toISOString().slice(0, 10) + '.json';
+            link.href = url;
+            link.click();
+            
+            URL.revokeObjectURL(url);
+          });
+          
+          header.appendChild(exportButton);
+        }
+        
+        // Add function to improve warnings with actions
+        function enhanceWarnings() {
+          // Get all warning items
+          const warningItems = document.querySelectorAll('.warning-item');
+          
+          warningItems.forEach(item => {
+            const message = item.querySelector('.warning-message')?.textContent || '';
+            const category = item.querySelector('.warning-source')?.textContent || '';
+            
+            // Create action button container
+            const actionContainer = document.createElement('div');
+            actionContainer.className = 'warning-actions';
+            
+            // Add specific actions based on warning type
+            if (message.includes('TypeScript')) {
+              addActionButton(actionContainer, 'Fix Type Issue', () => {
+                // Open relevant file if mentioned
+                // Extract filename with a simple split operation instead of regex
+                const parts = message.split(':');
+                const filename = parts.length > 1 ? parts[0].trim() : null;
+                if (filename) {
+                  alert("Would open " + filename + " in editor");
+                }
+              });
+            } 
+            else if (message.includes('Lint')) {
+              addActionButton(actionContainer, 'Run ESLint Fix', () => {
+                alert('Would run: npm run lint:fix');
+              });
+            }
+            else if (message.includes('Documentation')) {
+              addActionButton(actionContainer, 'View Docs', () => {
+                // Extract filename with string manipulation instead of regex
+                const start = message.indexOf('(');
+                const end = message.indexOf(')');
+                const filename = start >= 0 && end > start ? 
+                  message.substring(start + 1, end).trim() : null;
+                if (filename) {
+                  alert("Would open " + filename + " in editor");
+                }
+              });
+            }
+            else if (message.includes('Build')) {
+              addActionButton(actionContainer, 'View Build Log', () => {
+                alert('Would open build log');
+              });
+            }
+            
+            // Add general "Dismiss" button
+            addActionButton(actionContainer, 'Dismiss', () => {
+              item.style.display = 'none';
+            });
+            
+            // Add the action container to the warning item
+            item.appendChild(actionContainer);
+          });
+        }
+        
+        // Helper function to create action buttons
+        function addActionButton(container, text, clickHandler) {
+          const button = document.createElement('button');
+          button.className = 'action-button';
+          button.textContent = text;
+          button.addEventListener('click', clickHandler);
+          container.appendChild(button);
+        }
+        
+        // Initialize all dashboard enhancements when DOM is ready
+        window.addEventListener('DOMContentLoaded', () => {
+          setupFilters();
+          generateWorkflowTimeline();
+          setupExportButton();
+          enhanceWarnings();
+          
+          // Move build metrics to a secondary tab
+          const buildMetricsPanel = document.querySelector('.build-metrics');
+          if (buildMetricsPanel) {
+            // Create tabs container
+            const tabsContainer = document.createElement('div');
+            tabsContainer.className = 'tabs-container';
+            
+            // Create tabs
+            const tabs = document.createElement('div');
+            tabs.className = 'tabs';
+            
+            const mainTab = document.createElement('div');
+            mainTab.className = 'tab active';
+            mainTab.textContent = 'Workflow';
+            mainTab.dataset.tab = 'workflow';
+            
+            const buildTab = document.createElement('div');
+            buildTab.className = 'tab';
+            buildTab.textContent = 'Build Metrics';
+            buildTab.dataset.tab = 'build';
+            
+            tabs.appendChild(mainTab);
+            tabs.appendChild(buildTab);
+            
+            // Create tab content containers
+            const tabContents = document.createElement('div');
+            tabContents.className = 'tab-contents';
+            
+            const workflowContent = document.createElement('div');
+            workflowContent.className = 'tab-content active';
+            workflowContent.dataset.tab = 'workflow';
+            
+            const buildContent = document.createElement('div');
+            buildContent.className = 'tab-content';
+            buildContent.dataset.tab = 'build';
+            
+            // Move build metrics into the build tab
+            buildContent.appendChild(buildMetricsPanel);
+            
+            // Add everything else to the workflow tab
+            const dashboard = document.querySelector('.dashboard');
+            Array.from(dashboard.children).forEach(child => {
+              if (child !== buildMetricsPanel && child.className !== 'tabs-container') {
+                workflowContent.appendChild(child.cloneNode(true));
+              }
+            });
+            
+            // Clear original dashboard and add tabs
+            dashboard.innerHTML = '';
+            tabContents.appendChild(workflowContent);
+            tabContents.appendChild(buildContent);
+            tabsContainer.appendChild(tabs);
+            tabsContainer.appendChild(tabContents);
+            dashboard.appendChild(tabsContainer);
+            
+            // Add tab switching logic
+            tabs.querySelectorAll('.tab').forEach(tab => {
+              tab.addEventListener('click', () => {
+                // Remove active class from all tabs and contents
+                tabs.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tabContents.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                
+                // Add active class to clicked tab and corresponding content
+                tab.classList.add('active');
+                const tabContent = tabContents.querySelector(".tab-content[data-tab='" + tab.dataset.tab + "']");
+                if (tabContent) tabContent.classList.add('active');
+              });
+            });
+          }
+          
+          // Open the first accordion by default
+          const firstAccordion = document.querySelector('.accordion-header');
+          if (firstAccordion) {
+            firstAccordion.click();
+          }
         });
       </script>
     </body>
@@ -822,6 +1302,8 @@ export async function generateReport(data, buildMetrics) {
     .warning-item {
       padding: 10px;
       border-bottom: 1px solid #eaecef;
+      display: flex;
+      flex-direction: column;
     }
     
     .warning-item:last-child {
@@ -837,333 +1319,92 @@ export async function generateReport(data, buildMetrics) {
       color: #6a737d;
     }
     
-    .timeline {
+    .warning-actions {
       display: flex;
-      flex-direction: column;
-      gap: 20px;
-    }
-    
-    .phase-name {
-      font-size: 16px;
-      margin-bottom: 10px;
-      color: #24292e;
-    }
-    
-    .steps {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    
-    .step {
-      padding: 10px 15px;
-      border-radius: 6px;
-      border-left: 4px solid #e1e4e8;
-    }
-    
-    .step.success {
-      border-left-color: #28a745;
-      background-color: #f0fff4;
-    }
-    
-    .step.failure {
-      border-left-color: #d73a49;
-      background-color: #fff0f0;
-    }
-    
-    .step-header {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 5px;
-    }
-    
-    .step-name {
-      font-weight: 500;
-    }
-    
-    .step-indicator {
-      font-weight: bold;
-    }
-    
-    .step-details {
-      display: flex;
-      justify-content: space-between;
-      font-size: 14px;
-      color: #6a737d;
-    }
-    
-    .step-error {
-      color: #d73a49;
-      margin-top: 5px;
-      font-size: 14px;
-    }
-    
-    .check-details {
-      padding: 15px;
-    }
-    
-    .check-message {
-      margin-bottom: 10px;
-    }
-    
-    .check-error {
-      color: #d73a49;
-      margin-bottom: 10px;
-    }
-    
-    .check-data {
+      gap: 8px;
       margin-top: 10px;
     }
     
-    .check-data h4 {
-      margin-bottom: 5px;
-    }
-    
-    .check-data pre {
+    .action-button {
+      padding: 4px 8px;
+      border: 1px solid #e1e4e8;
+      border-radius: 4px;
       background-color: #f6f8fa;
-      padding: 10px;
-      border-radius: 6px;
-      overflow: auto;
+      color: #0366d6;
       font-size: 12px;
-      max-height: 300px;
+      cursor: pointer;
+      transition: background-color 0.2s;
     }
     
-    footer {
-      text-align: center;
-      margin-top: 40px;
-      padding-top: 20px;
-      border-top: 1px solid #e1e4e8;
-      color: #6a737d;
+    .action-button:hover {
+      background-color: #e1e4e8;
+    }
+    
+    .timeline-chart {
+      width: 100%;
+      margin-bottom: 20px;
+      overflow: visible;
+    }
+    
+    .timeline-chart h3 {
+      margin-bottom: 10px;
+    }
+    
+    /* Tabs styling */
+    .tabs-container {
+      width: 100%;
+    }
+    
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid #e1e4e8;
+      margin-bottom: 20px;
+    }
+    
+    .tab {
+      padding: 10px 20px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      font-weight: 500;
+    }
+    
+    .tab.active {
+      border-bottom-color: #0366d6;
+      color: #0366d6;
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    .export-button {
+      padding: 8px 16px;
+      background-color: #0366d6;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
       font-size: 14px;
+      transition: background-color 0.2s;
     }
     
+    .export-button:hover {
+      background-color: #0255b3;
+    }
+    
+    /* Responsive adjustments */
     @media (max-width: 768px) {
       .overview {
         flex-direction: column;
       }
       
-      .metrics {
-        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      .timeline-chart svg {
+        height: auto;
       }
-    }
-
-    /* Build Metrics Styles */
-    .build-metrics {
-      background-color: white;
-      border-radius: 8px;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-      padding: 20px;
-      margin-bottom: 20px;
-    }
-
-    .metrics-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 20px;
-      margin-bottom: 30px;
-    }
-
-    .metric-card {
-      background-color: #f6f8fa;
-      border-radius: 8px;
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
-    }
-    
-    .metric-icon {
-      font-size: 24px;
-      margin-bottom: 10px;
-    }
-    
-    .metric-title {
-      font-size: 14px;
-      color: #6a737d;
-      margin-bottom: 5px;
-    }
-    
-    .metric-value {
-      font-size: 18px;
-      font-weight: 600;
-      color: #24292e;
-    }
-
-    .package-section {
-      margin-top: 30px;
-    }
-
-    .package-section h3 {
-      margin-bottom: 15px;
-      font-size: 16px;
-      color: #24292e;
-    }
-
-    .packages-grid {
-      margin-bottom: 25px;
-    }
-
-    .package-card {
-      margin-bottom: 12px;
-    }
-
-    .package-name {
-      font-size: 14px;
-      margin-bottom: 4px;
-      color: #24292e;
-    }
-
-    .package-metrics {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .package-metric {
-      display: flex;
-      flex-direction: column;
-    }
-
-    .package-metric .metric-label {
-      font-size: 12px;
-      color: #666;
-      margin-bottom: 2px;
-    }
-
-    .package-metric .metric-value {
-      font-size: 14px;
-      font-weight: 500;
-    }
-
-    .package-files {
-      background-color: #f6f8fa;
-      border-radius: 8px;
-      padding: 15px;
-    }
-
-    .files-list {
-      list-style-type: none;
-      padding: 0;
-    }
-
-    .file-item {
-      padding: 10px 0;
-      border-bottom: 1px solid #eaecef;
-    }
-
-    .file-item:last-child {
-      border-bottom: none;
-    }
-
-    .file-name {
-      flex: 2;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .file-size {
-      flex: 1;
-      text-align: right;
-    }
-
-    .bundle-issues {
-      background-color: white;
-      border-radius: 8px;
-      padding: 20px;
-      margin-top: 20px;
-    }
-
-    .issues-list {
-      list-style-type: none;
-      padding: 0;
-    }
-
-    .issue-item {
-      padding: 10px 0;
-      border-bottom: 1px solid #eaecef;
-    }
-
-    .issue-item:last-child {
-      border-bottom: none;
-    }
-
-    .issue-message {
-      margin-bottom: 5px;
-    }
-
-    .issue-details {
-      font-size: 12px;
-      color: #6a737d;
-    }
-
-    /* Empty State Styles */
-    .empty-state {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 40px;
-      background-color: #f6f8fa;
-      border-radius: 8px;
-      text-align: center;
-    }
-
-    .empty-state p {
-      color: #6a737d;
-      font-size: 16px;
-      margin-bottom: 15px;
-    }
-
-    .chart-container {
-      background-color: white;
-      border-radius: 8px;
-      padding: 20px;
-      margin-top: 20px;
-      margin-bottom: 25px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    
-    .chart-container h3 {
-      margin-bottom: 15px;
-      font-size: 16px;
-      color: #24292e;
-    }
-    
-    .empty-chart-message {
-      background-color: #f6f8fa;
-      border-radius: 6px;
-      padding: 15px;
-      color: #6a737d;
-      margin: 10px 0;
-      text-align: center;
-    }
-    
-    .chart-legend {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 15px;
-      margin-top: 15px;
-      justify-content: center;
-    }
-    
-    .legend-item {
-      display: flex;
-      align-items: center;
-    }
-    
-    .legend-color {
-      display: inline-block;
-      width: 15px;
-      height: 15px;
-      border-radius: 3px;
-      margin-right: 6px;
-    }
-    
-    .legend-label {
-      font-size: 13px;
-      color: #586069;
     }
     `;
     
@@ -1202,289 +1443,10 @@ export async function generateReport(data, buildMetrics) {
 }
 
 /**
- * Open a file in the default browser
- * @param {string} filePath Path to the file
- */
-function openInBrowser(filePath) {
-  try {
-    // Convert to an absolute file URL for better reliability
-    const fileUrl = `file://${filePath.replace(/\\/g, '/')}`;
-    
-    // More robust browser opening commands
-    const command = process.platform === 'win32' 
-      ? `start "" "${fileUrl}"`
-      : process.platform === 'darwin'
-        ? `open "${fileUrl}"`
-        : `xdg-open "${fileUrl}"`;
-    
-    // Make sure to wait for the command to finish
-    exec(command, (error) => {
-      if (error) {
-        logger.warn(`Could not open browser automatically. Please open this file manually: ${filePath}`);
-        
-        // On Windows, try an alternative method if the first fails
-        if (process.platform === 'win32') {
-          try {
-            exec(`explorer "${fileUrl}"`, (err) => {
-              if (err) {
-                logger.warn(`Second attempt to open browser failed.`);
-              }
-            });
-          } catch (e) {
-            // Ignore errors in fallback
-          }
-        }
-      } else {
-        logger.info('🚀 Dashboard opened in your browser');
-      }
-    });
-  } catch (error) {
-    logger.warn(`Could not open browser: ${error.message}`);
-  }
-}
-
-/**
- * Generate a formatted HTML report for the workflow results
- * @param {Object} data - The workflow data to report
- * @returns {string} HTML content
- */
-function generateDashboardHtml(data) {
-  // ... existing code ...
-  
-  // Create HTML for advanced checks section
-  let advancedChecksHtml = '';
-  if (data.advancedChecks && Object.keys(data.advancedChecks).length > 0) {
-    const checks = data.advancedChecks;
-    
-    advancedChecksHtml = `
-      <div class="section advanced-checks">
-        <h2>Advanced Check Results</h2>
-        <div class="checks-grid">
-        ${Object.entries(checks).map(([checkName, result]) => {
-          const isSkipped = result.skipped;
-          const isSuccess = result.success;
-          const hasWarning = result.warning;
-          const hasError = !isSuccess && !hasWarning;
-          
-          let statusClass = isSkipped ? 'skipped' : (isSuccess ? 'success' : (hasWarning ? 'warning' : 'error'));
-          let statusText = isSkipped ? 'Skipped' : (isSuccess ? 'Passed' : (hasWarning ? 'Warning' : 'Failed'));
-          let detailsHtml = '';
-          
-          // Add details section for specific checks
-          if (!isSkipped) {
-            // Format the details based on check type
-            if (checkName === 'deadCode' && result.unusedExports && result.unusedExports.length > 0) {
-              const count = result.unusedExports.length;
-              detailsHtml = `
-                <div class="check-details">
-                  <p>Found ${count} unused exports.</p>
-                  <div class="metrics">
-                    <div class="metric">
-                      <span class="metric-label">Unused Exports:</span>
-                      <span class="metric-value">${count}</span>
-                    </div>
-                    ${result.potentialSavings ? `
-                    <div class="metric">
-                      <span class="metric-label">Potential Savings:</span>
-                      <span class="metric-value">${result.potentialSavings}</span>
-                    </div>
-                    ` : ''}
-                  </div>
-                </div>
-              `;
-            } else if (checkName === 'bundleSize' && result.data && result.data.metrics) {
-              const metrics = result.data.metrics;
-              detailsHtml = `
-                <div class="check-details">
-                  <div class="metrics">
-                    ${metrics.totalSize ? `
-                    <div class="metric">
-                      <span class="metric-label">Total Size:</span>
-                      <span class="metric-value">${metrics.totalSize}</span>
-                    </div>
-                    ` : ''}
-                    ${metrics.gzipSize ? `
-                    <div class="metric">
-                      <span class="metric-label">Gzipped:</span>
-                      <span class="metric-value">${metrics.gzipSize}</span>
-                    </div>
-                    ` : ''}
-                    ${metrics.change ? `
-                    <div class="metric ${metrics.change.startsWith('+') ? 'negative' : 'positive'}">
-                      <span class="metric-label">Change:</span>
-                      <span class="metric-value">${metrics.change}</span>
-                    </div>
-                    ` : ''}
-                  </div>
-                </div>
-              `;
-            } else if (result.message) {
-              // Generic detail message
-              detailsHtml = `
-                <div class="check-details">
-                  <p>${result.message}</p>
-                </div>
-              `;
-            }
-          }
-          
-          // Create the check display
-          return `
-            <div class="check">
-              <div class="check-header">
-                <h3>${formatDisplayName(checkName)}</h3>
-                <span class="status ${statusClass}">${statusText}</span>
-                <span class="toggle ${detailsHtml ? '' : 'hidden'}">▼</span>
-              </div>
-              ${detailsHtml}
-            </div>
-          `;
-        }).join('')}
-        </div>
-      </div>
-    `;
-  }
-  // ... existing code ...
-  
-  // Add runtime performance indicators
-  let performanceHtml = '';
-  if (data.performance) {
-    const { totalDuration, phaseDurations } = data.performance;
-    
-    performanceHtml = `
-      <div class="section performance">
-        <h2>Performance</h2>
-        <div class="metrics">
-          <div class="metric">
-            <span class="metric-label">Total Runtime:</span>
-            <span class="metric-value">${formatDuration(totalDuration)}</span>
-          </div>
-          
-          <div class="metric-group">
-            <h3>Phase Durations</h3>
-            ${Object.entries(phaseDurations || {}).map(([phase, duration]) => `
-              <div class="metric">
-                <span class="metric-label">${formatDisplayName(phase)}:</span>
-                <span class="metric-value">${formatDuration(duration)}</span>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      </div>
-    `;
-  }
-  
-  // Add the styles with optimized display
-  const styles = `
-    <style>
-      /* ... existing styles ... */
-      
-      /* Update check styles */
-      .check {
-        margin-bottom: 12px;
-        border: 1px solid #e0e0e0;
-        border-radius: 4px;
-        overflow: hidden;
-      }
-      
-      .check-header {
-        display: flex;
-        align-items: center;
-        padding: 10px 16px;
-        background-color: #f8f9fa;
-        cursor: pointer;
-      }
-      
-      .check-header h3 {
-        margin: 0;
-        flex: 1;
-        font-size: 16px;
-        font-weight: 500;
-      }
-      
-      .check-details {
-        padding: 12px 16px;
-        border-top: 1px solid #e0e0e0;
-        background-color: white;
-      }
-      
-      .metrics {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-        gap: 10px;
-        margin-top: 8px;
-      }
-      
-      .metric {
-        display: flex;
-        flex-direction: column;
-        padding: 8px 12px;
-        background-color: #f5f5f5;
-        border-radius: 4px;
-      }
-      
-      .metric-label {
-        font-size: 12px;
-        color: #666;
-        margin-bottom: 2px;
-      }
-      
-      .metric-value {
-        font-size: 14px;
-        font-weight: 500;
-      }
-      
-      .metric-group h3 {
-        font-size: 14px;
-        margin: 12px 0 8px;
-        color: #555;
-      }
-      
-      .positive .metric-value {
-        color: #00897b;
-      }
-      
-      .negative .metric-value {
-        color: #e53935;
-      }
-      
-      /* Performance section styles */
-      .performance .metrics {
-        grid-template-columns: 1fr;
-      }
-      
-      /* ... existing styles ... */
-  </style>
-  `;
-  
-  // ... existing code ...
-}
-
-/**
- * Format duration in milliseconds to a readable string
- * @param {number} ms - Duration in milliseconds
- * @returns {string} Formatted duration
- */
-function formatDuration(ms) {
-  if (!ms && ms !== 0) return 'N/A';
-  
-  if (ms < 1000) {
-    return `${ms}ms`;
-  } else if (ms < 60000) {
-    return `${(ms / 1000).toFixed(1)}s`;
-  } else {
-    const minutes = Math.floor(ms / 60000);
-    const seconds = ((ms % 60000) / 1000).toFixed(0);
-    return `${minutes}m ${seconds}s`;
-  }
-}
-// ... existing code ...
-
-/**
  * Load existing metrics from temp files
  * @returns {Object} Metrics data
  */
-function loadExistingMetrics() {
+function _loadExistingMetrics() {
   try {
     const result = {
       metrics: {},
@@ -1571,7 +1533,7 @@ function loadExistingMetrics() {
  * @param {Object} report Report data
  * @returns {string} HTML report
  */
-function generateHtmlReport(report) {
+function _generateHtmlReport(report) {
   const formattedDuration = formatDuration(report.metrics.duration);
   
   return `
@@ -1790,7 +1752,7 @@ function generateHtmlReport(report) {
  * @param {string} htmlReport HTML report
  * @returns {Promise<Object>} Paths to saved files
  */
-async function saveReport(report, htmlReport) {
+async function _saveReport(report, htmlReport) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const reportDir = join(process.cwd(), 'reports');
   const reportFile = join(reportDir, `workflow-report-${timestamp}.json`);
@@ -1833,14 +1795,14 @@ async function saveReport(report, htmlReport) {
  * Load the report template
  * @returns {Promise<string>} The template HTML
  */
-async function loadTemplate() {
+async function _loadTemplate() {
   // Use the defaultTemplate directly since we've already defined it
   // and the external template path doesn't exist
   return defaultTemplate;
 }
 
 /**
- * Generate a time-series chart for bundle size trends
+ * Generates a time-series chart for bundle size trends
  * @param {Object} bundleData - Bundle metrics data
  * @returns {string} - HTML for the chart
  */
@@ -1933,71 +1895,84 @@ function generateBundleSizeTrendChart(bundleData) {
     };
   });
   
-  // Generate SVG with paths and labels
-  const svg = `
-  <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
-    <!-- X and Y axis -->
-    <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" stroke="#d1d5da" />
-    <line x1="${padding}" y1="${padding}" x2="${padding}" y2="${height - padding}" stroke="#d1d5da" />
-    
-    <!-- X axis labels -->
-    ${dates.map((date, i) => `
-      <text x="${padding + (i * xStep)}" y="${height - padding + 20}" 
-            text-anchor="middle" font-size="12" fill="#586069">${date}</text>
-    `).join('')}
-    
-    <!-- Y axis labels -->
-    ${[0, 0.25, 0.5, 0.75, 1].map(percent => {
-      const value = (maxValue * percent).toFixed(1);
+  // Generate SVG markup as a string
+  let svgMarkup = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">`;
+  
+  // Add X and Y axis
+  svgMarkup += `<line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" stroke="#d1d5da" />`;
+  svgMarkup += `<line x1="${padding}" y1="${padding}" x2="${padding}" y2="${height - padding}" stroke="#d1d5da" />`;
+  
+  // Add X axis labels
+  dates.forEach((date, i) => {
+    svgMarkup += `<text x="${padding + (i * xStep)}" y="${height - padding + 20}" text-anchor="middle" font-size="12" fill="#586069">${date}</text>`;
+  });
+  
+  // Add Y axis labels
+  [0, 0.25, 0.5, 0.75, 1].forEach(percent => {
+    const value = (maxValue * percent).toFixed(1);
+    const y = height - padding - (value * yScale);
+    svgMarkup += `<line x1="${padding - 5}" y1="${y}" x2="${width - padding}" y2="${y}" stroke="#e1e4e8" stroke-dasharray="5,5" />`;
+    svgMarkup += `<text x="${padding - 10}" y="${y + 5}" text-anchor="end" font-size="12" fill="#586069">${value} KB</text>`;
+  });
+  
+  // Add data paths
+  paths.forEach(p => {
+    svgMarkup += p.path;
+  });
+  
+  // Add data points
+  topPackages.forEach((pkg, pkgIndex) => {
+    chartData[pkg].forEach((value, index) => {
+      const x = padding + (index * xStep);
       const y = height - padding - (value * yScale);
-      return `
-        <line x1="${padding - 5}" y1="${y}" x2="${width - padding}" y2="${y}" 
-              stroke="#e1e4e8" stroke-dasharray="5,5" />
-        <text x="${padding - 10}" y="${y + 5}" text-anchor="end" 
-              font-size="12" fill="#586069">${value} KB</text>
-      `;
-    }).join('')}
-    
-    <!-- Data paths -->
-    ${paths.map(p => p.path).join('')}
-    
-    <!-- Data points -->
-    ${topPackages.flatMap((pkg, pkgIndex) => {
-      return chartData[pkg].map((value, index) => {
-        const x = padding + (index * xStep);
-        const y = height - padding - (value * yScale);
-        return `
-          <circle cx="${x}" cy="${y}" r="4" fill="${paths[pkgIndex].color}" />
-          <title>${pkg}: ${value} KB</title>
-        `;
-      });
-    }).join('')}
-  </svg>
-  `;
+      svgMarkup += `<circle cx="${x}" cy="${y}" r="4" fill="${paths[pkgIndex].color}" />`;
+      svgMarkup += `<title>${pkg}: ${value} KB</title>`;
+    });
+  });
   
-  // Generate legend
-  const legend = `
-  <div class="chart-legend">
-    ${paths.map(p => `
-      <div class="legend-item">
-        <span class="legend-color" style="background-color: ${p.color}"></span>
-        <span class="legend-label">${p.pkg}</span>
-      </div>
-    `).join('')}
-  </div>
-  `;
+  // Close SVG tag
+  svgMarkup += `</svg>`;
   
+  // Generate legend as a string
+  let legendMarkup = `<div class="chart-legend">`;
+  
+  paths.forEach(p => {
+    legendMarkup += `<div class="legend-item">`;
+    legendMarkup += `<span class="legend-color" style="background-color: ${p.color}"></span>`;
+    legendMarkup += `<span class="legend-label">${p.pkg}</span>`;
+    legendMarkup += `</div>`;
+  });
+  
+  legendMarkup += `</div>`;
+  
+  // Return the complete chart container
   return `
   <div class="chart-container">
     <h3>Bundle Size Trends</h3>
-    ${svg}
-    ${legend}
+    ${svgMarkup}
+    ${legendMarkup}
   </div>
   `;
 }
 
 /**
+ * Helper function for dashboard display: Format file size in bytes to human-readable string
+ * @param {number} bytes - Size in bytes
+ * @returns {string} - Formatted size (e.g., "1.23 MB")
+ */
+function formatFileSize(bytes) {
+  if (bytes === 0 || isNaN(bytes)) return '0 B';
+  
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  
+  // Keep to 2 decimal places max and remove trailing zeros
+  return (bytes / Math.pow(1024, i)).toFixed(2).replace(/\.0+$/, '') + ' ' + units[i];
+}
+
+/**
  * Format a camelCase or snake_case string to a display-friendly format
+ * Helper function for the dashboard
  * @param {string} name - The name to format
  * @returns {string} Formatted name
  */
@@ -2015,6 +1990,168 @@ function formatDisplayName(name) {
     .split(' ')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
+}
+
+/**
+ * Generate HTML content for advanced check results
+ * @param {Object} advancedChecks - Advanced check results
+ * @returns {string} - HTML content
+ */
+function _generateAdvancedChecksHtml(advancedChecks) {
+  if (!advancedChecks || Object.keys(advancedChecks).length === 0) {
+    return '';
+  }
+  
+  return `
+  <div class="panel advanced-checks">
+    <h2>Advanced Check Results</h2>
+    <div class="accordion">
+      ${Object.entries(advancedChecks).map(([checkName, checkResult]) => {
+        // Fix for TypeScript and Lint checks being incorrectly shown as skipped
+        // If we have success or warning data, the check wasn't skipped
+        const isReallySkipped = checkResult.skipped === true && 
+                               !checkResult.data && 
+                               !checkResult.success && 
+                               !checkResult.warning;
+        
+        return `
+        <div class="accordion-item">
+          <div class="accordion-header">
+            <span class="category">${formatDisplayName(checkName)}</span>
+            <span class="status ${checkResult.success ? 'success' : (checkResult.warning ? 'warning' : 'failure')}">
+              ${isReallySkipped ? 'Skipped' : (checkResult.success ? 'Passed' : (checkResult.warning ? 'Warning' : 'Failed'))}
+            </span>
+            <span class="toggle">▼</span>
+          </div>
+          <div class="accordion-content">
+            <div class="check-details">
+              ${checkResult.message ? `<p class="check-message">${checkResult.message}</p>` : ''}
+              ${checkResult.error ? `<p class="check-error">Error: ${checkResult.error}</p>` : ''}
+              ${checkResult.data ? `
+                <div class="check-data">
+                  <h4>Details</h4>
+                  <pre>${JSON.stringify(checkResult.data, null, 2)}</pre>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+/**
+ * Generate HTML panel for build metrics
+ * @param {Object} buildMetrics - Build metrics data
+ * @returns {string} - HTML content
+ */
+function _generateBuildMetricsHtml(buildMetrics) {
+  if (!buildMetrics || (!buildMetrics.isValid && !buildMetrics.totalSize)) {
+    return '';
+  }
+  
+  // Ensure totalSize is properly formatted
+  const totalSizeFormatted = buildMetrics.totalSizeFormatted || 
+                            (buildMetrics.totalSize ? formatFileSize(buildMetrics.totalSize) : '0 B');
+  
+  // Ensure duration is properly formatted
+  const durationFormatted = buildMetrics.durationFormatted || 
+                           (buildMetrics.duration ? formatDuration(buildMetrics.duration) : '0s');
+  
+  // Calculate file count correctly
+  const fileCount = buildMetrics.fileCount || 
+                   Object.values(buildMetrics.packages || {})
+                     .reduce((sum, pkg) => sum + (pkg.fileCount || 0), 0) || 
+                   0;
+  
+  return `
+  <div class="panel build-metrics">
+    <h2>Build Metrics</h2>
+    
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-icon">📦</div>
+        <div class="metric-title">Total Bundle Size</div>
+        <div class="metric-value">${totalSizeFormatted}</div>
+      </div>
+      
+      <div class="metric-card">
+        <div class="metric-icon">⏱️</div>
+        <div class="metric-title">Build Time</div>
+        <div class="metric-value">${durationFormatted}</div>
+      </div>
+      
+      <div class="metric-card">
+        <div class="metric-icon">🗂️</div>
+        <div class="metric-title">Total Files</div>
+        <div class="metric-value">${fileCount}</div>
+      </div>
+    </div>
+    
+    ${buildMetrics.packages ? generatePackageDetailsHtml(buildMetrics.packages) : ''}
+  </div>`;
+}
+
+/**
+ * Generate HTML for package details
+ * @param {Object} packages - Package details
+ * @returns {string} - HTML content
+ */
+function generatePackageDetailsHtml(packages) {
+  return `
+  <div class="package-section">
+    <h3>Package Details</h3>
+    <div class="packages-grid">
+      ${Object.entries(packages).map(([name, pkg]) => {
+        // Ensure package size is properly formatted
+        const pkgSize = pkg.totalSize || 
+                       (pkg.rawSize ? formatFileSize(pkg.rawSize) : '0 B');
+        
+        // Ensure package duration is properly formatted
+        const pkgDuration = pkg.duration || 
+                           (pkg.rawDuration ? formatDuration(pkg.rawDuration) : '0s');
+        
+        return `
+        <div class="package-card">
+          <div class="package-name">${name}</div>
+          <div class="package-metrics">
+            <div class="package-metric">
+              <span class="metric-label">Size</span>
+              <span class="metric-value">${pkgSize}</span>
+            </div>
+            <div class="package-metric">
+              <span class="metric-label">Files</span>
+              <span class="metric-value">${pkg.fileCount || 0}</span>
+            </div>
+            <div class="package-metric">
+              <span class="metric-label">Build Time</span>
+              <span class="metric-value">${pkgDuration}</span>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+/**
+ * Format duration in milliseconds to a readable string
+ * @param {number} ms - Duration in milliseconds
+ * @returns {string} Formatted duration
+ */
+function formatDuration(ms) {
+  if (!ms && ms !== 0) return 'N/A';
+  
+  if (ms < 1000) {
+    return `${ms}ms`;
+  } else if (ms < 60000) {
+    return `${(ms / 1000).toFixed(1)}s`;
+  } else {
+    const minutes = Math.floor(ms / 60000);
+    const seconds = ((ms % 60000) / 1000).toFixed(0);
+    return `${minutes}m ${seconds}s`;
+  }
 }
 
 export default {

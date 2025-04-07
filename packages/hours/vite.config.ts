@@ -62,10 +62,22 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist',
       sourcemap: false,
+      chunkSizeWarningLimit: 600,
       commonjsOptions: {
         include: [/node_modules/],
         transformMixedEsModules: true,
       },
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vendor-react': ['react', 'react-dom'],
+            'vendor-router': ['react-router-dom'],
+            'vendor-firebase-core': ['firebase/app', 'firebase/auth'],
+            'vendor-firebase-firestore': ['firebase/firestore'],
+            'vendor-state': ['zustand', 'immer'],
+          }
+        }
+      }
     },
   };
 });

@@ -842,249 +842,270 @@ export async function runProjectHealthCheck(options = {}) {
  * @returns {Promise<Object>} - Results of all checks
  */
 export async function runAllAdvancedChecks(options = {}) {
-  const {
-    skipBundleCheck = false,
-    skipDeadCodeCheck = false,
-    skipDocsCheck = false,
-    skipDocsFreshnessCheck = false,
-    skipWorkflowValidation = false,
-    skipTypeCheck = false,
-    skipLintCheck = false,
-    skipHealthCheck = false,
-    ignoreAdvancedFailures = false,
-    parallelChecks = true,
-    verbose = false,
-    silentMode = false,
-    treatLintAsWarning = false,
-    treatHealthAsWarning = false,
-    promptFn = null,
-    timeout = {
-      docsFreshness: 30000,
-      docsQuality: 30000,
-      bundleSize: 60000,
-      deadCode: 45000,
-      typeCheck: 45000,
-      lint: 45000,
-      workflowValidation: 30000,
-      health: 60000
-    },
-    ...restOptions
-  } = options;
+  // Default options
+  const defaultOptions = {
+    skipBundleCheck: false,
+    skipDeadCodeCheck: false,
+    skipDocsFreshnessCheck: false,
+    skipDocsCheck: false,
+    skipTypeCheck: false,
+    skipLintCheck: false,
+    skipWorkflowValidation: false,
+    skipHealthCheck: false,
+    ignoreAdvancedFailures: false,
+    parallelChecks: true,
+    verbose: false,
+    treatLintAsWarning: false,
+    treatHealthAsWarning: false,
+    silentMode: false,
+    promptFn: null
+  };
   
-  // Set silent mode
-  silentLogger.setSilent(silentMode);
+  // Start timing the advanced checks
+  const startTime = Date.now();
   
-  // Validate that timeout is an object
-  if (timeout && typeof timeout !== 'object') {
-    silentLogger.warn("Invalid timeout parameter. Using defaults.");
-  }
+  // Merge with provided options
+  const mergedOptions = { ...defaultOptions, ...options };
   
-  // Initialize report object
-  silentLogger.info("Running advanced checks...");
-  const results = {};
+  const results = {
+    results: {},
+    success: true
+  };
   
-  // Define which checks need to run sequentially
-  // TypeScript and Lint checks should run first since other checks rely on valid code
-  if (!skipTypeCheck) {
-    try {
-      results.typescript = await runAdvancedTypeScriptCheck({
-        ...restOptions,
-        silentMode,
-        timeout: timeout?.typeCheck
-      });
-      // Ensure the result is valid even if the function returns undefined
-      if (!results.typescript) {
-        results.typescript = { success: false, error: "TypeScript check returned no result" };
-      }
-    } catch (error) {
-      silentLogger.error(`TypeScript check error: ${error.message}`);
-      results.typescript = { success: false, error: error.message };
-    }
-  } else {
-    silentLogger.info("Skipping TypeScript check as requested.");
-    results.typescript = { success: true, skipped: true };
-  }
+  // Set silent mode for this operation
+  silentLogger.setSilent(mergedOptions.silentMode);
   
-  // Run lint check
-  if (!skipLintCheck) {
-    try {
-      results.lint = await runAdvancedLintCheck({
-        ...restOptions,
-        silentMode,
-        timeout: timeout?.lint
-      });
-      // Ensure the result is valid even if the function returns undefined
-      if (!results.lint) {
-        results.lint = { success: false, error: "Lint check returned no result" };
-      }
-      // Make lint check a warning if requested
-      if (!results.lint.success && treatLintAsWarning) {
-        results.lint.warning = true;
-      }
-    } catch (error) {
-      silentLogger.error(`Lint check error: ${error.message}`);
-      results.lint = { success: false, error: error.message };
-      if (treatLintAsWarning) {
-        results.lint.warning = true;
-      }
-    }
-  } else {
-    silentLogger.info("Skipping lint check as requested.");
-    results.lint = { success: true, skipped: true };
-  }
+  // Handle explicitly run checks (don't mark them as skipped)
+  // Track already run checks so we don't mark them as skipped later
+  const alreadyRunChecks = new Set();
   
-  // Run the rest of the checks in parallel if requested
-  const parallelChecksToRun = [];
+  // Load and initialize workflow state for saving results
+  const workflowState = getWorkflowState();
   
-  // Bundle size check
-  if (!skipBundleCheck) {
-    parallelChecksToRun.push({
-      name: 'bundleSize',
-      func: runBundleSizeCheck,
-      options: {
-        ...restOptions,
-        silentMode,
-        timeout: timeout?.bundleSize
-      }
-    });
-  }
-  
-  // Dead code check
-  if (!skipDeadCodeCheck) {
-    parallelChecksToRun.push({
-      name: 'deadCode',
-      func: runDeadCodeCheck,
-      options: {
-        ...restOptions,
-        silentMode,
-        timeout: timeout?.deadCode
-      }
-    });
-  }
-  
-  // Docs quality check
-  if (!skipDocsCheck) {
-    parallelChecksToRun.push({
-      name: 'docsQuality',
-      func: runDocsQualityCheck,
-      options: {
-        ...restOptions,
-        silentMode,
-        timeout: timeout?.docsQuality
-      }
-    });
-  }
-  
-  // Docs freshness check
-  if (!skipDocsFreshnessCheck) {
-    parallelChecksToRun.push({
-      name: 'docsFreshness',
-      func: runDocsFreshnessCheck,
-      options: {
-        ...restOptions,
-        silentMode,
-        timeout: timeout?.docsFreshness
-      }
-    });
-  }
-  
-  // Workflow validation
-  if (!skipWorkflowValidation) {
-    parallelChecksToRun.push({
-      name: 'workflowValidation',
-      func: runWorkflowValidationCheck,
-      options: {
-        ...restOptions,
-        silentMode,
-        timeout: timeout?.workflowValidation
-      }
-    });
-  }
-  
-  // Health check
-  if (!skipHealthCheck) {
-    parallelChecksToRun.push({
-      name: 'health',
-      func: runProjectHealthCheck,
-      options: {
-        ...restOptions,
-        silentMode,
-        timeout: timeout?.health
-      }
-    });
-  }
-  
-  // Execute parallel checks efficiently
-  if (parallelChecks && parallelChecksToRun.length > 0) {
-    // Add progress indicators
-    if (!silentMode) {
-      silentLogger.info(`Running ${parallelChecksToRun.length} checks in parallel...`);
+  try {
+    // If typescript was already run (e.g. in validation phase), don't mark it as skipped
+    if (workflowState.checkResults && workflowState.checkResults.typescript) {
+      results.results.typescript = {
+        ...workflowState.checkResults.typescript,
+        skipped: false // Explicitly set skipped to false
+      };
+      alreadyRunChecks.add('typescript');
     }
     
-    // Run checks in parallel with better progress tracking
-    const parallelPromises = parallelChecksToRun.map(check => {
-      return new Promise((resolve) => {
-        const startTime = Date.now();
-        if (!silentMode) {
-          silentLogger.info(`Starting check: ${check.name}...`);
-        }
-        
-        // Run the check and handle the result
-        check.func(check.options)
-          .then(result => {
-            const duration = Date.now() - startTime;
+    // If lint was already run (e.g. in validation phase), don't mark it as skipped
+    if (workflowState.checkResults && workflowState.checkResults.lint) {
+      results.results.lint = {
+        ...workflowState.checkResults.lint,
+        skipped: false // Explicitly set skipped to false
+      };
+      alreadyRunChecks.add('lint');
+    }
+    
+    // Define checks to run
+    const checks = [];
+    
+    if (!mergedOptions.skipBundleCheck && !alreadyRunChecks.has('bundleSize')) {
+      checks.push({
+        name: 'Bundle Size Analysis',
+        id: 'bundleSize',
+        fn: runBundleSizeCheck,
+        skip: mergedOptions.skipBundleCheck
+      });
+    }
+    
+    if (!mergedOptions.skipDeadCodeCheck && !alreadyRunChecks.has('deadCode')) {
+      checks.push({
+        name: 'Dead Code Detection',
+        id: 'deadCode',
+        fn: runDeadCodeCheck,
+        skip: mergedOptions.skipDeadCodeCheck
+      });
+    }
+    
+    if (!mergedOptions.skipDocsCheck && !alreadyRunChecks.has('docsQuality')) {
+      checks.push({
+        name: 'Documentation Quality',
+        id: 'docsQuality',
+        fn: runDocsQualityCheck,
+        skip: mergedOptions.skipDocsCheck
+      });
+    }
+    
+    if (!mergedOptions.skipDocsFreshnessCheck && !alreadyRunChecks.has('docsFreshness')) {
+      checks.push({
+        name: 'Documentation Freshness',
+        id: 'docsFreshness',
+        fn: runDocsFreshnessCheck,
+        skip: mergedOptions.skipDocsFreshnessCheck
+      });
+    }
+    
+    if (!mergedOptions.skipTypeCheck && !alreadyRunChecks.has('typescript')) {
+      checks.push({
+        name: 'TypeScript Validation',
+        id: 'typescript',
+        fn: runAdvancedTypeScriptCheck,
+        skip: mergedOptions.skipTypeCheck,
+        treatWarningAsSuccess: false
+      });
+    }
+    
+    if (!mergedOptions.skipLintCheck && !alreadyRunChecks.has('lint')) {
+      checks.push({
+        name: 'ESLint Validation',
+        id: 'lint',
+        fn: runAdvancedLintCheck,
+        skip: mergedOptions.skipLintCheck,
+        treatWarningAsSuccess: mergedOptions.treatLintAsWarning
+      });
+    }
+    
+    if (!mergedOptions.skipWorkflowValidation && !alreadyRunChecks.has('workflowValidation')) {
+      checks.push({
+        name: 'Workflow Validation',
+        id: 'workflowValidation',
+        fn: runWorkflowValidationCheck,
+        skip: mergedOptions.skipWorkflowValidation
+      });
+    }
+    
+    if (!mergedOptions.skipHealthCheck && !alreadyRunChecks.has('health')) {
+      checks.push({
+        name: 'Health Check',
+        id: 'health',
+        fn: runProjectHealthCheck,
+        skip: mergedOptions.skipHealthCheck,
+        treatWarningAsSuccess: mergedOptions.treatHealthAsWarning
+      });
+    }
+    
+    // Generate array of check execution promises
+    const checkPromises = checks
+      .filter(check => !check.skip && typeof check.fn === 'function')
+      .map(check => {
+        return async () => {
+          try {
+            silentLogger.info(`Running ${check.name}...`);
             
-            if (!silentMode) {
-              const status = result.success ? 'succeeded' : (result.warning ? 'has warnings' : 'failed');
-              silentLogger.info(`Check ${check.name} ${status} (${duration}ms)`);
+            // Run the check
+            const result = await check.fn({
+              ...mergedOptions, // Pass through all options
+              silentMode: mergedOptions.silentMode, // Control logging
+              verbose: mergedOptions.verbose
+            });
+            
+            // Check if special handling is needed
+            const warningButSuccess = 
+              check.treatWarningAsSuccess && 
+              result.warning && 
+              !result.success;
+            
+            // Handle special case of warning as success
+            const finalSuccess = warningButSuccess ? true : result.success;
+            
+            // Store result
+            results.results[check.id] = {
+              ...result,
+              success: finalSuccess,
+              warning: result.warning || false
+            };
+            
+            // Update overall success flag
+            if (!finalSuccess && !mergedOptions.ignoreAdvancedFailures) {
+              results.success = false;
             }
             
-            resolve({ name: check.name, result });
-          })
-          .catch(error => {
-            const duration = Date.now() - startTime;
-            silentLogger.error(`Check ${check.name} failed with error: ${error.message} (${duration}ms)`);
-            resolve({ 
-              name: check.name, 
-              result: { 
-                success: false, 
-                error: error.message,
-                duration 
-              } 
-            });
-          });
+            silentLogger.info(`${check.name} ${finalSuccess ? 'passed' : 'failed'}`);
+            
+            return results.results[check.id];
+          } catch (error) {
+            silentLogger.error(`Error in ${check.name}: ${error.message}`);
+            
+            // Store error result
+            results.results[check.id] = {
+              success: false,
+              error: error.message
+            };
+            
+            // Update overall success flag
+            if (!mergedOptions.ignoreAdvancedFailures) {
+              results.success = false;
+            }
+            
+            return results.results[check.id];
+          }
+        };
       });
+    
+    // Execute checks (parallel or sequential)
+    if (mergedOptions.parallelChecks && checkPromises.length > 0) {
+      silentLogger.info(`Running ${checkPromises.length} checks in parallel...`);
+      await Promise.all(checkPromises.map(fn => fn()));
+    } else if (checkPromises.length > 0) {
+      silentLogger.info(`Running ${checkPromises.length} checks sequentially...`);
+      await runChecksSequentially(checkPromises, results);
+    }
+    
+    // Mark skipped checks explicitly
+    checks.forEach(check => {
+      if (check.skip && !alreadyRunChecks.has(check.id)) {
+        results.results[check.id] = { 
+          success: true, 
+          skipped: true,
+          message: `${check.name} was skipped` 
+        };
+      }
     });
     
-    // Wait for all parallel checks to complete with timeout protection
-    const parallelTimeout = setTimeout(() => {
-      silentLogger.warn("Some parallel checks are taking too long. Consider running with --skip options for problematic checks.");
-    }, 30000); // 30-second warning for long-running checks
-    
-    const parallelResults = await Promise.all(parallelPromises);
-    clearTimeout(parallelTimeout);
-    
-    // Process the results
-    for (const { name, result } of parallelResults) {
-      results[name] = result;
+    // Special case: If both typescript and lint checks are skipped via options but we have them from workflow state,
+    // make sure they don't get marked as skipped
+    if (alreadyRunChecks.has('typescript')) {
+      const existingResult = results.results.typescript || {};
+      results.results.typescript = {
+        ...existingResult,
+        skipped: false // Explicitly ensure skipped is false
+      };
     }
-  } else {
-    await runChecksSequentially(parallelChecksToRun, results);
+    
+    if (alreadyRunChecks.has('lint')) {
+      const existingResult = results.results.lint || {};
+      results.results.lint = {
+        ...existingResult,
+        skipped: false // Explicitly ensure skipped is false
+      };
+    }
+    
+    // Save results to workflow state
+    if (workflowState.ready) {
+      workflowState.checkResults = {
+        ...(workflowState.checkResults || {}),
+        ...results.results
+      };
+      
+      try {
+        await workflowState.save();
+      } catch (error) {
+        silentLogger.debug(`Failed to save workflow state: ${error.message}`);
+      }
+    }
+  } catch (error) {
+    silentLogger.error(`Advanced checks error: ${error.message}`);
+    results.error = error.message;
+    results.success = false;
   }
   
-  // Check for warnings
-  const warnings = Object.entries(results)
-    .filter(([, result]) => result && !result.success && result.warning === true)
-    .map(([key, result]) => ({
-      key,
-      message: result.message || result.error || `Warning in ${key} check`
-    }));
+  // Calculate total duration for all advanced checks
+  const endTime = Date.now();
+  const totalDuration = endTime - startTime;
   
-  return {
-    success: !warnings.length,
-    results,
-    warnings
-  };
+  // Add duration to results object
+  results.duration = totalDuration;
+  
+  if (options.verbose) {
+    silentLogger.info(`Advanced checks completed in ${totalDuration}ms`);
+  }
+  
+  return results;
 }
 
 /**

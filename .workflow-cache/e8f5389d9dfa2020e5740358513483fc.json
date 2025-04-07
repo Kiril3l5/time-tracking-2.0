@@ -1,0 +1,185 @@
+{
+  "_timestamp": 1743989472353,
+  "data": {
+    "advancedChecks": {
+      "typescript": {
+        "success": true,
+        "data": {
+          "success": true,
+          "errorCount": 0
+        }
+      },
+      "lint": {
+        "success": true,
+        "data": {
+          "success": true,
+          "errorCount": 0,
+          "warningCount": 0,
+          "results": []
+        }
+      },
+      "health": {
+        "success": true,
+        "data": {
+          "success": true,
+          "issues": [],
+          "warnings": [],
+          "duration": 951,
+          "stats": {
+            "environment": {
+              "missingVars": [],
+              "invalidConfigs": []
+            },
+            "git": {
+              "issues": []
+            }
+          }
+        }
+      },
+      "bundleSize": {
+        "success": true,
+        "data": {
+          "valid": true,
+          "current": {
+            "dist": {
+              "files": {
+                "assets\\index-DKrjLTOK.css": 2785,
+                "assets\\index-NVfvAWl3.js": 323781,
+                "assets\\vendor-firebase-core-ry0YhaNH.js": 167163,
+                "assets\\vendor-firebase-firestore-Cx-8rg0g.js": 353212,
+                "assets\\vendor-react-DbHEDQBy.js": 11718,
+                "assets\\vendor-router-BmYnhxQd.js": 34800,
+                "assets\\vendor-state-C-hHocTA.js": 8314
+              },
+              "total": 901773
+            }
+          },
+          "historical": {
+            "dist": {
+              "files": {
+                "assets\\index-DKrjLTOK.css": 2785,
+                "assets\\index-NVfvAWl3.js": 323781,
+                "assets\\vendor-firebase-core-ry0YhaNH.js": 167163,
+                "assets\\vendor-firebase-firestore-Cx-8rg0g.js": 353212,
+                "assets\\vendor-react-DbHEDQBy.js": 11718,
+                "assets\\vendor-router-BmYnhxQd.js": 34800,
+                "assets\\vendor-state-C-hHocTA.js": 8314
+              },
+              "total": 901773
+            }
+          },
+          "issues": []
+        },
+        "warning": false
+      },
+      "workflowValidation": {
+        "success": true,
+        "data": {
+          "success": true,
+          "isValid": true,
+          "invalidWorkflows": 0,
+          "totalWorkflows": 1,
+          "workflowResults": [
+            {
+              "success": true,
+              "filePath": "C:\\Users\\klgki\\Documents\\GitHub\\time-tracking-2.0\\.github\\workflows\\firebase-deploy.yml",
+              "fileName": "firebase-deploy.yml",
+              "runCommands": [
+                "lint",
+                "test",
+                "cleanup",
+                "build:all"
+              ],
+              "missingScripts": [],
+              "packageManagerConsistency": {
+                "packageManagers": [
+                  "pnpm"
+                ],
+                "isConsistent": true,
+                "count": 1,
+                "usesPreferredManager": true,
+                "hasNonPreferred": false,
+                "preferredManager": "pnpm"
+              },
+              "isValid": true
+            }
+          ]
+        },
+        "warning": false
+      },
+      "deadCode": {
+        "unusedExports": [],
+        "unusedDependencies": [],
+        "unusedCssClasses": [],
+        "summary": {
+          "unusedExports": 0,
+          "unusedDependencies": 0,
+          "unusedCssClasses": 0,
+          "totalIssues": 0
+        },
+        "potentialBundleSizeReduction": "0.0 KB",
+        "success": true,
+        "warning": false
+      },
+      "docsQuality": {
+        "success": true,
+        "data": {
+          "success": true,
+          "totalFiles": 55,
+          "filesWithIssues": 1,
+          "issues": [
+            {
+              "file": "workflow\\preview-deployment-guide.md",
+              "issues": [
+                "Missing main heading (H1)"
+              ]
+            }
+          ],
+          "metrics": {
+            "totalWords": 73124,
+            "totalCodeBlocks": 450,
+            "totalImages": 0
+          }
+        },
+        "warning": false
+      },
+      "docsFreshness": {
+        "success": true,
+        "data": {
+          "success": true,
+          "staleDocuments": [],
+          "timedOut": true,
+          "error": "Operation timed out after 30 seconds"
+        },
+        "warning": false
+      }
+    },
+    "steps": [
+      {
+        "name": "Package Analysis",
+        "phase": "Validation",
+        "success": true,
+        "duration": 500,
+        "error": null,
+        "timestamp": "2025-04-07T01:30:10.374Z"
+      },
+      {
+        "name": "Advanced Checks",
+        "phase": "Validation",
+        "success": true,
+        "duration": 30035,
+        "error": null,
+        "timestamp": "2025-04-07T01:31:12.348Z"
+      },
+      {
+        "name": "Quality Checks",
+        "phase": "Validation",
+        "success": true,
+        "duration": 61976,
+        "error": null,
+        "timestamp": "2025-04-07T01:31:12.350Z"
+      }
+    ],
+    "timestamp": 1743989472353
+  }
+}
