@@ -60,6 +60,8 @@ export class DashboardGenerator {
     this.verbose = options.verbose || false;
     this.workflowState = null;
     this.outputPath = null;
+    this.data = null;
+    this.startTime = new Date();
   }
 
   /**
@@ -215,7 +217,7 @@ export class DashboardGenerator {
     const { preview } = this.data;
     if (!preview || typeof preview !== 'object') return '';
     
-    // Extract preview details with proper validation
+    // Extract preview data with proper validation
     const adminStatus = preview.admin?.status ? preview.admin.status.toLowerCase() : 'pending';
     const hoursStatus = preview.hours?.status ? preview.hours.status.toLowerCase() : 'pending';
     const adminStatusClass = ['success', 'error', 'warning', 'pending'].includes(adminStatus) ? adminStatus : 'pending';
@@ -223,19 +225,23 @@ export class DashboardGenerator {
     const adminUrl = preview.admin?.url || '';
     const hoursUrl = preview.hours?.url || '';
     
+    // If we have URLs, the deployment was successful
+    const finalAdminStatus = adminUrl ? 'success' : adminStatus;
+    const finalHoursStatus = hoursUrl ? 'success' : hoursStatus;
+    
     return `
       <section class="preview-channels">
         <h2>Preview Channels</h2>
         <div class="preview-grid">
           <div class="preview-card">
             <h3>Admin Preview</h3>
-            <p class="status status-${adminStatusClass}">${adminStatus}</p>
-            ${adminUrl ? `<a href="${adminUrl}" target="_blank" class="preview-link">${adminUrl}</a>` : ''}
+            <p class="status status-${finalAdminStatus}">${finalAdminStatus}</p>
+            ${adminUrl ? `<a href="${this.escapeHtml(adminUrl)}" target="_blank" class="preview-link">${this.escapeHtml(adminUrl)}</a>` : ''}
           </div>
           <div class="preview-card">
             <h3>Hours Preview</h3>
-            <p class="status status-${hoursStatusClass}">${hoursStatus}</p>
-            ${hoursUrl ? `<a href="${hoursUrl}" target="_blank" class="preview-link">${hoursUrl}</a>` : ''}
+            <p class="status status-${finalHoursStatus}">${finalHoursStatus}</p>
+            ${hoursUrl ? `<a href="${this.escapeHtml(hoursUrl)}" target="_blank" class="preview-link">${this.escapeHtml(hoursUrl)}</a>` : ''}
           </div>
         </div>
       </section>
@@ -280,8 +286,8 @@ export class DashboardGenerator {
   }
 
   generateIssues() {
-    const { errors, warnings } = this.data;
-    if (!errors.length && !warnings.length) return '';
+    const { errors, warnings, metrics } = this.data;
+    if ((!errors || !errors.length) && (!warnings || !warnings.length)) return '';
     
     // Filter out build output from warnings
     const actualWarnings = warnings.filter(warning => {
@@ -291,44 +297,49 @@ export class DashboardGenerator {
              !message.includes('Starting build for packages:');
     });
     
+    // Calculate total duration from metrics
+    const totalDuration = metrics?.duration || 0;
+    
     return `
       <section class="issues">
         <h2>Issues</h2>
-        ${errors.length ? `
+        ${errors && errors.length > 0 ? `
           <div class="errors">
-            <h3>Errors (${errors.length})</h3>
+            <h3>Errors</h3>
             <ul>
               ${errors.map(error => {
                 const message = error instanceof Error ? error.message : 
-                               typeof error === 'string' ? error : 
-                               error.message || 'Unknown error';
-                const suggestion = error.suggestion || '';
+                              typeof error === 'string' ? error : 
+                              error.message || 'Unknown error';
+                const suggestion = error.suggestion ? 
+                  `<p class="suggestion">Suggestion: ${this.escapeHtml(error.suggestion)}</p>` : '';
                 return `
                   <li>
-                    <p class="error-message">${message}</p>
-                    ${suggestion ? `<p class="suggestion">Suggestion: ${suggestion}</p>` : ''}
+                    <p class="error">${this.escapeHtml(message)}</p>
+                    ${suggestion}
                   </li>
                 `;
-              }).join('')}
+              }).join('\n')}
             </ul>
           </div>
         ` : ''}
-        ${actualWarnings.length ? `
+        
+        ${actualWarnings && actualWarnings.length > 0 ? `
           <div class="warnings">
-            <h3>Warnings (${actualWarnings.length})</h3>
+            <h3>Warnings</h3>
             <ul>
               ${actualWarnings.map(warning => {
-                const message = warning instanceof Error ? warning.message : 
-                               typeof warning === 'string' ? warning : 
-                               warning.message || 'Unknown warning';
-                const suggestion = warning.suggestion || '';
+                const message = typeof warning === 'string' ? warning : 
+                              warning.message || 'Unknown warning';
+                const suggestion = warning.suggestion ? 
+                  `<p class="suggestion">Suggestion: ${this.escapeHtml(warning.suggestion)}</p>` : '';
                 return `
                   <li>
-                    <p class="warning-message">${message}</p>
-                    ${suggestion ? `<p class="suggestion">Suggestion: ${suggestion}</p>` : ''}
+                    <p class="warning">${this.escapeHtml(message)}</p>
+                    ${suggestion}
                   </li>
                 `;
-              }).join('')}
+              }).join('\n')}
             </ul>
           </div>
         ` : ''}
@@ -338,30 +349,40 @@ export class DashboardGenerator {
 
   generateTimeline() {
     const { steps } = this.data;
-    if (!steps.length) return '';
+    if (!steps || !Array.isArray(steps) || steps.length === 0) return '';
     
     return `
       <section class="timeline">
         <h2>Workflow Timeline</h2>
         <div class="timeline-container">
           ${steps.map(step => {
-            // Ensure status is properly handled
-            const status = step.status ? step.status.toLowerCase() : 'pending';
-            const statusClass = ['success', 'error', 'warning', 'pending'].includes(status) ? status : 'pending';
+            // Extract status from step result
+            let status = 'pending';
+            if (step.result) {
+              if (step.result.success === true) status = 'success';
+              else if (step.result.success === false) status = 'error';
+              else if (step.result.warning) status = 'warning';
+            }
+            
+            // Format duration
             const duration = step.duration ? this.formatDuration(step.duration) : '0s';
+            
+            // Get error message if any
+            const error = step.result?.error ? 
+              `<p class="error">${this.escapeHtml(step.result.error)}</p>` : '';
             
             return `
               <div class="timeline-item">
-                <div class="timeline-dot status-${statusClass}"></div>
+                <div class="timeline-dot status-${status}"></div>
                 <div class="timeline-content">
-                  <h3>${step.name || 'Unknown Step'}</h3>
-                  <p class="status status-${statusClass}">${step.status || 'Pending'}</p>
+                  <h3>${this.escapeHtml(step.name)}</h3>
+                  <p class="status status-${status}">${status}</p>
                   <p class="duration">Duration: ${duration}</p>
-                  ${step.error ? `<p class="error">${step.error}</p>` : ''}
+                  ${error}
                 </div>
               </div>
             `;
-          }).join('')}
+          }).join('\n')}
         </div>
       </section>
     `;
@@ -444,15 +465,15 @@ export class DashboardGenerator {
 
   generateChannelCleanup() {
     const { metrics } = this.data;
-    const cleanup = metrics.channelCleanup;
+    const cleanup = metrics?.channelCleanup;
     if (!cleanup || typeof cleanup !== 'object') return '';
     
-    // Extract cleanup details with proper validation
+    // Extract cleanup data with proper validation
     const status = cleanup.status ? cleanup.status.toLowerCase() : 'pending';
     const statusClass = ['success', 'error', 'warning', 'pending'].includes(status) ? status : 'pending';
     const cleanedChannels = typeof cleanup.cleanedChannels === 'number' ? cleanup.cleanedChannels : 0;
     const failedChannels = typeof cleanup.failedChannels === 'number' ? cleanup.failedChannels : 0;
-    const error = cleanup.error || '';
+    const error = cleanup.error ? this.escapeHtml(cleanup.error) : '';
     
     return `
       <section class="channel-cleanup">
@@ -513,5 +534,14 @@ export class DashboardGenerator {
       logger.error('Failed to open dashboard in browser:', error);
       return { success: false, error };
     }
+  }
+
+  escapeHtml(unsafe) {
+    return unsafe
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 } 

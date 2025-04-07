@@ -63,7 +63,7 @@ export async function runChecks(options = {}) {
     logger.info('Running health checks...');
 
     // 1. Security Vulnerability Scan
-    const securityResults = await runSecurityScan();
+    const securityResults = await runSecurityScan(options);
     if (!securityResults.success) {
       results.issues.push(securityResults.error);
     }
@@ -117,16 +117,81 @@ export async function runChecks(options = {}) {
  * @param {Object} options - Scan options
  * @returns {Promise<Object>} Scan results
  */
-async function runSecurityScan() {
+async function runSecurityScan(options = {}) {
+  const results = {
+    success: true,
+    issues: [],
+    warnings: [],
+    stats: {
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+      total: 0
+    }
+  };
+
   try {
-    const result = await commandRunner.runCommand('pnpm audit --json');
-    return { success: true };
+    // Run npm audit
+    const { stdout, stderr } = await commandRunner.runCommand('pnpm audit --json');
+    
+    if (stderr) {
+      results.warnings.push(`Audit produced stderr: ${stderr}`);
+    }
+
+    let auditResults;
+    try {
+      auditResults = JSON.parse(stdout);
+    } catch (parseError) {
+      results.success = false;
+      results.issues.push(`Failed to parse audit results: ${parseError.message}`);
+      return results;
+    }
+
+    // Check for vulnerabilities
+    if (auditResults.metadata?.vulnerabilities) {
+      const vulns = auditResults.metadata.vulnerabilities;
+      results.stats = {
+        critical: vulns.critical || 0,
+        high: vulns.high || 0,
+        medium: vulns.medium || 0,
+        low: vulns.low || 0,
+        total: vulns.total || 0
+      };
+
+      // Add issues for each severity level
+      if (vulns.critical > 0) {
+        results.success = false;
+        results.issues.push(`Found ${vulns.critical} critical vulnerabilities`);
+      }
+      if (vulns.high > 0) {
+        results.success = false;
+        results.issues.push(`Found ${vulns.high} high severity vulnerabilities`);
+      }
+      if (vulns.medium > 0) {
+        results.warnings.push(`Found ${vulns.medium} medium severity vulnerabilities`);
+      }
+      if (vulns.low > 0) {
+        results.warnings.push(`Found ${vulns.low} low severity vulnerabilities`);
+      }
+    }
+
+    // Check for outdated dependencies
+    const { stdout: outdated } = await commandRunner.runCommand('pnpm outdated --json');
+    try {
+      const outdatedDeps = JSON.parse(outdated);
+      if (Object.keys(outdatedDeps).length > 0) {
+        results.warnings.push(`Found ${Object.keys(outdatedDeps).length} outdated dependencies`);
+      }
+    } catch (parseError) {
+      results.warnings.push(`Failed to parse outdated dependencies: ${parseError.message}`);
+    }
+
+    return results;
   } catch (error) {
-    // Extract just the relevant error info, not the full JSON output
-    return {
-      success: false,
-      error: 'Security vulnerabilities found in dependencies'
-    };
+    results.success = false;
+    results.issues.push(`Security scan failed: ${error.message}`);
+    return results;
   }
 }
 

@@ -16,7 +16,30 @@ on:
     branches: ["main"]
 
 jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run CodeQL Analysis
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+          
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+      
+      - name: Run Secret Scanning
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+          queries: security-and-quality
+          
+      - name: Perform Secret Scanning
+        uses: github/codeql-action/analyze@v3
+
   build-and-deploy:
+    needs: security
     runs-on: ubuntu-latest
     permissions:
       contents: 'read'

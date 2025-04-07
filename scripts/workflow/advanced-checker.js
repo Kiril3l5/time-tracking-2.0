@@ -382,10 +382,7 @@ export async function runDeadCodeCheck(options = {}) {
   
   silentLogger.info("Running dead code analysis...");
   
-  // Try to use cached result if files haven't changed
   try {
-    await checkCache.load();
-    
     // Define relevant source directories
     const srcDirs = [
       path.join(process.cwd(), 'packages/admin/src'),
@@ -393,86 +390,108 @@ export async function runDeadCodeCheck(options = {}) {
       path.join(process.cwd(), 'packages/common/src')
     ];
     
-    // Generate a cache key based on source files
-    const cacheKey = await checkCache.getCacheKey('deadCode', srcDirs);
+    // Run the analysis
+    silentLogger.info("Running fresh dead code analysis...");
     
-    // Check for cached result
-    const cachedResult = checkCache.get(cacheKey);
-    if (cachedResult) {
-      silentLogger.info("Using cached dead code analysis result");
-      return cachedResult;
-    }
+    const analyzeResult = await runWithTimeout(
+      analyzeDeadCode({
+        srcDirs,
+        verbose: options.verbose,
+        excludeTests: true,
+        saveReport: true,
+        // Add stricter options
+        failOnUnusedExports: true,
+        failOnEmptyFiles: true,
+        failOnDuplicateCode: true,
+        minDuplicationPercentage: 20,
+        maxAllowedUnusedExports: 5
+      }),
+      60000,
+      "Dead code analysis",
+      null, // Don't provide fallback, let it fail
+      options
+    );
     
-    // No cached result, run the analysis
-    silentLogger.info("No cache available, running fresh dead code analysis...");
-    
-    // Original check implementation
-    let analyzeResult;
-    
-    try {
-      analyzeResult = await runWithTimeout(
-        analyzeDeadCode({
-          srcDirs,
-          verbose: options.verbose,
-          excludeTests: true,
-          saveReport: true
-        }),
-        60000, // Increased timeout from 45s to 60s
-        "Dead code analysis",
-        { success: true, warning: true },
-        options
-      );
-    } catch (deadCodeError) {
-      silentLogger.error(`Dead code analysis execution error: ${deadCodeError.message}`);
-      // Return detailed error information
-      return { 
-        success: false, 
-        error: `Dead code analysis failed: ${deadCodeError.message}`,
-        warning: true,
-        message: "Dead code analysis encountered execution errors. See logs for details."
-      };
-    }
-    
-    // If we got an undefined or null result
     if (!analyzeResult) {
-      silentLogger.error("Dead code analysis returned no result");
-      return { 
-        success: false, 
-        error: "Dead code analysis returned no result",
-        warning: true,
-        message: "Dead code analyzer returned no result. Check system resources and try again."
-      };
+      throw new Error("Dead code analysis returned no result");
     }
     
-    // If we have detailed results with issues
+    // Categorize issues by severity
+    const criticalIssues = [];
+    const warnings = [];
+    
+    // Check for unused exports
     if (analyzeResult.unusedExports && analyzeResult.unusedExports.length > 0) {
       const count = analyzeResult.unusedExports.length;
-      silentLogger.warn(`Found ${count} unused exports that could be removed.`);
-      
-      // Add detailed error message
-      analyzeResult.message = `Found ${count} unused exports that could be removed. Check the report for details.`;
+      const maxAllowed = options.maxAllowedUnusedExports || 5;
+      if (count > maxAllowed) {
+        criticalIssues.push(`Found ${count} unused exports - exceeds maximum allowed (${maxAllowed})`);
+      } else {
+        warnings.push(`Found ${count} unused exports that could be removed`);
+      }
     }
     
-    // Improve the result structure to include proper success/failure indication
+    // Check for empty files
+    if (analyzeResult.emptyFiles && analyzeResult.emptyFiles.length > 0) {
+      criticalIssues.push(`Found ${analyzeResult.emptyFiles.length} empty files that should be removed`);
+    }
+    
+    // Check for duplicate code
+    if (analyzeResult.duplicates && analyzeResult.duplicates.length > 0) {
+      const highDuplication = analyzeResult.duplicates.filter(d => d.percentage >= 80);
+      const mediumDuplication = analyzeResult.duplicates.filter(d => d.percentage >= 50 && d.percentage < 80);
+      
+      if (highDuplication.length > 0) {
+        criticalIssues.push(`Found ${highDuplication.length} instances of high code duplication (>80%)`);
+      }
+      if (mediumDuplication.length > 0) {
+        warnings.push(`Found ${mediumDuplication.length} instances of medium code duplication (50-80%)`);
+      }
+    }
+    
+    // Check for deprecated API usage
+    if (analyzeResult.deprecatedUsage && analyzeResult.deprecatedUsage.length > 0) {
+      criticalIssues.push(`Found ${analyzeResult.deprecatedUsage.length} uses of deprecated APIs`);
+    }
+    
+    // Determine overall success
+    const success = criticalIssues.length === 0;
+    
+    // Construct detailed result
     const result = {
-      ...analyzeResult,
-      success: analyzeResult.success !== false, // Ensure we have a boolean success value
-      warning: analyzeResult.unusedExports && analyzeResult.unusedExports.length > 0
+      success,
+      criticalIssues,
+      warnings,
+      data: {
+        unusedExports: analyzeResult.unusedExports || [],
+        emptyFiles: analyzeResult.emptyFiles || [],
+        duplicates: analyzeResult.duplicates || [],
+        deprecatedUsage: analyzeResult.deprecatedUsage || []
+      }
     };
     
-    // Cache the result
-    checkCache.set(cacheKey, result);
-    await checkCache.save();
+    // Log results
+    if (criticalIssues.length > 0) {
+      silentLogger.error("Dead code analysis found critical issues:");
+      criticalIssues.forEach(issue => silentLogger.error(`- ${issue}`));
+    }
+    if (warnings.length > 0) {
+      silentLogger.warn("Dead code analysis found warnings:");
+      warnings.forEach(warning => silentLogger.warn(`- ${warning}`));
+    }
+    if (success && warnings.length === 0) {
+      silentLogger.success("Dead code analysis completed successfully with no issues.");
+    }
     
-    silentLogger.success("Dead code analysis completed successfully.");
     return result;
+    
   } catch (error) {
     silentLogger.error("Dead code check failed:", error);
     return { 
       success: false, 
       error: error.message,
-      warning: true,
-      message: `Dead code check failed: ${error.message}. Try running with --verbose for more details.`
+      criticalIssues: [`Dead code analysis failed: ${error.message}`],
+      warnings: []
     };
   }
 }

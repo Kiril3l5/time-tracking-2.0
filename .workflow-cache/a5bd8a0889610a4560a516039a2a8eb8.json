@@ -1,0 +1,168 @@
+{
+  "_timestamp": 1743998518790,
+  "data": {
+    "advancedChecks": {
+      "typescript": {
+        "success": true,
+        "data": {
+          "success": true,
+          "errorCount": 0
+        }
+      },
+      "lint": {
+        "success": true,
+        "data": {
+          "success": true,
+          "errorCount": 0,
+          "warningCount": 0,
+          "results": []
+        }
+      },
+      "health": {
+        "success": true,
+        "data": {
+          "success": true,
+          "issues": [
+            null
+          ],
+          "warnings": [],
+          "duration": 789,
+          "stats": {
+            "security": {
+              "vulnerabilities": {
+                "critical": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+                "total": 1
+              }
+            },
+            "environment": {
+              "missingVars": [],
+              "invalidConfigs": []
+            },
+            "git": {
+              "issues": []
+            }
+          }
+        }
+      },
+      "bundleSize": {
+        "success": true,
+        "data": {
+          "valid": true,
+          "current": {
+            "dist": {
+              "files": {
+                "assets\\index-DKrjLTOK.css": 2785,
+                "assets\\index-NVfvAWl3.js": 323781,
+                "assets\\vendor-firebase-core-ry0YhaNH.js": 167163,
+                "assets\\vendor-firebase-firestore-Cx-8rg0g.js": 353212,
+                "assets\\vendor-react-DbHEDQBy.js": 11718,
+                "assets\\vendor-router-BmYnhxQd.js": 34800,
+                "assets\\vendor-state-C-hHocTA.js": 8314
+              },
+              "total": 901773
+            }
+          },
+          "historical": {
+            "dist": {
+              "files": {
+                "assets\\index-DKrjLTOK.css": 2785,
+                "assets\\index-NVfvAWl3.js": 323781,
+                "assets\\vendor-firebase-core-ry0YhaNH.js": 167163,
+                "assets\\vendor-firebase-firestore-Cx-8rg0g.js": 353212,
+                "assets\\vendor-react-DbHEDQBy.js": 11718,
+                "assets\\vendor-router-BmYnhxQd.js": 34800,
+                "assets\\vendor-state-C-hHocTA.js": 8314
+              },
+              "total": 901773
+            }
+          },
+          "issues": []
+        },
+        "warning": false
+      },
+      "deadCode": {
+        "success": true,
+        "criticalIssues": [],
+        "warnings": [],
+        "data": {
+          "unusedExports": [],
+          "emptyFiles": [],
+          "duplicates": [],
+          "deprecatedUsage": []
+        },
+        "warning": false
+      },
+      "workflowValidation": {
+        "success": false,
+        "data": {
+          "success": false,
+          "invalidWorkflows": 1
+        },
+        "warning": true,
+        "message": "Workflow validation failed with 0 issues"
+      },
+      "docsQuality": {
+        "success": true,
+        "data": {
+          "success": true,
+          "totalFiles": 56,
+          "filesWithIssues": 1,
+          "issues": [
+            {
+              "file": "workflow\\preview-deployment-guide.md",
+              "issues": [
+                "Missing main heading (H1)"
+              ]
+            }
+          ],
+          "metrics": {
+            "totalWords": 74059,
+            "totalCodeBlocks": 457,
+            "totalImages": 0
+          }
+        },
+        "warning": false
+      },
+      "docsFreshness": {
+        "success": true,
+        "data": {
+          "success": true,
+          "staleDocuments": [],
+          "timedOut": true,
+          "error": "Operation timed out after 30 seconds"
+        },
+        "warning": false
+      }
+    },
+    "steps": [
+      {
+        "name": "Package Analysis",
+        "phase": "Validation",
+        "success": true,
+        "duration": 500,
+        "error": null,
+        "timestamp": "2025-04-07T04:00:53.367Z"
+      },
+      {
+        "name": "Advanced Checks",
+        "phase": "Validation",
+        "success": true,
+        "duration": 34014,
+        "error": null,
+        "timestamp": "2025-04-07T04:01:58.785Z"
+      },
+      {
+        "name": "Quality Checks",
+        "phase": "Validation",
+        "success": true,
+        "duration": 65420,
+        "error": null,
+        "timestamp": "2025-04-07T04:01:58.787Z"
+      }
+    ],
+    "timestamp": 1743998518790
+  }
+}

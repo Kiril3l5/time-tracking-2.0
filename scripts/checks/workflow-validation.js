@@ -267,171 +267,215 @@ function checkPackageManagerConsistency(content) {
 }
 
 /**
- * Validate a single workflow file
+ * Validate a workflow file for required security checks
+ * @param {Object} workflow - Parsed workflow content
+ * @returns {Object} Validation results
+ */
+function validateSecurityChecks(workflow) {
+  const results = {
+    success: true,
+    issues: [],
+    warnings: []
+  };
+
+  // Required security checks
+  const requiredChecks = {
+    'dependency-audit': false,
+    'code-scanning': false,
+    'secret-scanning': false,
+    'vulnerability-scan': false
+  };
+
+  // Check jobs for security steps
+  const jobs = workflow.jobs || {};
+  for (const [_, job] of Object.entries(jobs)) {
+    const steps = job.steps || [];
+    for (const step of steps) {
+      // Check for dependency audit
+      if (step.run && /npm audit|yarn audit|pnpm audit/.test(step.run)) {
+        requiredChecks['dependency-audit'] = true;
+      }
+      // Check for code scanning
+      if (step.uses && step.uses.startsWith('github/codeql-action')) {
+        requiredChecks['code-scanning'] = true;
+      }
+      // Check for secret scanning
+      if (step.uses && step.uses.includes('secret-scanning')) {
+        requiredChecks['secret-scanning'] = true;
+      }
+      // Check for vulnerability scanning
+      if (step.run && /security|vulnerability|CVE|scan/.test(step.run)) {
+        requiredChecks['vulnerability-scan'] = true;
+      }
+    }
+  }
+
+  // Report missing checks
+  for (const [check, found] of Object.entries(requiredChecks)) {
+    if (!found) {
+      results.issues.push(`Missing required security check: ${check}`);
+      results.success = false;
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Validate a workflow file
  * @param {string} filePath - Path to workflow file
- * @param {Array} availableScripts - Available scripts from package.json
+ * @param {Array} availableScripts - List of available package.json scripts
  * @returns {Object} Validation results
  */
 function validateWorkflowFile(filePath, availableScripts) {
+  const results = {
+    success: true,
+    issues: [],
+    warnings: [],
+    stats: {
+      scripts: {
+        total: 0,
+        missing: 0
+      },
+      packageManagers: []
+    }
+  };
+
   try {
     const content = fs.readFileSync(filePath, 'utf8');
     const workflow = yaml.load(content);
-    
-    // Extract all npm/yarn/pnpm run commands from the workflow
+
+    // Extract and validate script names
     const runCommands = extractRunCommands(workflow);
-    
-    // Deduplicate commands
-    const uniqueCommands = [...new Set(runCommands)];
-    
-    // Check if all commands exist in package.json
-    const missingScripts = uniqueCommands.filter(cmd => !availableScripts.includes(cmd));
-    
-    // Check for package manager consistency
-    const packageManagerConsistency = checkPackageManagerConsistency(content);
-    
-    return {
-      success: true,
-      filePath,
-      fileName: path.basename(filePath),
-      runCommands: uniqueCommands,
-      missingScripts,
-      packageManagerConsistency,
-      isValid: missingScripts.length === 0 && packageManagerConsistency.isConsistent
-    };
+    results.stats.scripts.total = runCommands.length;
+
+    for (const script of runCommands) {
+      if (!availableScripts.includes(script)) {
+        results.issues.push(`Script "${script}" not found in package.json`);
+        results.stats.scripts.missing++;
+      }
+    }
+
+    // Check package manager consistency
+    const packageManagerResults = checkPackageManagerConsistency(content);
+    results.stats.packageManagers = packageManagerResults.packageManagers;
+
+    if (packageManagerResults.packageManagers.length > 1) {
+      results.issues.push(
+        `Multiple package managers found: ${packageManagerResults.packageManagers.join(', ')}`
+      );
+    }
+
+    // Validate security checks
+    const securityResults = validateSecurityChecks(workflow);
+    if (!securityResults.success) {
+      results.issues.push(...securityResults.issues);
+    }
+
+    // Check for environment variables
+    if (workflow.env) {
+      const sensitivePatterns = ['key', 'token', 'password', 'secret', 'credential'];
+      for (const [key, value] of Object.entries(workflow.env)) {
+        if (typeof value === 'string' && sensitivePatterns.some(pattern => key.toLowerCase().includes(pattern))) {
+          results.issues.push(`Potential hardcoded secret in environment variable: ${key}`);
+        }
+      }
+    }
+
+    // Check for proper environment setup
+    const hasSetupNode = workflow.jobs && Object.values(workflow.jobs).some(job => 
+      (job.steps || []).some(step => step.uses && step.uses.startsWith('actions/setup-node'))
+    );
+    if (!hasSetupNode) {
+      results.warnings.push('No Node.js setup step found in workflow');
+    }
+
+    results.success = results.issues.length === 0;
+    return results;
+
   } catch (error) {
-    logger.error(`Error validating workflow file ${filePath}: ${error.message}`);
+    logger.error(`Error validating workflow file ${filePath}:`, error);
     return {
       success: false,
-      filePath,
-      fileName: path.basename(filePath),
-      error: error.message,
-      isValid: false
+      issues: [`Failed to validate workflow file: ${error.message}`],
+      warnings: [],
+      stats: {
+        scripts: { total: 0, missing: 0 },
+        packageManagers: []
+      }
     };
   }
 }
 
 /**
- * Validate all workflow files
+ * Validate workflows
  * @param {Object} options - Validation options
  * @returns {Promise<Object>} Validation results
  */
 export async function validateWorkflows(options = {}) {
-  const {
-    workflowDir = path.join(rootDir, '.github', 'workflows'),
-    packageJsonPath = path.join(rootDir, 'package.json'),
-    verbose = false
-  } = options;
+  const { verbose = false } = options;
   
-  logger.info('Validating GitHub Actions workflows...');
-  
-  try {
-    // Read package.json
-    const packageJsonResult = readPackageJson(packageJsonPath);
-    if (!packageJsonResult.success) {
-      return {
-        success: false,
-        error: `Failed to read package.json: ${packageJsonResult.error}`
-      };
-    }
-    
-    const availableScripts = packageJsonResult.scripts;
-    logger.info(`Found ${availableScripts.length} scripts in package.json`);
-    
-    // Get workflow files
-    const workflowFilesResult = getWorkflowFiles(workflowDir);
-    if (!workflowFilesResult.success) {
-      return {
-        success: false,
-        error: `Failed to get workflow files: ${workflowFilesResult.error}`
-      };
-    }
-    
-    const workflowFiles = workflowFilesResult.files;
-    logger.info(`Found ${workflowFiles.length} workflow files to validate`);
-    
-    if (workflowFiles.length === 0) {
-      logger.warn('No workflow files found to validate');
-      return {
-        success: true,
-        isValid: true,
-        message: 'No workflow files found to validate',
-        workflowResults: []
-      };
-    }
-    
-    // Validate each workflow file
-    const workflowResults = workflowFiles.map(file => 
-      validateWorkflowFile(file, availableScripts)
-    );
-    
-    // Track issues
-    let foundIssues = false;
-    let invalidWorkflows = 0;
-    
-    // Log results
-    workflowResults.forEach(result => {
-      if (!result.success) {
-        logger.error(`Error validating ${result.fileName}: ${result.error}`);
-        foundIssues = true;
-        invalidWorkflows++;
-        return;
-      }
-      
-      logger.info(`Checking ${result.fileName}...`);
-      
-      if (result.missingScripts && result.missingScripts.length > 0) {
-        logger.warn(`Found ${result.missingScripts.length} scripts in ${result.fileName} that don't exist in package.json:`);
-        result.missingScripts.forEach(script => logger.warn(`  - ${script}`));
-        foundIssues = true;
-        invalidWorkflows++;
-      } else if (verbose) {
-        logger.success(`All scripts in ${result.fileName} exist in package.json`);
-      }
-      
-      // Check package manager consistency and preferences
-      if (!result.packageManagerConsistency.isConsistent) {
-        logger.warn(`${result.fileName} uses multiple package managers, which may cause issues:`);
-        result.packageManagerConsistency.packageManagers.forEach(pm => {
-          if (pm !== result.packageManagerConsistency.preferredManager) {
-            logger.warn(`  - ${pm} (should be replaced with ${result.packageManagerConsistency.preferredManager})`);
-          } else {
-            logger.warn(`  - ${pm}`);
-          }
-        });
-        foundIssues = true;
-        invalidWorkflows++;
-      } else if (result.packageManagerConsistency.packageManagers.length > 0 && 
-                !result.packageManagerConsistency.usesPreferredManager) {
-        // Workflow is consistent but doesn't use the preferred package manager
-        logger.warn(`${result.fileName} uses ${result.packageManagerConsistency.packageManagers[0]} but should use ${result.packageManagerConsistency.preferredManager}`);
-        foundIssues = true;
-        invalidWorkflows++;
-      } else if (verbose) {
-        logger.success(`${result.fileName} uses a consistent package manager: ${result.packageManagerConsistency.packageManagers[0] || 'none'}`);
-      }
-    });
-    
-    // Prepare final result
-    const isValid = !foundIssues;
-    
-    if (isValid) {
-      logger.success('All workflows are valid!');
-    } else {
-      logger.warn(`Found ${invalidWorkflows} issues in ${workflowFiles.length} workflow files`);
-    }
-    
-    return {
-      success: true,
-      isValid,
-      invalidWorkflows,
-      totalWorkflows: workflowFiles.length,
-      workflowResults
-    };
-  } catch (error) {
-    logger.error(`Error in workflow validation: ${error.message}`);
-    return {
-      success: false,
-      error: error.message
-    };
+  // Get available scripts from package.json
+  const packageJsonResult = readPackageJson();
+  if (!packageJsonResult.success) {
+    logger.error('Failed to read package.json:', packageJsonResult.error);
+    return { success: false };
   }
+  
+  // Get workflow files
+  const workflowFilesResult = getWorkflowFiles();
+  if (!workflowFilesResult.success) {
+    logger.error('Failed to get workflow files:', workflowFilesResult.error);
+    return { success: false };
+  }
+  
+  let foundIssues = false;
+  let invalidWorkflows = 0;
+  
+  // Validate each workflow file
+  const workflowResults = workflowFilesResult.files.map(filePath => {
+    const result = validateWorkflowFile(filePath, packageJsonResult.scripts);
+    const fileName = path.basename(filePath);
+    
+    if (!result.success) {
+      logger.error(`Error validating ${fileName}: ${result.issues.join(', ')}`);
+      foundIssues = true;
+      invalidWorkflows++;
+      return result;
+    }
+    
+    logger.info(`Checking ${fileName}...`);
+    
+    if (result.stats.scripts.missing > 0) {
+      logger.warn(`Found ${result.stats.scripts.missing} scripts in ${fileName} that don't exist in package.json:`);
+      result.issues.forEach(issue => logger.warn(`  - ${issue}`));
+      foundIssues = true;
+      invalidWorkflows++;
+    } else if (verbose) {
+      logger.success(`All scripts in ${fileName} exist in package.json`);
+    }
+    
+    // Check package manager consistency and preferences
+    if (result.stats.packageManagers.length > 1) {
+      logger.warn(`${fileName} uses multiple package managers, which may cause issues:`);
+      result.stats.packageManagers.forEach(pm => {
+        logger.warn(`  - ${pm}`);
+      });
+      foundIssues = true;
+      invalidWorkflows++;
+    } else if (verbose) {
+      logger.success(`${fileName} uses a consistent package manager: ${result.stats.packageManagers[0] || 'none'}`);
+    }
+    
+    return result;
+  });
+  
+  // Report overall status
+  if (foundIssues) {
+    logger.error(`Found issues in ${invalidWorkflows} workflow files`);
+    return { success: false, invalidWorkflows };
+  }
+  
+  logger.success('All workflow files validated successfully');
+  return { success: true };
 } 
