@@ -224,6 +224,12 @@ export async function tryUseValidationCache(cache, options = {}) {
   // Try to get cached validation results
   const cachedResults = await cache.get(cacheKey);
   if (cachedResults) {
+    // Ensure warnings are properly initialized even if missing in the cache
+    if (!cachedResults.warnings) {
+      cachedResults.warnings = [];
+      logger.debug('No warnings found in cache, initializing empty array');
+    }
+    
     logger.success('Using cached validation results');
     return { 
       fromCache: true, 
@@ -241,10 +247,11 @@ export async function tryUseValidationCache(cache, options = {}) {
  * @param {string} cacheKey - Cache key
  * @param {Object} advancedChecks - Advanced check results
  * @param {Map} workflowSteps - Workflow steps
+ * @param {Array} workflowWarnings - Workflow warnings
  * @param {Object} options - Options
  * @returns {Promise<boolean>} Success
  */
-export async function saveValidationCache(cache, cacheKey, advancedChecks, workflowSteps, options = {}) {
+export async function saveValidationCache(cache, cacheKey, advancedChecks, workflowSteps, workflowWarnings = [], options = {}) {
   if (options.noCache) return false;
   
   // Collect steps for caching
@@ -259,6 +266,7 @@ export async function saveValidationCache(cache, cacheKey, advancedChecks, workf
   const dataToCache = {
     advancedChecks,
     steps: stepsToCache,
+    warnings: workflowWarnings, // Add warnings to cache
     timestamp: Date.now()
   };
   

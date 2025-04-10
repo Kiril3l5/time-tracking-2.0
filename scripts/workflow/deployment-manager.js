@@ -272,10 +272,16 @@ export async function createChannelId() {
   // Take only the first 20 characters of the branch name to avoid excessive length
   const truncatedBranch = branch.substring(0, 20);
   const sanitizedBranch = truncatedBranch.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
-  const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  
+  // Include date for readability
+  const dateStamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  
+  // Add unique timestamp component (last 6 digits of current timestamp)
+  // This ensures uniqueness even for multiple deployments on the same day
+  const uniqueId = Math.floor(Date.now() % 1000000).toString().padStart(6, '0');
   
   // Ensure the total length is reasonable (Firebase has limits on channel ID length)
-  const channelId = `preview-${sanitizedBranch}-${timestamp}`;
+  const channelId = `preview-${sanitizedBranch}-${dateStamp}-${uniqueId}`;
   
   // Firebase has a 63 character limit for channel IDs
   if (channelId.length > 63) {
@@ -283,7 +289,7 @@ export async function createChannelId() {
     const maxBranchLength = Math.max(8, 20 - (channelId.length - 63));
     const shorterBranch = branch.substring(0, maxBranchLength);
     const shorterSanitizedBranch = shorterBranch.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
-    return `preview-${shorterSanitizedBranch}-${timestamp}`;
+    return `preview-${shorterSanitizedBranch}-${dateStamp}-${uniqueId}`;
   }
   
   return channelId;

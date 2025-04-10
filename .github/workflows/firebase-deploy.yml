@@ -18,6 +18,11 @@ on:
 jobs:
   security:
     runs-on: ubuntu-latest
+    # Add permissions block to fix CodeQL access issues
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@v4
       
@@ -25,6 +30,8 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: javascript
+          queries: security-and-quality
+          config-file: .github/codeql-config.yml
           
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
@@ -44,6 +51,7 @@ jobs:
     permissions:
       contents: 'read'
       id-token: 'write'
+      security-events: 'write'
     
     steps:
       - name: Checkout code

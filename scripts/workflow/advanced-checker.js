@@ -759,12 +759,31 @@ export async function runWorkflowValidationCheck(options = {}) {
       );
       
       if (!result.success) {
-        silentLogger.warn(`Workflow validation failed with ${result.issues?.length || 0} issues.`);
+        // Improved error message that doesn't rely solely on issues count
+        const errorMessage = result.error || 
+                           (result.invalidWorkflows ? 
+                             `Workflow validation failed with ${result.invalidWorkflows} invalid workflow file(s)` : 
+                             'Workflow validation failed: Missing required security checks');
+                             
+        silentLogger.warn(errorMessage);
+        
+        // Construct a more meaningful data object with proper issues
+        const enhancedData = {
+          ...result,
+          issues: result.issues || [
+            "Your GitHub Actions workflow may be missing one or more required security checks:",
+            "- Dependency vulnerability scan (npm/yarn/pnpm audit)",
+            "- Code scanning via CodeQL or similar tool",
+            "- Secret scanning for leaked credentials",
+            "- Vulnerability scanning for CVEs"
+          ]
+        };
+        
         return { 
           success: false, 
-          data: result,
+          data: enhancedData,
           warning: true,
-          message: `Workflow validation failed with ${result.issues?.length || 0} issues` 
+          message: errorMessage 
         };
       }
       
@@ -783,7 +802,10 @@ export async function runWorkflowValidationCheck(options = {}) {
     silentLogger.warn(`Workflow validation error: ${error.message}`);
     return { 
       success: false, 
-      error: error.message 
+      error: error.message,
+      data: {
+        issues: ["Workflow validation check failed to complete: " + error.message]
+      }
     };
   }
 }

@@ -1,0 +1,36 @@
+{
+  "_timestamp": 1744204105498,
+  "data": {
+    "buildMetrics": {
+      "duration": 3662,
+      "totalSize": 1844080.64,
+      "fileCount": 14,
+      "packages": {
+        "admin": {
+          "duration": 3571,
+          "size": 920668.1599999999,
+          "fileCount": 7,
+          "success": true
+        },
+        "hours": {
+          "duration": 3650,
+          "size": 923412.48,
+          "fileCount": 7,
+          "success": true
+        }
+      },
+      "isValid": true
+    },
+    "steps": [
+      {
+        "name": "Package Build",
+        "phase": "Build",
+        "success": true,
+        "duration": 3662,
+        "error": null,
+        "timestamp": "2025-04-09T13:08:25.497Z"
+      }
+    ],
+    "timestamp": 1744204105498
+  }
+}

@@ -205,6 +205,12 @@ export async function cleanupChannels(options = {}) {
   
   // Process each site
   for (const site of sitesToClean) {
+    // Skip autonomy-heroes site as it's empty and not creating previews
+    if (site === 'autonomy-heroes') {
+      logger.info(`Skipping empty site: ${site}`);
+      continue;
+    }
+    
     logger.info(`\nProcessing site: ${site}`);
     siteStats[site] = { found: 0, kept: 0, deleted: 0, errors: 0 };
     
@@ -259,23 +265,66 @@ export async function cleanupChannels(options = {}) {
         
         // Sort channels by creation or update time (newest first)
         channels.sort((a, b) => {
-          const timeA = a.lastDeployTime ? new Date(a.lastDeployTime).getTime() : 
-                      (a.createTime ? new Date(a.createTime).getTime() : 0);
-          const timeB = b.lastDeployTime ? new Date(b.lastDeployTime).getTime() : 
-                      (b.createTime ? new Date(b.createTime).getTime() : 0);
-          return timeB - timeA;
+          // Get the most recent timestamp for each channel (using any available timestamp field)
+          const timeA = a.updateTime || a.lastDeployTime || a.createTime || '';
+          const timeB = b.updateTime || b.lastDeployTime || b.createTime || '';
+          return new Date(timeB) - new Date(timeA);
         });
         
-        // Keep the newest channels based on keepCount
-        const channelsToKeep = channels.slice(0, keepCount);
-        const channelsToDelete = channels.slice(keepCount);
+        // Debugging: show sorting order
+        logger.debug(`Channel order after sorting:`);
+        channels.forEach((c, i) => {
+          const name = c.name.split('/').pop();
+          const timeField = c.updateTime || c.lastDeployTime || c.createTime || '';
+          logger.debug(`  ${i+1}. ${name} (${timeField ? new Date(timeField).toLocaleString() : 'no timestamp'})`);
+        });
+        
+        // Keep the newest channels based on keepCount - REGARDLESS of prefix or naming pattern
+        // Only force deletion if we have significantly more channels than the keepCount
+        // This ensures we don't delete channels when we only have a few
+        const minChannelsBeforeForceDelete = keepCount * 2; // Only force delete if we have at least 10 channels (given keepCount=5)
+        const effectiveKeepCount = channels.length > minChannelsBeforeForceDelete ? 
+          Math.min(keepCount, Math.max(1, channels.length - 1)) : // Force delete at least one if lots of channels
+          keepCount; // Otherwise use the requested keepCount
+        
+        if (effectiveKeepCount < keepCount) {
+          logger.info(`Adjusted keep count from ${keepCount} to ${effectiveKeepCount} to ensure cleanup`);
+        }
+        
+        const channelsToKeep = channels.slice(0, effectiveKeepCount);
+        const channelsToDelete = channels.slice(effectiveKeepCount);
+        
+        // Extract URLs for the most recent and previous channels for comparison
+        // Store in the site stats for future display in the dashboard
+        if (channelsToKeep.length > 0) {
+          const currentChannel = channelsToKeep[0];
+          const currentChannelName = currentChannel.name.split('/').pop();
+          const currentChannelUrl = currentChannel.url || `https://${site}--${currentChannelName}.web.app`;
+          siteStats[site].currentChannel = {
+            name: currentChannelName,
+            url: currentChannelUrl,
+            timestamp: currentChannel.updateTime || currentChannel.lastDeployTime || currentChannel.createTime || 'unknown'
+          };
+          
+          // Get previous channel (second most recent) if available
+          if (channelsToKeep.length > 1) {
+            const previousChannel = channelsToKeep[1];
+            const previousChannelName = previousChannel.name.split('/').pop();
+            const previousChannelUrl = previousChannel.url || `https://${site}--${previousChannelName}.web.app`;
+            siteStats[site].previousChannel = {
+              name: previousChannelName,
+              url: previousChannelUrl,
+              timestamp: previousChannel.updateTime || previousChannel.lastDeployTime || previousChannel.createTime || 'unknown'
+            };
+          }
+        }
         
         siteStats[site].kept = channelsToKeep.length;
         logger.info(`Keeping ${channelsToKeep.length} newest channels:`);
         for (const channel of channelsToKeep) {
           // Extract just the channel name without the full path
           const shortName = channel.name.split('/').pop();
-          const time = channel.lastDeployTime || channel.createTime || 'unknown date';
+          const time = channel.updateTime || channel.lastDeployTime || channel.createTime || 'unknown date';
           logger.info(`  - ${shortName} (${new Date(time).toLocaleString()})`);
         }
         
@@ -292,7 +341,7 @@ export async function cleanupChannels(options = {}) {
           // Extract just the channel name without the full path
           const fullName = channel.name;
           const shortName = fullName.split('/').pop();
-          const time = channel.lastDeployTime || channel.createTime || 'unknown date';
+          const time = channel.updateTime || channel.lastDeployTime || channel.createTime || 'unknown date';
           
           logger.info(`  - ${shortName} (${new Date(time).toLocaleString()})`);
           
@@ -339,6 +388,17 @@ export async function cleanupChannels(options = {}) {
   const totalKept = Object.values(siteStats).reduce((sum, stat) => sum + stat.kept, 0);
   const totalErrors = Object.values(siteStats).reduce((sum, stat) => sum + stat.errors, 0);
   
+  // Extract preview comparison information
+  const previewComparison = {};
+  for (const site of Object.keys(siteStats)) {
+    if (siteStats[site].currentChannel || siteStats[site].previousChannel) {
+      previewComparison[site] = {
+        current: siteStats[site].currentChannel || null,
+        previous: siteStats[site].previousChannel || null
+      };
+    }
+  }
+  
   logger.info('\n--- Channel Cleanup Summary ---');
   logger.info(`Sites processed: ${sitesToClean.length}`);
   logger.info(`Total preview channels found: ${totalFound}`);
@@ -349,6 +409,11 @@ export async function cleanupChannels(options = {}) {
   // Per-site breakdown
   logger.info('\nPer-site breakdown:');
   for (const site of sitesToClean) {
+    // Skip reporting sites that were skipped during processing
+    if (!siteStats[site]) {
+      logger.info(`  ${site}: Skipped (no channels found or site ignored)`);
+      continue;
+    }
     const stats = siteStats[site];
     logger.info(`  ${site}: ${stats.found} found, ${stats.kept} kept, ${stats.deleted} deleted, ${stats.errors} errors`);
   }
@@ -359,7 +424,8 @@ export async function cleanupChannels(options = {}) {
     errors,
     deletedCount: totalDeleted,
     stats: siteStats,
-    totalErrors
+    totalErrors,
+    previewComparison
   };
 }
 

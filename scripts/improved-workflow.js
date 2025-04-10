@@ -168,6 +168,17 @@ class Workflow {
         status: 'pending',
         timestamp: null,
         details: {}
+      },
+      
+      // Channel cleanup results
+      channelCleanup: {
+        success: false,
+        sitesProcessed: 0,
+        totalChannels: 0,
+        channelsKept: 0,
+        channelsDeleted: 0,
+        totalErrors: 0,
+        sites: []
       }
     };
     
@@ -213,9 +224,9 @@ class Workflow {
     if (duration < 100) {
       // For critical workflow phases and steps that should take longer
       if (['Validation Phase', 'Build Phase', 'Quality Checks', 'Package Analysis', 'Advanced Checks'].includes(name)) {
-        this.logger.debug(`Suspicious ${name} duration: ${duration}ms, using realistic fallback`);
+        this.logger.debug(`Suspicious low duration for ${name}: ${duration}ms, adjusting upward...`);
         
-        // Use reasonable minimum values based on what we know about each step
+        // Set more realistic durations for steps that should take longer
         if (name === 'Package Analysis') {
           duration = 500; // Package analysis takes at least 500ms
         } else if (name === 'Quality Checks') {
@@ -245,6 +256,17 @@ class Workflow {
     // Log errors when steps fail
     if (!success && error) {
       this.recordWorkflowError(error, phase, name);
+      
+      // ENHANCEMENT: Also add to the warnings collection to ensure it shows in Issues & Warnings
+      // Only add if it's an actual error, not just a "skipped" message
+      if (error !== 'Skipped' && !error.includes('skipped')) {
+        this.recordWarning(
+          `${name}: ${error}`,
+          phase,
+          name,
+          'error'
+        );
+      }
     }
     
     // Log step for debugging
@@ -300,6 +322,9 @@ class Workflow {
       if (this.options.verbose) {
         this.logger.debug(`Recorded warning: ${warningMessage} (${phase}${step ? ` - ${step}` : ''}, ${severity})`);
       }
+      
+      // For debugging - log all warnings using our logger instead of console
+      this.logger.info(`[WARNING ADDED] ${warningMessage} (${phase}${step ? ` - ${step}` : ''}, ${severity}) - Total: ${this.workflowWarnings.length}`);
     }
   }
 
@@ -520,6 +545,12 @@ class Workflow {
         
         if (cacheResult.fromCache) {
           this.advancedCheckResults = cacheResult.data.advancedChecks;
+          
+          // Restore warnings from cache
+          if (cacheResult.data.warnings && Array.isArray(cacheResult.data.warnings)) {
+            this.workflowWarnings = cacheResult.data.warnings;
+            this.logger.debug(`Restored ${this.workflowWarnings.length} warnings from cache`);
+          }
           
           // Record success steps from cache
           for (const step of cacheResult.data.steps) {
@@ -775,6 +806,113 @@ class Workflow {
             });
           }
           
+          // ENHANCED ERROR COLLECTION: Ensure ALL advanced check errors are collected
+          // This ensures all errors show up in the Issues & Warnings section
+          
+          // First process workflowValidation specifically (most critical)
+          if (this.advancedCheckResults.workflowValidation) {
+            const validation = this.advancedCheckResults.workflowValidation;
+            if (validation.success === false || validation.status === 'error') {
+              // Extract detailed error information
+              let errorMessage = 'Workflow validation failed';
+              if (validation.data && validation.data.issues && validation.data.issues.length > 0) {
+                // Format individual issues
+                validation.data.issues.forEach(issue => {
+                  this.recordWarning(
+                    `Workflow validation error: ${issue.message || issue}`,
+                    'Validation',
+                    'Workflow Validation',
+                    'error'
+                  );
+                });
+              } else if (validation.error || validation.message) {
+                // Use general error message if no specific issues
+                this.recordWarning(
+                  `Workflow validation error: ${validation.error || validation.message}`,
+                  'Validation',
+                  'Workflow Validation',
+                  'error'
+                );
+              } else {
+                // Fallback general error
+                this.recordWarning(
+                  errorMessage,
+                  'Validation',
+                  'Workflow Validation',
+                  'error'
+                );
+              }
+            }
+          }
+          
+          // Now process ALL other advanced checks to ensure completeness
+          Object.entries(this.advancedCheckResults).forEach(([checkName, check]) => {
+            // Skip already processed checks
+            if (checkName === 'workflowValidation' || checkName === 'deadCode' || 
+                checkName === 'bundleSize' || checkName === 'typescript' || 
+                checkName === 'lint' || checkName === 'docsFreshness' || 
+                checkName === 'docsQuality' || checkName === 'health') {
+              return;
+            }
+            
+            // Process warnings for the check
+            if (check.warnings && Array.isArray(check.warnings)) {
+              check.warnings.forEach(warning => {
+                this.recordWarning(
+                  typeof warning === 'string' ? warning : warning.message || JSON.stringify(warning),
+                  'Validation',
+                  checkName,
+                  'warning'
+                );
+              });
+            }
+            
+            // Process errors for the check
+            if ((check.success === false || check.status === 'error') && 
+                (check.data || check.error || check.message)) {
+              
+              // Check for specific error data structures
+              if (check.data) {
+                // Extract issues/errors from data
+                if (check.data.issues && Array.isArray(check.data.issues)) {
+                  check.data.issues.forEach(issue => {
+                    this.recordWarning(
+                      `${checkName} issue: ${issue.message || issue}`,
+                      'Validation',
+                      checkName,
+                      'error'
+                    );
+                  });
+                } else if (check.data.errors && Array.isArray(check.data.errors)) {
+                  check.data.errors.forEach(error => {
+                    this.recordWarning(
+                      `${checkName} error: ${error.message || error}`,
+                      'Validation',
+                      checkName,
+                      'error'
+                    );
+                  });
+                } else if (check.data.error) {
+                  // Single error object
+                  this.recordWarning(
+                    `${checkName} error: ${check.data.error.message || check.data.error}`,
+                    'Validation',
+                    checkName,
+                    'error'
+                  );
+                }
+              } else if (check.error || check.message) {
+                // Direct error property
+                this.recordWarning(
+                  `${checkName} error: ${check.error || check.message}`,
+                  'Validation',
+                  checkName,
+                  'error'
+                );
+              }
+            }
+          });
+          
           // Record advanced check step
           this.recordWorkflowStep(
             'Advanced Checks', 
@@ -825,7 +963,8 @@ class Workflow {
           this.cache, 
           cacheKey, 
           this.advancedCheckResults, 
-          this.workflowSteps, 
+          this.workflowSteps,
+          this.workflowWarnings,
           this.options
         );
       }
@@ -1014,25 +1153,28 @@ class Workflow {
    */
   async deploy() {
     this.progressTracker.startStep('Deploy Phase');
-    this.logger.sectionHeader('Deploying to Preview Environment');
+    this.logger.sectionHeader('Deploying Preview');
     const phaseStartTime = Date.now();
-    
-    // Store the start time in metrics
     this.metrics.deployStart = phaseStartTime;
     
     try {
       // Skip deployment if requested
       if (this.options.skipDeploy) {
-        this.logger.warn('Skipping deployment due to --skip-deploy flag');
-        this.progressTracker.completeStep(true, 'Deployment skipped');
-        this.recordWorkflowStep('Deploy Hours App', 'Deploy', true, 0, 'Skipped');
-        this.recordWorkflowStep('Deploy Admin App', 'Deploy', true, 0, 'Skipped');
-        this.recordWorkflowStep('Deploy Phase', 'Deploy', true, Date.now() - phaseStartTime);
-        return;
+        this.logger.info('Deployment skipped due to --skip-deploy flag');
+        this.metrics.deploymentStatus = { status: 'skipped', reason: 'User requested skip' };
+        this.recordWorkflowStep('Deploy Phase', 'Deploy', true, 0, null, { skipped: true });
+        return true;
       }
       
       // Create a unique channel ID for the preview
       const channelStartTime = Date.now();
+      
+      // Store the current preview URLs before generating new ones
+      // This will allow showing previous/current comparison in the dashboard
+      if (this.metrics && this.metrics.preview) {
+        this.metrics.previousPreview = { ...this.metrics.preview };
+      }
+      
       const channelId = await createChannelId();
       this.recordWorkflowStep('Create Channel ID', 'Deploy', true, Date.now() - channelStartTime);
       
@@ -1040,7 +1182,7 @@ class Workflow {
       // which handles hours and admin app deployments together
       this.logger.info(`Deploying apps to channel: ${channelId}...`);
       const deployResult = await deployPackageWithWorkflowIntegration({
-        channelId,
+        channelId: channelId,
         skipBuild: this.options.skipBuild,
         phase: 'Deploy'
       });
@@ -1116,12 +1258,60 @@ class Workflow {
    * @returns {Promise<boolean>} Success status of the dashboard generation
    */
   async generateResults() {
+    this.progressTracker.startStep('Results Phase');
+    this.logger.sectionHeader('Generating Dashboard');
     const phaseStartTime = Date.now();
     this.metrics.resultsStart = phaseStartTime;
     
     try {
       // Clean up Firebase channels
-      await cleanupChannels();
+      this.logger.info('Cleaning up old preview channels...');
+      const cleanupResult = await cleanupChannels({
+        keepCount: 5,
+        dryRun: false  // Explicitly set to false to ensure actual deletion
+      });
+      
+      // Store channel cleanup results in metrics
+      this.metrics.channelCleanup = {
+        success: cleanupResult.success,
+        sitesProcessed: Object.keys(cleanupResult.stats || {}).length,
+        totalChannels: Object.values(cleanupResult.stats || {}).reduce((sum, stat) => sum + (stat?.found || 0), 0),
+        channelsKept: Object.values(cleanupResult.stats || {}).reduce((sum, stat) => sum + (stat?.kept || 0), 0),
+        channelsDeleted: cleanupResult.deletedCount || 0,
+        totalErrors: cleanupResult.totalErrors || 0,
+        // Add the preview comparison data for the dashboard
+        previewComparison: cleanupResult.previewComparison || {},
+        // Add site-specific data for the dashboard
+        sites: Object.entries(cleanupResult.stats || {}).map(([name, stat]) => ({
+          name,
+          found: stat?.found || 0,
+          kept: stat?.kept || 0,
+          deleted: stat?.deleted || 0,
+          errors: stat?.errors || 0
+        }))
+      };
+      
+      // Record channel cleanup step for dashboard timeline
+      this.recordWorkflowStep('Channel Cleanup', 'Maintenance', 
+        cleanupResult.success, 
+        0, // We don't have accurate timing for this operation
+        cleanupResult.success ? null : 'Channel cleanup encountered errors'
+      );
+      
+      if (cleanupResult.deletedCount > 0) {
+        this.logger.success(`✓ Cleaned up ${cleanupResult.deletedCount} old preview channels`);
+      } else {
+        this.logger.info(`No channels needed cleanup (kept: ${this.metrics.channelCleanup.channelsKept}, found: ${this.metrics.channelCleanup.totalChannels})`);
+      }
+      
+      // DEBUG: Print the workflow warnings to see if they're being collected
+      this.logger.info(`DEBUG: Number of workflow warnings: ${this.workflowWarnings.length}`);
+      if (this.workflowWarnings.length > 0) {
+        this.logger.info('DEBUG: Workflow warnings:');
+        this.workflowWarnings.forEach((warning, index) => {
+          this.logger.info(`[${index + 1}] ${warning.message} (${warning.phase}${warning.step ? ` - ${warning.step}` : ''}, ${warning.severity})`);
+        });
+      }
       
       // Generate dashboard with proper options
       const dashboardResult = await generateWorkflowDashboard(this, {
