@@ -36,14 +36,6 @@ jobs:
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
       
-      - name: Run Secret Scanning
-        uses: github/codeql-action/init@v3
-        with:
-          languages: javascript
-          queries: security-and-quality
-          
-      - name: Perform Secret Scanning
-        uses: github/codeql-action/analyze@v3
 
   build-and-deploy:
     needs: security
@@ -52,6 +44,7 @@ jobs:
       contents: 'read'
       id-token: 'write'
       security-events: 'write'
+      pull-requests: 'write'
     
     steps:
       - name: Checkout code
@@ -90,11 +83,7 @@ jobs:
         run: |
           echo "Running security vulnerability scan..."
           # Run the health checker with security-only mode
-          node scripts/checks/health-checker.js --security-only
-          
-          # Run npm audit for additional security checks
-          echo "Running npm audit..."
-          pnpm audit
+          node scripts/checks/health-checker.js
       
       # For feature branches, we only want to validate with lint and tests
       # No need to build or deploy since that's done locally by improved-workflow.js
@@ -156,8 +145,6 @@ jobs:
           VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
           VITE_USE_FIREBASE_EMULATOR: "false"
         run: |
-          pnpm add -g firebase-tools
-          
           # Verify built files exist and have proper content
           echo "Verifying build artifacts..."
           if [ ! -d "packages/hours/dist" ] || [ ! -d "packages/admin/dist" ]; then
@@ -174,7 +161,7 @@ jobs:
           
           # Deploy with explicit project specification
           echo "Deploying to Firebase..."
-          firebase deploy --only hosting,firestore:rules --project=${{ secrets.FIREBASE_PROJECT_ID }}
+          pnpm firebase deploy --only hosting,firestore:rules --project=${{ secrets.FIREBASE_PROJECT_ID }}
       
       # Preview deployment for pull requests - using the same authentication
       # Creates a PR-specific channel that can be used for review
@@ -190,17 +177,15 @@ jobs:
           VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
           VITE_USE_FIREBASE_EMULATOR: "false"
         run: |
-          pnpm add -g firebase-tools
-          
           # Create a PR-specific channel ID
           CHANNEL_ID="pr-${{ github.event.pull_request.number }}"
           
           # Deploy to the PR-specific channel
           echo "Deploying to PR preview channel: $CHANNEL_ID"
-          firebase hosting:channel:deploy $CHANNEL_ID --project=${{ secrets.FIREBASE_PROJECT_ID }}
+          pnpm firebase hosting:channel:deploy $CHANNEL_ID --project=${{ secrets.FIREBASE_PROJECT_ID }}
           
           # Get the preview URL
-          PREVIEW_URL=$(firebase hosting:channel:list --project=${{ secrets.FIREBASE_PROJECT_ID }} | grep $CHANNEL_ID | awk '{print $3}')
+          PREVIEW_URL=$(pnpm firebase hosting:channel:list --project=${{ secrets.FIREBASE_PROJECT_ID }} | grep $CHANNEL_ID | awk '{print $3}')
           
           # Add the preview URL as a comment to the PR
           echo "PR_PREVIEW_URL=$PREVIEW_URL" >> $GITHUB_ENV

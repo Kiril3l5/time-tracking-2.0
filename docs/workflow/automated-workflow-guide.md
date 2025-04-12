@@ -577,6 +577,7 @@ If you encounter issues with the workflow:
 ### Dependency Issues
 - If you encounter import errors, run `pnpm install` to ensure all dependencies are installed
 - The 'open' package is required for automatic dashboard viewing
+- `firebase-tools` is required for deployment operations and is installed as a dev dependency
 
 ### Caching Issues
 - If you suspect the cache is providing stale results, run with `--no-cache` flag

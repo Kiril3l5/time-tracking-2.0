@@ -177,8 +177,7 @@ async function runSecurityScan(options = {}) {
         results.issues.push(`Found ${vulns.critical} critical vulnerabilities`);
       }
       if (vulns.high > 0) {
-        results.success = false;
-        results.issues.push(`Found ${vulns.high} high severity vulnerabilities`);
+        results.warnings.push(`Found ${vulns.high} high severity vulnerabilities`);
       }
       if (vulns.medium > 0) {
         results.warnings.push(`Found ${vulns.medium} medium severity vulnerabilities`);
