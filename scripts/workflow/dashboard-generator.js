@@ -567,15 +567,18 @@ export class DashboardGenerator {
     for (const [packageName, metrics] of Object.entries(packageMetrics)) {
       const statusClass = metrics.success ? 'success' : 'error';
       const duration = metrics.duration ? this.formatDuration(metrics.duration) : 'N/A';
-      // For now, just show success/fail and duration. Add more detail when parsing is implemented.
-      // const details = metrics.formattedSize ? `${metrics.fileCount} files, ${metrics.formattedSize}` : 'Details N/A'; 
+      // Use the pre-formatted size or indicate N/A
+      const details = metrics.formattedSize && metrics.fileCount 
+                      ? `${metrics.fileCount} files, ${metrics.formattedSize}` 
+                      : 'Details N/A'; 
       html += `
         <li>
           <strong>${this.escapeHtml(packageName)}:</strong> 
           <span class="status status-${statusClass}">${metrics.success ? 'Success' : 'Failed'}</span> 
-          (${duration})
+          (${duration}) - ${details}
           ${metrics.error ? `<p class="error-detail">Error: ${this.escapeHtml(metrics.error)}</p>` : ''}
-          ${this.options.verbose && metrics.output ? `<pre class="build-output">${this.escapeHtml(metrics.output)}</pre>` : ''} 
+          ${/* Display specific build warnings if needed */ ''}
+          ${/* metrics.warnings && metrics.warnings.length > 0 ? `<ul class="build-warnings">${metrics.warnings.map(w => `<li>${this.escapeHtml(w)}</li>`).join('')}</ul>` : '' */ ''}
         </li>
       `;
     }

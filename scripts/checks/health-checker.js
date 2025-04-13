@@ -30,6 +30,8 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import process from 'process';
+import { promisify } from 'util';
+import { exec } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -208,36 +210,55 @@ async function runSecurityScan(options = {}) {
       total: 0
     }
   };
+  const execPromise = promisify(exec); // Ensure exec is promisified
 
   try {
-    // Run npm audit
-    const { stdout, stderr, success } = await commandRunner.runCommand('pnpm audit --json');
-    
-    if (stderr) {
-      results.warnings.push(`Audit produced stderr: ${stderr}`);
+    // Run pnpm audit directly using exec
+    let stdout, stderr;
+    let exitCode = 0;
+    try {
+      const commandOutput = await execPromise('pnpm audit --json');
+      stdout = commandOutput.stdout;
+      stderr = commandOutput.stderr;
+    } catch (error) {
+      // pnpm audit exits non-zero if vulnerabilities are found
+      // Capture output even if it errored
+      stdout = error.stdout;
+      stderr = error.stderr;
+      exitCode = error.code; // Capture exit code
+      logger.debug(`pnpm audit command finished with exit code: ${exitCode}`);
     }
 
-    if (!success) {
-      results.success = false;
-      results.issues.push(`pnpm audit command failed with exit code ${success === false ? 'non-zero' : success}`);
-      return results;
+    if (stderr && !stderr.toLowerCase().includes('deprecated')) { // Ignore common deprecation warnings in stderr
+      results.warnings.push(`Audit produced stderr: ${stderr.substring(0, 200)}...`); // Log truncated stderr
     }
 
-    // Basic validation of JSON format before parsing
+    // Now, proceed with parsing stdout, even if exitCode was non-zero
     if (!stdout || typeof stdout !== 'string') {
       results.success = false;
       results.issues.push(`Invalid audit output: ${stdout === undefined ? 'undefined' : typeof stdout}`);
+      // Add more context if the command truly failed beyond finding vulns
+      if (exitCode !== 0 && !stdout) { 
+         results.issues.push(`pnpm audit command likely failed before producing output (Exit code: ${exitCode})`);
+      }
       return results;
     }
 
     // Check if the output looks like JSON
     const trimmedOutput = stdout.trim();
+    // Handle potential empty output if audit finds nothing AND exits 0 (unlikely but possible)
+    if (trimmedOutput === '') {
+        logger.info('pnpm audit produced empty output, assuming no vulnerabilities.');
+        // Keep success = true, stats = 0
+        return results;
+    }
+    
     if (!trimmedOutput.startsWith('{') || !trimmedOutput.endsWith('}')) {
       results.success = false;
       results.issues.push(`Audit output is not valid JSON format: ${trimmedOutput.substring(0, 100)}...`);
       return results;
     }
-
+    
     let auditResults;
     try {
       auditResults = JSON.parse(stdout);
@@ -324,15 +345,31 @@ async function runSecurityScan(options = {}) {
     }
 
     // Check for outdated dependencies
-    const { stdout: outdated } = await commandRunner.runCommand('pnpm outdated --json');
     try {
-      const outdatedDeps = JSON.parse(outdated);
-      if (Object.keys(outdatedDeps).length > 0) {
-        results.warnings.push(`Found ${Object.keys(outdatedDeps).length} outdated dependencies`);
-      }
-    } catch (parseError) {
-      results.warnings.push(`Failed to parse outdated dependencies: ${parseError.message}`);
-      logger.debug(`Outdated deps parse error: ${parseError.stack}`);
+        const { stdout: outdated } = await execPromise('pnpm outdated --json');
+        if (outdated) {
+            const outdatedDeps = JSON.parse(outdated);
+            if (Object.keys(outdatedDeps).length > 0) {
+                results.warnings.push(`Found ${Object.keys(outdatedDeps).length} outdated dependencies`);
+            }
+        }
+    } catch (outdatedError) {
+         // pnpm outdated exits non-zero if outdated packages are found
+         // We need to parse the output even if it errors
+         if (outdatedError.stdout) {
+            try {
+                const outdatedDeps = JSON.parse(outdatedError.stdout);
+                if (Object.keys(outdatedDeps).length > 0) {
+                    results.warnings.push(`Found ${Object.keys(outdatedDeps).length} outdated dependencies`);
+                }
+            } catch (parseError) {
+                results.warnings.push(`Failed to parse outdated dependencies: ${parseError.message}`);
+                logger.debug(`Outdated deps parse error: ${parseError.stack}`);
+            }
+         } else {
+             results.warnings.push(`Failed to check for outdated dependencies: ${outdatedError.message}`);
+             logger.debug(`Outdated check error: ${outdatedError.stack}`);
+         }
     }
 
     return results;

@@ -301,19 +301,21 @@ export async function runStandardTests(options = {}) {
         try {
           if (fs.existsSync(finalCoveragePath)) {
             const stats = fs.statSync(finalCoveragePath);
-            if (stats.size > 10) { 
+            if (stats.size > 10) {
               coverageRan = true;
               logger.debug('Coverage ran: Found coverage-final.json with content.');
-              
-              // Try to parse coverage percentage from output
-              const coverageSummaryRegex = /Statements\s*:\s*([\d.]+)%/; // Regex for Vitest coverage summary
+
+              // Updated Regex for Vitest v1.6.1 output
+              // Looks for the line starting with "All files" and captures the first number after the pipe
+              const coverageSummaryRegex = /^All files\s*\|\s*([\d.]+)/m;
               const match = output.match(coverageSummaryRegex);
               if (match && match[1]) {
                 coverageValue = parseFloat(match[1]);
                 logger.debug(`Parsed coverage value: ${coverageValue}%`);
                 errorMsg = null; // Clear error if value is parsed
               } else {
-                logger.warn('Coverage file found, but could not parse percentage from output summary.');
+                logger.warn('Coverage file found, but could not parse percentage from output summary (regex mismatch).');
+                logger.debug(`Coverage Output Snippet:\n${output.substring(0, 500)}`); // Log beginning of output
                 errorMsg = 'Could not parse coverage percentage from output';
               }
             } else {

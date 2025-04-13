@@ -1,0 +1,28 @@
+{
+  "_timestamp": 1744566226959,
+  "data": {
+    "buildMetrics": {
+      "admin": {
+        "success": false,
+        "duration": 0,
+        "output": "Build result unavailable"
+      },
+      "hours": {
+        "success": false,
+        "duration": 0,
+        "output": "Build result unavailable"
+      }
+    },
+    "steps": [
+      {
+        "name": "Package Build",
+        "phase": "Build",
+        "success": true,
+        "duration": 4424,
+        "error": null,
+        "timestamp": "2025-04-13T17:43:46.957Z"
+      }
+    ],
+    "timestamp": 1744566226959
+  }
+}

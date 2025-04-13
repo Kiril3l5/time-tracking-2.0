@@ -139,8 +139,8 @@ function findUnusedDependencies(packageDirs) {
       // Log error and potentially add to a results object if you want to track failures
       logger.warn(`Failed to run depcheck in ${path.relative(process.cwd(), dir)}: ${error.message}`);
       // Optionally capture the error details
-      // if (error.stderr) logger.debug(`Depcheck stderr: ${error.stderr}`);
-      // if (error.stdout) logger.debug(`Depcheck stdout: ${error.stdout}`);
+      if (error.stderr) logger.debug(`Depcheck stderr in ${path.relative(process.cwd(), dir)}:\n${error.stderr}`);
+      if (error.stdout) logger.debug(`Depcheck stdout in ${path.relative(process.cwd(), dir)}:\n${error.stdout}`);
       return { 
          packagePath: path.relative(process.cwd(), path.join(dir, 'package.json')), 
          error: error.message 
@@ -349,35 +349,42 @@ export async function analyzeDeadCode(options) {
     if (analyzeDependencies && pkgDirs.length > 0) {
       logger.info('Analyzing unused dependencies...');
       const depsResult = findUnusedDependencies(pkgDirs);
-      analysisResults.unusedDependencies = depsResult.unusedDependencies;
-      if (!depsResult.success) { // Although findUnusedDependencies currently always returns true, check anyway
+      // Filter out errors before processing
+      const validDepsResults = depsResult.unusedDependencies.filter(r => r && !r.error);
+      analysisResults.unusedDependencies = validDepsResults; // Store only valid results
+      
+      if (!depsResult.success) { // Check overall success flag from the function
         allAnalysesSucceeded = false;
          analysisResults.error = analysisResults.error ? `${analysisResults.error}; Dependency check failed` : 'Dependency check failed'; 
         logger.warn('Unused dependency analysis reported failure or issues.');
+        // Log specific errors if available
+        if (depsResult.errors && depsResult.errors.length > 0) {
+            depsResult.errors.forEach(e => logger.warn(` - Error in ${e.packagePath}: ${e.error}`));
+        }
       } else {
-        const totalUnused = depsResult.unusedDependencies.reduce(
-          (sum, pkg) => sum + pkg.unusedDependencies.length, 0
+        const totalUnused = validDepsResults.reduce(
+          (sum, pkg) => sum + (pkg.unusedDependencies ? pkg.unusedDependencies.length : 0), 0
         );
-        logger.info(`Found ${totalUnused} unused dependencies across ${depsResult.unusedDependencies.length} packages`);
+        logger.info(`Found ${totalUnused} unused dependencies across ${validDepsResults.length} packages`);
       }
     }
     
     // Set overall success based on sub-analyses
     analysisResults.success = allAnalysesSucceeded;
 
-    // Estimate potential bundle size reduction
+    // Estimate potential bundle size reduction (using valid results)
     const potentialBundleSizeReduction = estimateBundleSizeImpact(analysisResults);
     
     // Prepare final results object to be returned
     const finalResults = {
-      ...analysisResults, // Includes success, unusedExports, unusedDependencies, error
+      ...analysisResults, // Includes success, unusedExports, potentially filtered unusedDependencies, error
       summary: {
         unusedExports: analysisResults.unusedExports.length,
         unusedDependencies: analysisResults.unusedDependencies.reduce(
-          (sum, pkg) => sum + pkg.unusedDependencies.length, 0
+          (sum, pkg) => sum + (pkg.unusedDependencies ? pkg.unusedDependencies.length : 0), 0
         ),
         totalIssues: analysisResults.unusedExports.length + 
-                    analysisResults.unusedDependencies.reduce((sum, pkg) => sum + pkg.unusedDependencies.length, 0)
+                    analysisResults.unusedDependencies.reduce((sum, pkg) => sum + (pkg.unusedDependencies ? pkg.unusedDependencies.length : 0), 0)
       },
       potentialBundleSizeReduction
     };

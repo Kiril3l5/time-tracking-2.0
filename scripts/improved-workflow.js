@@ -375,8 +375,6 @@ class Workflow {
         this.logger.info(`Admin App: ${this.previewUrls.admin}`);
       }
       
-      this.logger.info(styled.bold(`${colors.green}✨ Dashboard opened in your browser${colors.reset}`));
-      
       // Show a summary of warnings by category
       if (this.workflowWarnings && this.workflowWarnings.length > 0) {
         // Group warnings by phase/category
@@ -691,7 +689,7 @@ class Workflow {
             silentMode: true,
             promptFn: null,
             timeout: {
-              docsFreshness: 30000,
+              docsFreshness: 60000,
               docsQuality: 30000,
               bundleSize: 60000,
               deadCode: 45000,
@@ -1086,17 +1084,22 @@ class Workflow {
             recordStep: (name, phase, success, duration, error) => this.recordWorkflowStep(name, phase, success, duration, error),
             phase: 'Build'
           });
+          
+          // ---> DEBUG LOGGING START <---
+          this.logger.debug(`Raw buildResult for ${packageName}:`);
+          this.logger.debug(JSON.stringify(buildResult, null, 2));
+          // ---> DEBUG LOGGING END <---
 
           // Store the detailed build result for metrics
-          if (buildResult && buildResult.results) {
+          if (buildResult) {
             this.metrics.packageMetrics[packageName] = {
               success: buildResult.success,
-              duration: buildResult.duration,
-              // Placeholder for parsed metrics:
-              // fileCount: buildResult.results.validation?.fileCount || 0,
-              // sizeBytes: buildResult.results.size?.sizeBytes || 0,
-              // formattedSize: buildResult.results.size?.formattedSize || 'N/A',
-              output: buildResult.results.build?.output || '' // Store raw output for now
+              duration: buildResult.duration || 0,
+              fileCount: buildResult.fileCount || 0,
+              sizeBytes: buildResult.totalSize || 0,
+              formattedSize: buildResult.totalSize ? this.formatBytes(buildResult.totalSize) : 'N/A',
+              warnings: buildResult.warnings || [],
+              error: buildResult.success ? null : (buildResult.error || 'Unknown build error')
             };
             this.logger.debug(`Stored metrics for ${packageName}: ${JSON.stringify(this.metrics.packageMetrics[packageName])}`);
           } else {
