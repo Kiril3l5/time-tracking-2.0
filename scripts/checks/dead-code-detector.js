@@ -103,39 +103,71 @@ function findUnusedExports(files) {
  */
 function findUnusedDependencies(packageDirs) {
   const unused = [];
+  const depcheckPromises = [];
   
-  for (const dir of packageDirs) {
+  // Helper function to run depcheck for a single directory
+  const runDepcheck = async (dir) => {
     try {
       const packageJsonPath = path.join(dir, 'package.json');
-      if (!fs.existsSync(packageJsonPath)) continue;
+      if (!fs.existsSync(packageJsonPath)) return null;
       
-      // Use depcheck to find unused dependencies
-      const output = execSync(`npx depcheck ${dir} --json`, {
+      logger.debug(`Running depcheck in: ${path.relative(process.cwd(), dir)}`);
+      // Run depcheck within the package directory itself
+      // Use --skip-missing=true to avoid errors for unresolved deps that might be provided by the workspace
+      const command = `npx depcheck . --json --skip-missing=true`; 
+      const output = execSync(command, {
         encoding: 'utf8',
+        cwd: dir, // Execute in the package directory
         stdio: ['ignore', 'pipe', 'pipe']
       });
       
       const depcheckResult = JSON.parse(output);
       const unusedDeps = [
-        ...Object.keys(depcheckResult.dependencies || {}).map(dep => ({ name: dep, type: 'dependency' })),
-        ...Object.keys(depcheckResult.devDependencies || {}).map(dep => ({ name: dep, type: 'devDependency' }))
+        ...(depcheckResult.dependencies || []).map(dep => ({ name: dep, type: 'dependency' })),
+        ...(depcheckResult.devDependencies || []).map(dep => ({ name: dep, type: 'devDependency' }))
+        // Consider adding peerDependencies and optionalDependencies if relevant
       ];
       
       if (unusedDeps.length > 0) {
-        unused.push({
-          packagePath: packageJsonPath,
+        return {
+          packagePath: path.relative(process.cwd(), packageJsonPath),
           unusedDependencies: unusedDeps
-        });
+        };
       }
+      return null;
     } catch (error) {
-      logger.warn(`Failed to check unused dependencies in ${dir}: ${error.message}`);
+      // Log error and potentially add to a results object if you want to track failures
+      logger.warn(`Failed to run depcheck in ${path.relative(process.cwd(), dir)}: ${error.message}`);
+      // Optionally capture the error details
+      // if (error.stderr) logger.debug(`Depcheck stderr: ${error.stderr}`);
+      // if (error.stdout) logger.debug(`Depcheck stdout: ${error.stdout}`);
+      return { 
+         packagePath: path.relative(process.cwd(), path.join(dir, 'package.json')), 
+         error: error.message 
+      }; 
     }
-  }
-  
-  return {
-    success: true,
-    unusedDependencies: unused
   };
+
+  // Run depcheck for all directories concurrently
+  for (const dir of packageDirs) {
+    depcheckPromises.push(runDepcheck(dir));
+  }
+
+  // Wait for all depcheck processes to complete
+  return Promise.all(depcheckPromises).then(results => {
+    const unused = results.filter(r => r && !r.error && r.unusedDependencies && r.unusedDependencies.length > 0);
+    const errors = results.filter(r => r && r.error);
+    
+    if (errors.length > 0) {
+       logger.warn(`Depcheck encountered errors in ${errors.length} directories.`);
+    }
+
+    return {
+      success: errors.length === 0, // Consider analysis successful if no errors occurred, even if unused deps were found
+      unusedDependencies: unused,
+      errors: errors // Include errors in the result for transparency
+    };
+  });
 }
 
 /**
