@@ -135,12 +135,10 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
       return { ...step, status: 'pending' };
     });
     
-    // Filter out build output from warnings
+    // Filter out informational messages treated as warnings
     workflowState.warnings = workflowState.warnings.filter(warning => {
-      const message = warning.message || '';
-      return !message.includes('Build output:') && 
-             !message.includes('Building package:') &&
-             !message.includes('Starting build for packages:');
+      // Keep warnings that don't have severity 'info'
+      return warning.severity !== 'info';
     });
     
     // Process advanced checks to ensure they have proper status

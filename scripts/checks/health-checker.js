@@ -162,10 +162,12 @@ export async function runChecks(options = {}) {
       });
     }
 
-    // Update success status - in development, only fail on syntax errors
+    // Update success status
+    // In development, only fail on critical syntax errors.
+    // Otherwise (CI/preview builds), fail if *any* issues were found.
     results.success = IS_DEVELOPMENT ? 
-      syntaxResults.success : 
-      results.issues.length === 0;
+      syntaxResults.success : // Keep original dev behavior (only fail on syntax)
+      results.issues.length === 0; // In other envs, fail if *any* issue exists
     
     results.duration = Date.now() - startTime;
 

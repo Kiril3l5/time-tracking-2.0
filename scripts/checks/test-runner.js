@@ -293,33 +293,47 @@ export async function runStandardTests(options = {}) {
       name: 'Test Coverage',
       command: 'pnpm run test:coverage',
       validator: (output) => {
-        // Check for the existence of the coverage-final.json file
         let coverageRan = false;
+        let coverageValue = null;
         const finalCoveragePath = path.join(process.cwd(), 'coverage', 'coverage-final.json');
+        let errorMsg = 'Coverage output file not found or empty';
 
         try {
           if (fs.existsSync(finalCoveragePath)) {
-            // Check if the file has substantial content (more than just an empty object)
             const stats = fs.statSync(finalCoveragePath);
-            if (stats.size > 10) { // Check if file size is greater than 10 bytes
-               coverageRan = true;
-               logger.debug('Coverage ran: Found coverage-final.json with content.');
+            if (stats.size > 10) { 
+              coverageRan = true;
+              logger.debug('Coverage ran: Found coverage-final.json with content.');
+              
+              // Try to parse coverage percentage from output
+              const coverageSummaryRegex = /Statements\s*:\s*([\d.]+)%/; // Regex for Vitest coverage summary
+              const match = output.match(coverageSummaryRegex);
+              if (match && match[1]) {
+                coverageValue = parseFloat(match[1]);
+                logger.debug(`Parsed coverage value: ${coverageValue}%`);
+                errorMsg = null; // Clear error if value is parsed
+              } else {
+                logger.warn('Coverage file found, but could not parse percentage from output summary.');
+                errorMsg = 'Could not parse coverage percentage from output';
+              }
             } else {
                logger.warn('Coverage ran: Found coverage-final.json but it seems empty.');
+               errorMsg = 'Coverage output file is empty';
             }
           } else {
             logger.warn(`Coverage did not run or output file not found at: ${finalCoveragePath}`);
+            errorMsg = 'Coverage output file not found';
           }
         } catch (error) {
-          logger.error(`Error checking for coverage-final.json: ${error.message}`);
+          logger.error(`Error checking/parsing coverage: ${error.message}`);
+          errorMsg = `Error accessing coverage data: ${error.message}`;
+          coverageRan = false; // Mark as not run if there was an access error
         }
         
-        // Return success based on whether the file was found with content
-        // The actual coverage value remains null as we are not parsing it
         return {
-          valid: coverageRan, // Step is valid only if coverage file exists and has content
-          coverage: null,     // Still null as we aren't parsing for a percentage
-          error: coverageRan ? null : 'Coverage output file not found or empty'
+          valid: coverageRan && coverageValue !== null, // Valid only if ran AND value was parsed
+          coverage: coverageValue, // Parsed coverage percentage or null
+          error: errorMsg // Detailed error message
         };
       }
     });

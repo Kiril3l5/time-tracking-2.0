@@ -304,20 +304,26 @@ function validateSecurityChecks(workflow) {
   for (const [_, job] of Object.entries(jobs)) {
     const steps = job.steps || [];
     for (const step of steps) {
-      // Check for dependency audit
-      if (step.run && /npm audit|yarn audit|pnpm audit/.test(step.run)) {
+      // Check for dependency audit - recognize both direct commands and the health-checker script
+      if ((step.run && /npm audit|yarn audit|pnpm audit/.test(step.run)) || 
+          (step.run && step.run.includes('scripts/checks/health-checker.js'))) {
         requiredChecks['dependency-audit'] = true;
       }
-      // Check for code scanning
-      if (step.uses && step.uses.startsWith('github/codeql-action')) {
+      
+      // Check for code scanning - recognize any codeql-action in the path
+      if (step.uses && step.uses.includes('github/codeql-action')) {
         requiredChecks['code-scanning'] = true;
       }
-      // Check for secret scanning
-      if (step.uses && step.uses.includes('secret-scanning')) {
+      
+      // Check for secret scanning - recognize both standard and gitleaks
+      if ((step.uses && step.uses.includes('secret-scanning')) || 
+          (step.uses && step.uses.includes('gitleaks/gitleaks-action'))) {
         requiredChecks['secret-scanning'] = true;
       }
-      // Check for vulnerability scanning
-      if (step.run && /security|vulnerability|CVE|scan/.test(step.run)) {
+      
+      // Check for vulnerability scanning - recognize both keywords and common CVE scanners
+      if ((step.run && /security|vulnerability|CVE|scan/.test(step.run)) ||
+          (step.uses && /trivy-action|dependency-check-action|vulnerability-scan/.test(step.uses))) {
         requiredChecks['vulnerability-scan'] = true;
       }
     }

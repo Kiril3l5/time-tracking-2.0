@@ -343,7 +343,9 @@ function analyzeFile(content, filePath) {
     analysis.issues.push('File is too short (less than 100 characters)');
   }
 
-  if (!content.includes('# ')) {
+  // Simple H1 Check: Clean the start of the content and check if it starts with '# '
+  const cleanedContentStart = content.replace(/^\uFEFF/, '').trimStart(); // Remove BOM, trim leading whitespace
+  if (!cleanedContentStart.startsWith('# ')) {
     analysis.issues.push('Missing main heading (H1)');
   }
 

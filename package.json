@@ -143,6 +143,7 @@
     "@vitest/ui": "^1.6.1",
     "autoprefixer": "^10.4.21",
     "date-fns": "^4.1.0",
+    "depcheck": "^1.4.7",
     "eslint": "^8.57.1",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-jest-dom": "^5.1.0",
@@ -160,16 +161,15 @@
     "react-hook-form": "^7.54.2",
     "react-router-dom": "^7.3.0",
     "tailwindcss": "^4.0.14",
+    "ts-prune": "^0.10.3",
     "typescript": "^5.3.3",
     "typescript-eslint": "^7.18.0",
-    "vite": "^6.2.4",
+    "vite": "^6.2.6",
     "vite-plugin-static-copy": "^2.3.0",
-    "vitest": "^1.6.0",
+    "vitest": "^1.6.1",
     "webpack-cli": "^6.0.1",
     "zod": "^3.24.2",
-    "zustand": "^5.0.3",
-    "ts-prune": "^0.10.3",
-    "depcheck": "^1.4.7"
+    "zustand": "^5.0.3"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
@@ -179,5 +179,10 @@
     "open": "^9.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild": "^0.25.2"
+    }
   }
 }

@@ -518,7 +518,7 @@ export async function runDeadCodeCheck(options = {}) {
  * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
  */
 export async function runDocsQualityCheck(options = {}) {
-  const { verbose = false, silentMode = false } = options;
+  const { verbose = false, silentMode = false, recordWarning } = options;
   
   // Update silent mode setting
   silentLogger.setSilent(silentMode);
@@ -536,23 +536,59 @@ export async function runDocsQualityCheck(options = {}) {
         }),
         30000,
         "Documentation quality check",
-        { success: true },
+        { success: true, issues: [] },
         options
       );
       
-      const issuesCount = result.totalIssues || 0;
-      if (issuesCount > 0) {
-        silentLogger.warn(`Found ${issuesCount} documentation quality issues.`);
-        return { 
-          success: false, 
-          data: result,
-          warning: true,
-          message: `Found ${issuesCount} documentation quality issues` 
-        };
+      // Check for execution error first
+      if (result.error && !result.success) {
+         silentLogger.warn(`Documentation quality check failed to run: ${result.error}`);
+         if (recordWarning) {
+            recordWarning(`Docs Quality check failed: ${result.error}`, 'Validation', 'Documentation');
+         }
+         return { success: false, error: result.error };
+      }
+
+      // Determine success based *only* on the underlying check's result.success
+      const checkPassed = result.success === true;
+      
+      // Log warnings if the underlying check found issues
+      const issuesFound = result.issues && Array.isArray(result.issues) && result.issues.length > 0;
+      
+      // Record warnings ONLY if the underlying check actually found issues
+      if (issuesFound) {
+        silentLogger.warn(`Found ${result.issues.length} documentation quality issues.`);
+        // Record each specific issue as a warning
+        if (recordWarning && typeof recordWarning === 'function') {
+          result.issues.forEach(fileIssue => {
+            if (fileIssue.issues && Array.isArray(fileIssue.issues)) {
+              fileIssue.issues.forEach(issueText => {
+                // Construct message with file context
+                const message = `Documentation issue: ${issueText}`; 
+                const filePath = fileIssue.file || null;
+                recordWarning(message, 'Validation', 'Documentation', 'warning', filePath);
+              });
+            }
+          });
+        }
+        // NOTE: Do NOT return success: false here anymore just because issues were found.
       }
       
-      silentLogger.success("Documentation quality check passed.");
-      return { success: true, data: result };
+      // Log the final status based on the underlying check
+      if (checkPassed) {
+        silentLogger.success("Documentation quality check passed.");
+      } else {
+        silentLogger.warn(`Documentation quality check reported issues or failed.`);
+      }
+      
+      // Return the actual success status from analyzeDocumentation,
+      // include the data, and set the warning flag if issues were found.
+      return { 
+        success: checkPassed, 
+        data: result,
+        warning: issuesFound, // Mark as warning if issues found
+        message: issuesFound ? `Found ${result.issues.length} documentation quality issues` : 'Documentation quality check passed' 
+      };
     } else {
       // Fallback to command line
       silentLogger.info("Using command line fallback for documentation quality check");
@@ -563,7 +599,11 @@ export async function runDocsQualityCheck(options = {}) {
       return { success: true };
     }
   } catch (error) {
-    silentLogger.warn(`Documentation quality check error: ${error.message}`);
+    // Catch errors during the execution of runDocsQualityCheck itself
+    silentLogger.warn(`Documentation quality check execution error: ${error.message}`);
+    if (recordWarning) {
+        recordWarning(`Docs Quality check execution failed: ${error.message}`, 'Validation', 'Documentation', 'error');
+    }
     return { 
       success: false, 
       error: error.message 
@@ -984,21 +1024,19 @@ export async function runAllAdvancedChecks(options = {}) {
   const workflowState = getWorkflowState();
   
   try {
-    // If typescript was already run (e.g. in validation phase), don't mark it as skipped
-    if (workflowState.checkResults && workflowState.checkResults.typescript) {
-      results.results.typescript = {
-        ...workflowState.checkResults.typescript,
-        skipped: false // Explicitly set skipped to false
-      };
+    // Initialize results.results with existing state from workflowState if available
+    // This ensures checks run earlier are not overwritten by skip logic later
+    results.results = { ...(workflowState.checkResults || {}) };
+
+    // If typescript was already run, ensure skipped: false is set
+    if (results.results.typescript) {
+      results.results.typescript.skipped = false;
       alreadyRunChecks.add('typescript');
     }
     
-    // If lint was already run (e.g. in validation phase), don't mark it as skipped
-    if (workflowState.checkResults && workflowState.checkResults.lint) {
-      results.results.lint = {
-        ...workflowState.checkResults.lint,
-        skipped: false // Explicitly set skipped to false
-      };
+    // If lint was already run, ensure skipped: false is set
+    if (results.results.lint) {
+      results.results.lint.skipped = false;
       alreadyRunChecks.add('lint');
     }
     
@@ -1147,9 +1185,9 @@ export async function runAllAdvancedChecks(options = {}) {
       await runChecksSequentially(checkPromises, results);
     }
     
-    // Mark skipped checks explicitly
+    // Mark skipped checks explicitly, ONLY if no result exists from previous steps.
     checks.forEach(check => {
-      if (check.skip && !alreadyRunChecks.has(check.id)) {
+      if (check.skip && !alreadyRunChecks.has(check.id) && !results.results[check.id]) {
         results.results[check.id] = { 
           success: true, 
           skipped: true,
@@ -1157,38 +1195,6 @@ export async function runAllAdvancedChecks(options = {}) {
         };
       }
     });
-    
-    // Special case: If both typescript and lint checks are skipped via options but we have them from workflow state,
-    // make sure they don't get marked as skipped
-    if (alreadyRunChecks.has('typescript')) {
-      const existingResult = results.results.typescript || {};
-      results.results.typescript = {
-        ...existingResult,
-        skipped: false // Explicitly ensure skipped is false
-      };
-    }
-    
-    if (alreadyRunChecks.has('lint')) {
-      const existingResult = results.results.lint || {};
-      results.results.lint = {
-        ...existingResult,
-        skipped: false // Explicitly ensure skipped is false
-      };
-    }
-    
-    // Save results to workflow state
-    if (workflowState.ready) {
-      workflowState.checkResults = {
-        ...(workflowState.checkResults || {}),
-        ...results.results
-      };
-      
-      try {
-        await workflowState.save();
-      } catch (error) {
-        silentLogger.debug(`Failed to save workflow state: ${error.message}`);
-      }
-    }
   } catch (error) {
     silentLogger.error(`Advanced checks error: ${error.message}`);
     results.error = error.message;

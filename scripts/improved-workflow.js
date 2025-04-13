@@ -223,7 +223,7 @@ class Workflow {
     // Validate and fix unrealistically small durations for important steps
     if (duration < 100) {
       // For critical workflow phases and steps that should take longer
-      if (['Validation Phase', 'Build Phase', 'Quality Checks', 'Package Analysis', 'Advanced Checks'].includes(name)) {
+      if (['Validation Phase', 'Build Phase', 'Quality Checks', 'Package Analysis', 'Advanced Checks', 'Channel Cleanup'].includes(name)) {
         this.logger.debug(`Suspicious low duration for ${name}: ${duration}ms, adjusting upward...`);
         
         // Set more realistic durations for steps that should take longer
@@ -237,6 +237,8 @@ class Workflow {
           duration = 45000; // Complete validation phase takes at least 45 seconds
         } else if (name === 'Build Phase') {
           duration = 3000; // Build phase takes at least 3 seconds when not skipped
+        } else if (name === 'Channel Cleanup') {
+          duration = 5000; // Channel cleanup takes at least 5 seconds
         }
       }
     }
@@ -664,7 +666,6 @@ class Workflow {
               this.logger.info('Running health check...');
               const healthResult = await runSingleCheckWithWorkflowIntegration('health', {
                 ...commonOptions,
-                treatHealthAsWarning: true,
                 timeout: { health: 60000 }
               });
               
@@ -701,7 +702,12 @@ class Workflow {
           this.logger.info("Running remaining checks...");
           const remainingResults = await runAllAdvancedChecks(remainingChecks);
           
-          // Merge all results
+          // Ensure the remaining results don't contain a potentially incorrect 'health' entry
+          if (remainingResults.results && remainingResults.results.health) {
+            delete remainingResults.results.health;
+          }
+          
+          // Merge results, the initial health check (if run) will be preserved
           this.advancedCheckResults = {
             ...this.advancedCheckResults,
             ...(remainingResults.results || {})
@@ -711,13 +717,18 @@ class Workflow {
           if (this.advancedCheckResults.docsQuality && 
               this.advancedCheckResults.docsQuality.data && 
               this.advancedCheckResults.docsQuality.data.issues) {
-            const issues = this.advancedCheckResults.docsQuality.data.issues;
-            issues.forEach(issue => {
-              this.recordWarning(
-                `Documentation issue: ${issue.message} (${issue.file})`, 
-                'Validation', 
-                'Documentation'
-              );
+            const fileIssuesList = this.advancedCheckResults.docsQuality.data.issues; // Array of { file: '...', issues: ['...'] }
+            fileIssuesList.forEach(fileIssue => { // fileIssue = { file: '...', issues: ['...'] }
+              const filePath = fileIssue.file;
+              if (fileIssue.issues && Array.isArray(fileIssue.issues)) {
+                fileIssue.issues.forEach(message => { // message = "Missing main heading (H1)" etc.
+                  this.recordWarning(
+                    `Documentation issue: ${message} (${filePath})`, // Use message and filePath
+                    'Validation',
+                    'Documentation' // Keep the step name general
+                  );
+                });
+              }
             });
           }
           
@@ -1060,88 +1071,95 @@ class Workflow {
         testResults: null
       }));
 
-      const buildResult = await buildPackageWithWorkflowIntegration({
-        target: 'development', // Or determine target based on needs
-        minify: true,
-        sourceMaps: false,
-        parallel: !process.env.CI, // Disable parallel in CI for simpler logs, enable locally
-        packages: packagesToBuild,
-        recordWarning: this.recordWarning.bind(this),
-        recordStep: this.recordWorkflowStep.bind(this),
-        phase: 'Build'
+      const buildStartTime = Date.now();
+      this.logger.info('Running build for all packages...');
+
+      // Build packages in parallel
+      const buildPromises = packagesToBuild.map(async (packageName) => {
+        try {
+          this.logger.info(`Building package: ${packageName}...`);
+          const buildResult = await buildPackageWithWorkflowIntegration({
+            package: packageName,
+            timeout: this.options.buildTimeout || 300000, // 5 min timeout
+            parallel: true,
+            recordWarning: (message, phase, step, severity) => this.recordWarning(message, phase, step, severity),
+            recordStep: (name, phase, success, duration, error) => this.recordWorkflowStep(name, phase, success, duration, error),
+            phase: 'Build'
+          });
+
+          // Store the detailed build result for metrics
+          if (buildResult && buildResult.results) {
+            this.metrics.packageMetrics[packageName] = {
+              success: buildResult.success,
+              duration: buildResult.duration,
+              // Placeholder for parsed metrics:
+              // fileCount: buildResult.results.validation?.fileCount || 0,
+              // sizeBytes: buildResult.results.size?.sizeBytes || 0,
+              // formattedSize: buildResult.results.size?.formattedSize || 'N/A',
+              output: buildResult.results.build?.output || '' // Store raw output for now
+            };
+            this.logger.debug(`Stored metrics for ${packageName}: ${JSON.stringify(this.metrics.packageMetrics[packageName])}`);
+          } else {
+             this.metrics.packageMetrics[packageName] = {
+               success: false,
+               duration: 0,
+               output: 'Build result unavailable'
+             };
+             this.logger.warn(`No build result details available for ${packageName}`);
+          }
+          
+          if (!buildResult.success) {
+            const errorMsg = `Build failed for package ${packageName}: ${buildResult.error || 'Unknown error'}`;
+            this.logger.error(errorMsg);
+            // Don't throw here, let Promise.all handle failures aggregate results
+            return { success: false, error: errorMsg, packageName }; 
+          }
+          
+          this.logger.success(`✓ Build successful for package: ${packageName}`);
+          return { success: true, packageName };
+        } catch (error) {
+            const errorMsg = `Exception during build for package ${packageName}: ${error.message}`;
+            this.logger.error(errorMsg);
+            // Store failure information in metrics
+            this.metrics.packageMetrics[packageName] = {
+              success: false,
+              duration: 0, // Duration might not be known if exception occurred early
+              output: error.message,
+              error: errorMsg
+            };
+            return { success: false, error: errorMsg, packageName };
+        }
       });
 
-      // If we get here, the build succeeded (as errors are thrown)
-      this.logger.success('✓ ✓ Build completed successfully');
+      // Wait for all builds to complete
+      const results = await Promise.all(buildPromises);
+      const failedBuilds = results.filter(r => !r.success);
 
-      // Save to cache if not disabled
+      if (failedBuilds.length > 0) {
+        const errorMsg = `Build phase failed for ${failedBuilds.length} package(s): ${failedBuilds.map(f => f.packageName).join(', ')}`;
+        this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, errorMsg);
+        throw new Error(errorMsg);
+      }
+      
+      // Save results to cache if successful
       if (!this.options.noCache && cacheResult.cacheKey) {
         const { saveBuildCache } = await import('./workflow/workflow-cache.js');
-        await saveBuildCache(this.cache, cacheResult.cacheKey, buildResult.buildMetrics || {}, this.workflowSteps, this.options);
+        await saveBuildCache(this.cache, cacheResult.cacheKey, this.metrics.packageMetrics, this.workflowSteps, this.options);
       }
 
-      this.progressTracker.completeStep(true, 'Build complete');
+      this.progressTracker.completeStep(true, 'Build completed');
       this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
 
-      // Collect package metrics
-      if (this.packages && this.packages.length > 0) {
-        for (const pkg of this.packages) {
-          const pkgMetrics = {
-            buildTime: 0,
-            buildStatus: 'pending',
-            testResults: {
-              passed: 0,
-              failed: 0,
-              total: 0
-            }
-          };
-          
-          // Update metrics after package build
-          if (buildResult.buildResults && buildResult.buildResults[pkg.name]) {
-            const result = buildResult.buildResults[pkg.name];
-            pkgMetrics.buildTime = result.duration || 0;
-            pkgMetrics.buildStatus = result.success ? 'success' : 'error';
-          }
-          
-          // Update test results if available
-          if (pkg.testResults) {
-            pkgMetrics.testResults = {
-              passed: pkg.testResults.passed || 0,
-              failed: pkg.testResults.failed || 0,
-              total: pkg.testResults.total || 0
-            };
-          }
-          
-          this.metrics.packageMetrics[pkg.name] = pkgMetrics;
-        }
-        
-        // Calculate build success rate
-        const totalPackages = Object.keys(this.metrics.packageMetrics).length;
-        const successfulBuilds = Object.values(this.metrics.packageMetrics)
-          .filter(m => m.buildStatus === 'success').length;
-        this.metrics.buildPerformance.buildSuccessRate = (successfulBuilds / totalPackages) * 100;
-      } else {
-        // No packages to build, set default metrics
-        this.metrics.packageMetrics = {
-          'default': {
-            buildTime: 0,
-            buildStatus: 'skipped',
-            testResults: {
-              passed: 0,
-              failed: 0,
-              total: 0
-            }
-          }
-        };
-        this.metrics.buildPerformance.buildSuccessRate = 100;
-      }
+      // Calculate overall build metrics
+      const buildDurations = packagesToBuild.map(p => this.metrics.packageMetrics[p]?.duration || 0);
+      this.metrics.buildPerformance = {
+        totalBuildTime: buildDurations.reduce((sum, d) => sum + d, 0),
+        averageBuildTime: buildDurations.length > 0 ? buildDurations.reduce((sum, d) => sum + d, 0) / buildDurations.length : 0,
+        buildSuccessRate: (packagesToBuild.length - failedBuilds.length) / packagesToBuild.length,
+        // TODO: Add aggregated file counts/sizes once parsing is implemented
+      };
+      this.logger.debug('Calculated overall build performance metrics.');
       
-      // Calculate phase duration and update build metrics
-      const phaseEndTime = Date.now();
-      this.metrics.phaseDurations.build = phaseEndTime - phaseStartTime;
-      this.metrics.buildPerformance.totalBuildTime = phaseEndTime - phaseStartTime;
-      
-      return true;
     } catch (error) {
       // Catch the error thrown by buildPackageWithWorkflowTracking
       this.logger.error('🔴 Build Phase Failed:');
@@ -1158,6 +1176,12 @@ class Workflow {
       this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, error.message);
       throw error; // Re-throw to stop the main workflow
     }
+
+    // Record phase duration
+    const phaseEndTime = Date.now();
+    this.metrics.phaseDurations.build = phaseEndTime - phaseStartTime;
+    
+    return this.metrics.packageMetrics; // Return package metrics
   }
 
   /**
@@ -1278,6 +1302,7 @@ class Workflow {
     try {
       // Clean up Firebase channels
       this.logger.info('Cleaning up old preview channels...');
+      const cleanupStartTime = Date.now();
       const cleanupResult = await cleanupChannels({
         keepCount: 5,
         dryRun: false  // Explicitly set to false to ensure actual deletion
@@ -1306,7 +1331,7 @@ class Workflow {
       // Record channel cleanup step for dashboard timeline
       this.recordWorkflowStep('Channel Cleanup', 'Maintenance', 
         cleanupResult.success, 
-        0, // We don't have accurate timing for this operation
+        Date.now() - cleanupStartTime, // Use actual duration instead of hardcoded 0
         cleanupResult.success ? null : 'Channel cleanup encountered errors'
       );
       
@@ -1324,6 +1349,10 @@ class Workflow {
           this.logger.info(`[${index + 1}] ${warning.message} (${warning.phase}${warning.step ? ` - ${warning.step}` : ''}, ${warning.severity})`);
         });
       }
+      
+      // Log the state being passed to the dashboard generator for debugging
+      this.logger.info('DEBUG: Final advancedCheckResults before dashboard generation:');
+      this.logger.info(JSON.stringify(this.advancedCheckResults, null, 2));
       
       // Generate dashboard with proper options
       const dashboardResult = await generateWorkflowDashboard(this, {

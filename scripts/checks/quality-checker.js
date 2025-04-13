@@ -279,7 +279,7 @@ export class QualityChecker {
     // Check for missing common config files
     const configFiles = [
       { path: '.eslintrc.js', desc: 'ESLint configuration' },
-      { path: '.prettierrc', desc: 'Prettier configuration' },
+      { path: '.prettierrc.json', desc: 'Prettier configuration' },
       { path: 'tsconfig.json', desc: 'TypeScript configuration' },
       { path: '.gitignore', desc: 'Git ignore file' }
     ];

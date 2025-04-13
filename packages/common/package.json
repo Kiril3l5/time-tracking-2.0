@@ -42,6 +42,6 @@
     "storybook": "^8.6.6",
     "typescript": "^5.8.2",
     "uuid": "^11.1.0",
-    "vitest": "^3.0.9"
+    "vitest": "^1.6.1"
   }
 }

@@ -419,105 +419,168 @@ export class DashboardGenerator {
   }
 
   generateOverallStatus() {
-    const { metrics } = this.data;
-    if (!metrics || typeof metrics !== 'object') {
+    const { metrics, steps } = this.data;
+    
+    // If we don't have metrics or steps, show a minimal status
+    if (!metrics || typeof metrics !== 'object' || !Array.isArray(steps)) {
       return `
         <section class="overall-status">
           <h2>Overall Status</h2>
-          <div class="status-grid error">
-            <p class="status status-error">Error</p>
-            <p>Metrics data is not available or invalid.</p>
+          <div class="status-grid">
+            <div class="status-item">
+              <h4>Status</h4>
+              <div class="value status-pending">Unknown</div>
+            </div>
           </div>
         </section>
       `;
     }
-
-    // Calculate total duration from start/end time or phase durations
-    let totalDuration = metrics.duration || 0;
-    if (totalDuration === 0 && metrics.phaseDurations) {
-      // Sum up all phase durations
-      totalDuration = Object.values(metrics.phaseDurations).reduce((sum, duration) => sum + (duration || 0), 0);
-    }
     
-    // If we still don't have a duration, try to calculate from start/end time
-    if (totalDuration === 0 && metrics.startTime && metrics.endTime) {
-      totalDuration = metrics.endTime - metrics.startTime;
-    }
+    // Calculate total workflow duration
+    const duration = metrics.duration || metrics.totalDuration || 0;
     
-    const duration = this.formatDuration(totalDuration);
+    // Get test results if available
+    const tests = metrics.testResults || {};
+    const testStats = tests.passed !== undefined && tests.total !== undefined
+      ? `${tests.passed}/${tests.total} tests`
+      : 'No test data';
     
-    // Extract build performance data
+    // Get build performance
     const buildPerformance = metrics.buildPerformance || {};
-    let buildPerformanceValue = 'N/A';
+    const buildTime = buildPerformance.totalBuildTime || (
+      // Try to get build time from steps if metrics don't have it
+      steps.find(step => step.name === 'Build Phase')?.duration || 0
+    );
     
-    if (buildPerformance.totalBuildTime) {
-      buildPerformanceValue = this.formatDuration(buildPerformance.totalBuildTime);
-    } else if (buildPerformance.buildSuccessRate) {
-      buildPerformanceValue = `${Math.round(buildPerformance.buildSuccessRate)}% success`;
-    } else if (metrics.packageMetrics) {
-      // Try to calculate from package metrics
-      const totalBuildTime = Object.values(metrics.packageMetrics)
-        .reduce((sum, pkg) => sum + (pkg.buildTime || 0), 0);
-      if (totalBuildTime > 0) {
-        buildPerformanceValue = this.formatDuration(totalBuildTime);
+    // Extract deployment status
+    const deployStep = steps.find(step => step.name === 'Deploy Phase');
+    const deployStatus = deployStep
+      ? (deployStep.result?.success === false ? 'failed' : 'success')
+      : 'pending';
+      
+    // Get build metrics - try multiple sources
+    let buildMetricsText = '';
+    
+    // Check for direct file count and size in packageMetrics
+    if (metrics.packageMetrics) {
+      let fileCount = 0;
+      let totalSize = 0;
+      
+      Object.values(metrics.packageMetrics).forEach(pkg => {
+        if (pkg.fileCount) fileCount += pkg.fileCount;
+        if (pkg.totalSize) totalSize += pkg.totalSize;
+      });
+      
+      if (fileCount > 0) {
+        const formattedSize = totalSize >= 1024 * 1024
+          ? `${(totalSize / (1024 * 1024)).toFixed(2)}MB`
+          : totalSize >= 1024
+            ? `${(totalSize / 1024).toFixed(2)}KB`
+            : `${totalSize}B`;
+            
+        buildMetricsText = `${fileCount} files, ${formattedSize}`;
       }
     }
     
-    // Extract test results data
-    const testResults = metrics.testResults || {};
-    let testCoverageValue = 'N/A'; // Default to N/A
-    
-    // Check if coverage is a valid number (including 0)
-    if (testResults.coverage !== null && testResults.coverage !== undefined && typeof testResults.coverage === 'number' && !isNaN(testResults.coverage)) {
-      testCoverageValue = `${testResults.coverage.toFixed(2)}%`; // Format valid number as percentage
-    } 
-    // Only fallback to passed/total if coverage is NOT a number (or null/undefined) AND tests actually ran
-    else if (testResults.passed !== undefined && testResults.total !== undefined && testResults.total > 0) {
-      testCoverageValue = `${testResults.passed}/${testResults.total} tests`;
-    }
-    // If coverage is null/undefined/NaN AND total tests is 0 or undefined, it remains N/A.
-
-    // More robust status handling
-    let deploymentStatus = 'pending';
-    if (metrics.deploymentStatus) {
-      if (typeof metrics.deploymentStatus === 'string') {
-        // Handle string status (legacy format)
-        const status = metrics.deploymentStatus.toLowerCase();
-        if (['success', 'error', 'warning', 'pending'].includes(status)) {
-          deploymentStatus = status;
-        }
-      } else if (typeof metrics.deploymentStatus === 'object' && metrics.deploymentStatus.status) {
-        // Handle object status (new format)
-        const status = metrics.deploymentStatus.status.toLowerCase();
-        if (['success', 'error', 'warning', 'pending'].includes(status)) {
-          deploymentStatus = status;
+    // If that didn't work, look for warnings about build output
+    if (!buildMetricsText) {
+      // Try to find build output warnings
+      const { warnings } = this.data;
+      if (warnings && Array.isArray(warnings)) {
+        const buildOutputWarning = warnings.find(w => 
+          (typeof w.message === 'string' && w.message.includes('Build output:')) ||
+          (typeof w === 'string' && w.includes('Build output:'))
+        );
+        
+        if (buildOutputWarning) {
+          const message = typeof buildOutputWarning === 'string' 
+            ? buildOutputWarning 
+            : buildOutputWarning.message;
+            
+          const match = message.match(/Build output:\s*(\d+)\s*files,\s*([\d.]+[KMG]?B)/i);
+          if (match) {
+            buildMetricsText = `${match[1]} files, ${match[2]}`;
+          }
         }
       }
     }
-
+    
+    // As a last resort, look for any build output warnings
+    if (!buildMetricsText) {
+      const { warnings } = this.data;
+      if (warnings && Array.isArray(warnings)) {
+        for (const w of warnings) {
+          const message = typeof w === 'string' ? w : w.message;
+          if (typeof message === 'string') {
+            const match = message.match(/(\d+)\s*files,\s*([\d.]+[KMG]?B)/i);
+            if (match) {
+              buildMetricsText = `${match[1]} files, ${match[2]}`;
+              break;
+            }
+          }
+        }
+      }
+    }
+    
+    // If we still don't have build metrics, use a default message
+    if (!buildMetricsText) {
+      buildMetricsText = 'No data available';
+    }
+    
     return `
       <section class="overall-status">
         <h2>Overall Status</h2>
         <div class="status-grid">
           <div class="status-item">
             <h4>Duration</h4>
-            <div class="value">${duration}</div>
+            <div class="value">${this.formatDuration(duration)}</div>
           </div>
           <div class="status-item">
             <h4>Build Performance</h4>
-            <div class="value">${buildPerformanceValue}</div>
+            <div class="value">${this.formatDuration(buildTime)}</div>
           </div>
           <div class="status-item">
             <h4>Test Coverage</h4>
-            <div class="value">${testCoverageValue}</div>
+            <div class="value">${testStats}</div>
           </div>
           <div class="status-item">
             <h4>Deployment</h4>
-            <div class="value status status-${deploymentStatus}">${deploymentStatus}</div>
+            <div class="value status status-${deployStatus}">${deployStatus}</div>
+          </div>
+          <div class="status-item build-metrics">
+            <h4>Build Output</h4>
+            <div class="value">
+              ${this.generatePackageBuildMetrics(metrics.packageMetrics)}
+            </div>
           </div>
         </div>
       </section>
     `;
+  }
+
+  generatePackageBuildMetrics(packageMetrics) {
+    if (!packageMetrics || Object.keys(packageMetrics).length === 0) {
+      return '<p>No package build data available</p>';
+    }
+
+    let html = '<ul class="package-metrics-list">';
+    for (const [packageName, metrics] of Object.entries(packageMetrics)) {
+      const statusClass = metrics.success ? 'success' : 'error';
+      const duration = metrics.duration ? this.formatDuration(metrics.duration) : 'N/A';
+      // For now, just show success/fail and duration. Add more detail when parsing is implemented.
+      // const details = metrics.formattedSize ? `${metrics.fileCount} files, ${metrics.formattedSize}` : 'Details N/A'; 
+      html += `
+        <li>
+          <strong>${this.escapeHtml(packageName)}:</strong> 
+          <span class="status status-${statusClass}">${metrics.success ? 'Success' : 'Failed'}</span> 
+          (${duration})
+          ${metrics.error ? `<p class="error-detail">Error: ${this.escapeHtml(metrics.error)}</p>` : ''}
+          ${this.options.verbose && metrics.output ? `<pre class="build-output">${this.escapeHtml(metrics.output)}</pre>` : ''} 
+        </li>
+      `;
+    }
+    html += '</ul>';
+    return html;
   }
 
   generateIssues() {
@@ -811,6 +874,27 @@ export class DashboardGenerator {
         <h2>Advanced Checks</h2>
         <div class="advanced-checks-grid">
           ${checks.map(([name, check]) => {
+            // Special handling for health check
+            if (name === 'health' && check && check.data && check.data.issues && check.data.issues.length > 0) {
+              const issues = check.data.issues;
+              const statusClass = 'warning';
+              const statusText = 'Warning';
+              
+              return `
+                <div class="check-card">
+                  <h3>Health</h3>
+                  <p class="status status-${statusClass}">${statusText}</p>
+                  <div class="check-issues">
+                    <h4>Issues</h4>
+                    <ul>
+                      ${issues.map(issue => `<li>${this.escapeHtml(issue)}</li>`).join('')}
+                    </ul>
+                  </div>
+                </div>
+              `;
+            }
+            
+            // Handle all other checks normally
             // Extract the most useful error information
             let errorDetails = '';
             if (check.status === 'error' && check.data) {
