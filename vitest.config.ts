@@ -40,7 +40,36 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      reportsDirectory: './coverage'
+      reportsDirectory: './coverage',
+      include: [
+        'packages/*/src/**/*.{ts,tsx,js,jsx}', // Include all src files in packages
+        'scripts/**/*.{ts,js}' // Optionally include scripts if they have tests
+      ],
+      exclude: [
+        // Exclude test files themselves
+        '**/*.test.{ts,tsx,js,jsx}',
+        '**/*.spec.{ts,tsx,js,jsx}',
+        // Exclude config/setup files
+        '**/vitest.setup.ts',
+        '**/vitest.config.ts',
+        '**/*.config.{js,ts}',
+        '**/postcss.config.js',
+        '**/tailwind.config.js',
+        // Exclude main entry points if not testable
+        '**/main.{ts,tsx}',
+        // Exclude type definition files
+        '**/*.d.ts',
+        // Exclude storybook files
+        '**/*.stories.{ts,tsx}',
+        // Add any other specific files/directories to exclude
+        'packages/common/src/stories/**',
+        'packages/common/src/firebase/index.ts', // Often just exports
+        'packages/common/src/hooks/index.ts',
+        'packages/common/src/store/index.ts',
+        'packages/common/src/types/index.ts',
+        'packages/common/src/components/ui/icons/index.tsx',
+        'packages/common/src/components/forms/index.ts'
+      ]
     },
     deps: {
       // Fix for the n.endsWith issue - use string arrays instead of RegExp

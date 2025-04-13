@@ -343,9 +343,13 @@ function analyzeFile(content, filePath) {
     analysis.issues.push('File is too short (less than 100 characters)');
   }
 
-  // Simple H1 Check: Clean the start of the content and check if it starts with '# '
-  const cleanedContentStart = content.replace(/^\uFEFF/, '').trimStart(); // Remove BOM, trim leading whitespace
-  if (!cleanedContentStart.startsWith('# ')) {
+  // Simple H1 Check: More tolerant check for H1 heading
+  const trimmedContent = content.replace(/^\uFEFF/, '').trim(); // Remove BOM and trim all whitespace
+  const lines = trimmedContent.split(/\r?\n/); // Split into lines
+  
+  // Check if the *first non-empty line* starts with '# '
+  const firstNonEmptyLine = lines.find(line => line.trim().length > 0);
+  if (!firstNonEmptyLine || !firstNonEmptyLine.trim().startsWith('# ')) {
     analysis.issues.push('Missing main heading (H1)');
   }
 
