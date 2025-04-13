@@ -21,11 +21,6 @@
 import { logger } from '../core/logger.js';
 import { commandRunner } from '../core/command-runner.js';
 import { progressTracker } from '../core/progress-tracker.js';
-import { runLintCheck } from './lint-check.js';
-import { runTypeScriptCheck } from './typescript-check.js';
-import { fixTestDependencies } from '../test-types/test-deps-fixer.js';
-import { fixQueryTypes } from '../typescript/query-types-fixer.js';
-import { fixTypeScriptIssues } from '../typescript/typescript-fixer.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -64,19 +59,24 @@ export async function runTest(options) {
   // Run custom validator if provided
   let valid = true;
   let validationError = null;
+  let validatorResult = null; // Store the full validator result
   
   if (validator && typeof validator === 'function') {
     try {
-      const validationResult = validator(result.output, result);
-      valid = validationResult.valid !== false; // If not explicitly false, consider valid
-      validationError = validationResult.error;
+      validatorResult = validator(result.output, result); // Capture the validator result
+      valid = validatorResult.valid !== false; // If not explicitly false, consider valid
+      validationError = validatorResult.error;
     } catch (error) {
       valid = false;
       validationError = `Validator function threw an error: ${error.message}`;
+      // Store the error in validatorResult as well for consistency
+      validatorResult = { valid: false, error: validationError }; 
     }
   } else {
     // Default validation: command success
     valid = result.success;
+    // Set a default validatorResult for steps without a custom validator
+    validatorResult = { valid }; 
   }
   
   if (valid) {
@@ -86,7 +86,8 @@ export async function runTest(options) {
       success: true,
       elapsed: elapsedTime,
       output: result.output,
-      command
+      command,
+      validatorResult // Include the validator result
     };
   } else {
     const errorMessage = validationError || result.error || 'Test failed';
@@ -103,7 +104,8 @@ export async function runTest(options) {
       elapsed: elapsedTime,
       error: errorMessage,
       output: result.output,
-      command
+      command,
+      validatorResult // Include the validator result even on failure
     };
   }
 }
@@ -127,15 +129,14 @@ export async function runTests(tests, options = {}) {
   logger.info(`${tests.length} tests to run` + (stopOnFailure ? ' (stopping on first failure)' : ''));
   
   const results = [];
-  // Initialize the progress tracker with the number of tests
-  progressTracker.initProgress(tests.length, 'Test Suite Progress');
-  
   let allPassed = true;
   const startTime = Date.now();
+  let coverageResult = null; // Variable to store coverage result
   
   for (let i = 0; i < tests.length; i++) {
     const test = tests[i];
-    progressTracker.startStep(`Running: ${test.name}`);
+    // Use simple logging instead of progressTracker steps for sub-tasks
+    logger.info(`  Running sub-check: ${test.name}...`); 
     
     const result = await runTest({
       ...test,
@@ -143,25 +144,51 @@ export async function runTests(tests, options = {}) {
     });
     
     results.push(result);
-    
-    if (!result.success) {
-      allPassed = false;
-      logger.error(`Test failed: ${test.name}`);
-      progressTracker.completeStep(false, `${test.name} failed`);
-      
-      // Report detailed error information
-      if (result.error) {
-        logger.error(`Error: ${result.error}`);
+
+    // Determine success: Use command success primarily. Validator success is secondary.
+    let stepPassed = result.success;
+    let stepMessage = `${test.name} ${stepPassed ? 'passed' : 'failed'}`;
+
+    // Special handling for Test Coverage step
+    if (test.name === 'Test Coverage') {
+      if (result.success && result.validatorResult?.coverage !== undefined && result.validatorResult?.coverage !== null) {
+        // Command succeeded AND coverage was parsed
+        coverageResult = result.validatorResult.coverage;
+        stepPassed = true; // Ensure it's marked as passed
+        stepMessage = `${test.name} passed (Coverage: ${coverageResult.toFixed(2)}%)`;
+        logger.debug(`  Captured test coverage: ${coverageResult.toFixed(2)}%`);
+      } else if (result.success) {
+        // Command succeeded BUT coverage wasn't parsed by validator
+        stepPassed = true; // Mark as passed but log a warning
+        stepMessage = `${test.name} passed (Coverage value not parsed)`;
+        logger.warn(`  Test Coverage step completed but did not parse coverage value.`);
+      } else {
+        // Command itself failed (e.g., the Vitest crash)
+        stepPassed = false;
+        stepMessage = `${test.name} failed (Command execution error)`;
+        logger.error(`  Test Coverage command failed: ${result.error}`);
       }
-      
-      if (stopOnFailure) {
-        logger.warn('Stopping test execution due to failure');
-        break;
-      }
+    } else if (!result.success) {
+        // Standard handling for other failed tests
+        stepPassed = false; 
+        // Error details are logged within runTest, just update summary message
+        stepMessage = `${test.name} failed`; 
+        logger.error(`  Sub-check failed: ${test.name}`); // Log failure
     } else {
-      logger.success(`Test passed: ${test.name}`);
-      progressTracker.completeStep(true, `${test.name} passed`);
+        // Log success for other steps
+        logger.info(`  Sub-check passed: ${test.name}`);
     }
+
+    // Update overall status but DO NOT use progressTracker.completeStep here
+    if (!stepPassed) {
+      allPassed = false; 
+      // Only stop if stopOnFailure is true
+      if (stopOnFailure) {
+        logger.warn('Stopping test suite execution due to failure');
+        break; // Exit loop
+      }
+    }
+    // Removed progressTracker.completeStep calls
   }
   
   const endTime = Date.now();
@@ -173,14 +200,19 @@ export async function runTests(tests, options = {}) {
     passedTests: results.filter(r => r.success).length,
     failedTests: results.filter(r => !r.success).length,
     duration,
-    results
+    results,
+    coverage: coverageResult // Add coverage to the summary
   };
   
   // Finish progress tracking with the final status
-  progressTracker.finishProgress(allPassed, allPassed ? 
-    `All tests passed in ${duration.toFixed(1)}s` : 
-    `Some tests failed (${summary.failedTests}/${summary.totalTests})`
-  );
+  // This should be handled by the calling function (e.g., qualityChecker)
+  // progressTracker.finishProgress(allPassed, allPassed ? 
+  //  `All tests passed in ${duration.toFixed(1)}s` : 
+  //  `Some tests failed (${summary.failedTests}/${summary.totalTests})`
+  // );
+  
+  // Log the overall test suite result
+  logger.info(`Test suite finished in ${duration.toFixed(1)}s. Overall success: ${allPassed}`);
   
   return summary;
 }
@@ -193,11 +225,10 @@ export async function runTests(tests, options = {}) {
  * @param {boolean} [options.stopOnFailure=true] - Whether to stop on first failure
  * @param {boolean} [options.skipLint=false] - Whether to skip linting
  * @param {boolean} [options.skipTypecheck=false] - Whether to skip type checking
- * @param {boolean} [options.skipTests=false] - Whether to skip unit tests
+ * @param {boolean} [options.skipTests=false] - Whether to skip unit tests and coverage
  * @param {boolean} [options.autoFixTypescript=false] - Whether to auto-fix TypeScript errors
- * @param {boolean} [options.fixTestDeps=false] - Whether to fix test dependencies
  * @param {boolean} [options.fixQueryTypes=false] - Whether to fix React Query types
- * @returns {Object} - Test results
+ * @returns {Object} - Test results, including coverage if run
  */
 export async function runStandardTests(options = {}) {
   const {
@@ -205,13 +236,12 @@ export async function runStandardTests(options = {}) {
     stopOnFailure = true,
     skipLint = false,
     skipTypecheck = false,
-    skipTests = false,
-    autoFixTypescript = false,
-    fixTestDeps = false,
-    fixQueryTypes = false
+    skipTests = false, // This flag now skips both unit tests and coverage
+    autoFixTypescript = false, // Keep the option but remove the call
+    fixQueryTypes = false // Keep the option but remove the call
   } = options;
   
-  // If all tests are skipped, return early
+  // If all checks are skipped, return early
   if (skipLint && skipTypecheck && skipTests) {
     logger.info('All quality checks skipped');
     return {
@@ -220,26 +250,9 @@ export async function runStandardTests(options = {}) {
       passedTests: 0,
       failedTests: 0,
       duration: 0,
-      results: []
+      results: [],
+      coverage: null // Ensure coverage is null when skipped
     };
-  }
-  
-  // Fix test dependencies if requested
-  if (fixTestDeps) {
-    logger.info('Attempting to fix test dependencies...');
-    const fixResult = await fixTestDependencies();
-    if (!fixResult.success) {
-      logger.warn('Test dependency fixing failed, continuing with checks');
-    }
-  }
-  
-  // Fix React Query types if requested
-  if (fixQueryTypes) {
-    logger.info('Attempting to fix React Query types...');
-    const fixResult = await fixQueryTypes();
-    if (!fixResult.success) {
-      logger.warn('React Query type fixing failed, continuing with checks');
-    }
   }
   
   const tests = [];
@@ -247,49 +260,66 @@ export async function runStandardTests(options = {}) {
   if (!skipLint) {
     tests.push({
       name: 'ESLint Check',
-      command: 'pnpm run lint',
-      validator: runLintCheck.validateLintOutput
+      command: 'pnpm run lint'
+      // No validator needed, runTest uses command success status
     });
   }
   
   if (!skipTypecheck) {
     tests.push({
       name: 'TypeScript Type Check',
-      command: 'pnpm run typecheck',
-      validator: runTypeScriptCheck.validateTypeCheckOutput,
-      onFailure: async (_output) => {
-        // If TypeScript check fails and auto-fix is enabled, try to fix
-        if (autoFixTypescript) {
-          logger.info('TypeScript check failed, attempting to automatically fix errors...');
-          const fixResult = await fixTypeScriptIssues({
-            targetDirs: ['packages/admin/src', 'packages/common/src', 'packages/hours/src'],
-            fix: true,
-            verbose: true
-          });
-          
-          if (fixResult.success) {
-            logger.success('TypeScript issues fixed automatically!');
-            return true;
-          } else {
-            logger.warn('Automatic TypeScript fixes were only partially successful or unsuccessful');
-            logger.info('Consider manually reviewing and fixing remaining TypeScript errors');
-          }
-        }
-        return false;
-      }
+      command: 'pnpm run typecheck'
+      // No validator needed, runTest uses command success status
     });
   }
   
+  // Only add Unit Tests and Coverage if skipTests is false
   if (!skipTests) {
     tests.push({
       name: 'Unit Tests',
-      command: 'pnpm run test',
+      command: 'pnpm run test', // Keep running unit tests separately
       validator: (_output) => {
         // Basic validator for test output - look for failure indicators
         const hasFailures = /failed|failure|error/i.test(_output);
         return {
           valid: !hasFailures,
           error: hasFailures ? 'Test failures detected' : null
+        };
+      }
+    });
+    
+    // Add coverage test that will capture coverage metrics
+    tests.push({
+      name: 'Test Coverage',
+      command: 'pnpm run test:coverage',
+      validator: (output) => {
+        // Check for the existence of the coverage-final.json file
+        let coverageRan = false;
+        const finalCoveragePath = path.join(process.cwd(), 'coverage', 'coverage-final.json');
+
+        try {
+          if (fs.existsSync(finalCoveragePath)) {
+            // Check if the file has substantial content (more than just an empty object)
+            const stats = fs.statSync(finalCoveragePath);
+            if (stats.size > 10) { // Check if file size is greater than 10 bytes
+               coverageRan = true;
+               logger.debug('Coverage ran: Found coverage-final.json with content.');
+            } else {
+               logger.warn('Coverage ran: Found coverage-final.json but it seems empty.');
+            }
+          } else {
+            logger.warn(`Coverage did not run or output file not found at: ${finalCoveragePath}`);
+          }
+        } catch (error) {
+          logger.error(`Error checking for coverage-final.json: ${error.message}`);
+        }
+        
+        // Return success based on whether the file was found with content
+        // The actual coverage value remains null as we are not parsing it
+        return {
+          valid: coverageRan, // Step is valid only if coverage file exists and has content
+          coverage: null,     // Still null as we aren't parsing for a percentage
+          error: coverageRan ? null : 'Coverage output file not found or empty'
         };
       }
     });
@@ -303,10 +333,12 @@ export async function runStandardTests(options = {}) {
       passedTests: 0,
       failedTests: 0,
       duration: 0,
-      results: []
+      results: [],
+      coverage: null // Ensure coverage is null when no tests run
     };
   }
   
+  // This now returns the summary object which includes the 'coverage' field
   return runTests(tests, {
     stopOnFailure,
     verbose

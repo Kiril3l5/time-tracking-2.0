@@ -412,7 +412,15 @@ export async function runDeadCodeCheck(options = {}) {
       options
     );
     
+    // --- DEBUGGING: Log raw dead code analysis result ---
+    logger.debug('--- Raw analyzeDeadCode result START ---');
+    logger.debug(JSON.stringify(analyzeResult, null, 2));
+    logger.debug('--- Raw analyzeDeadCode result END ---');
+    // --- END DEBUGGING ---
+
     if (!analyzeResult) {
+      // Add specific logging if analyzeResult is null/undefined
+      logger.error('analyzeDeadCode function returned null or undefined result.');
       throw new Error("Dead code analysis returned no result");
     }
     
@@ -424,6 +432,7 @@ export async function runDeadCodeCheck(options = {}) {
     if (analyzeResult.unusedExports && analyzeResult.unusedExports.length > 0) {
       const count = analyzeResult.unusedExports.length;
       const maxAllowed = options.maxAllowedUnusedExports || 5;
+      logger.debug(`Found ${count} unused exports (Max allowed: ${maxAllowed})`); // Log count
       if (count > maxAllowed) {
         criticalIssues.push(`Found ${count} unused exports - exceeds maximum allowed (${maxAllowed})`);
       } else {
@@ -431,15 +440,17 @@ export async function runDeadCodeCheck(options = {}) {
       }
     }
     
-    // Check for empty files
+    // Check for empty files (Assuming analyzeResult structure might have this)
     if (analyzeResult.emptyFiles && analyzeResult.emptyFiles.length > 0) {
+      logger.debug(`Found ${analyzeResult.emptyFiles.length} empty files.`); // Log count
       criticalIssues.push(`Found ${analyzeResult.emptyFiles.length} empty files that should be removed`);
     }
     
-    // Check for duplicate code
+    // Check for duplicate code (Assuming analyzeResult structure might have this)
     if (analyzeResult.duplicates && analyzeResult.duplicates.length > 0) {
       const highDuplication = analyzeResult.duplicates.filter(d => d.percentage >= 80);
       const mediumDuplication = analyzeResult.duplicates.filter(d => d.percentage >= 50 && d.percentage < 80);
+      logger.debug(`Found ${analyzeResult.duplicates.length} duplicate code instances.`); // Log count
       
       if (highDuplication.length > 0) {
         criticalIssues.push(`Found ${highDuplication.length} instances of high code duplication (>80%)`);
@@ -449,25 +460,30 @@ export async function runDeadCodeCheck(options = {}) {
       }
     }
     
-    // Check for deprecated API usage
+    // Check for deprecated API usage (Assuming analyzeResult structure might have this)
     if (analyzeResult.deprecatedUsage && analyzeResult.deprecatedUsage.length > 0) {
+      logger.debug(`Found ${analyzeResult.deprecatedUsage.length} deprecated API uses.`); // Log count
       criticalIssues.push(`Found ${analyzeResult.deprecatedUsage.length} uses of deprecated APIs`);
     }
     
-    // Determine overall success
-    const success = criticalIssues.length === 0;
+    // Determine overall success based on BOTH command success AND critical issues
+    const overallSuccess = analyzeResult.success && criticalIssues.length === 0;
+    logger.debug(`Determined dead code check success: ${overallSuccess} (Analyze Result Success: ${analyzeResult.success}, Critical Issues: ${criticalIssues.length})`); // Log success decision
     
     // Construct detailed result
     const result = {
-      success,
+      success: overallSuccess, // Use the combined success flag
       criticalIssues,
       warnings,
       data: {
-        unusedExports: analyzeResult.unusedExports || [],
-        emptyFiles: analyzeResult.emptyFiles || [],
-        duplicates: analyzeResult.duplicates || [],
-        deprecatedUsage: analyzeResult.deprecatedUsage || []
-      }
+        // Ensure data exists even if analysis had errors
+        unusedExports: analyzeResult.data?.unusedExports || analyzeResult.unusedExports || [], 
+        emptyFiles: analyzeResult.data?.emptyFiles || analyzeResult.emptyFiles || [],
+        duplicates: analyzeResult.data?.duplicates || analyzeResult.duplicates || [],
+        deprecatedUsage: analyzeResult.data?.deprecatedUsage || analyzeResult.deprecatedUsage || []
+      },
+      // Include the underlying error message if the analysis itself failed
+      error: analyzeResult.success ? null : (analyzeResult.error || 'Dead code analysis sub-step failed') 
     };
     
     // Log results
@@ -479,7 +495,7 @@ export async function runDeadCodeCheck(options = {}) {
       silentLogger.warn("Dead code analysis found warnings:");
       warnings.forEach(warning => silentLogger.warn(`- ${warning}`));
     }
-    if (success && warnings.length === 0) {
+    if (overallSuccess && warnings.length === 0) { 
       silentLogger.success("Dead code analysis completed successfully with no issues.");
     }
     
@@ -838,13 +854,47 @@ export async function runProjectHealthCheck(options = {}) {
         options
       );
       
-      if (!result.success) {
-        silentLogger.warn(`Health checks found ${result.issues?.length || 0} issues.`);
+      // Ensure we have a valid result object
+      if (!result) {
+        silentLogger.warn("Health checks returned null or undefined result");
         return { 
-          success: false, 
+          success: false,
+          error: "Health checks returned null or undefined result",
+          warning: options.treatHealthAsWarning || false 
+        };
+      }
+      
+      // First check if it timed out
+      if (result.timedOut) {
+        silentLogger.warn("Health checks timed out");
+        return {
+          success: false,
+          error: "Health checks timed out",
+          warning: options.treatHealthAsWarning || false,
+          data: {
+            issues: ["Health checks timed out"]
+          }
+        };
+      }
+      
+      // Now validate result structure
+      if (!result.success) {
+        // Collect issues to provide meaningful error messages
+        let issuesMessage = '';
+        if (result.issues && result.issues.length > 0) {
+          issuesMessage = result.issues.join(', ');
+          silentLogger.warn(`Health checks found issues: ${issuesMessage}`);
+        } else {
+          issuesMessage = 'Unknown issue';
+          silentLogger.warn(`Health checks failed without specific issues`);
+        }
+
+        return { 
+          success: false,
+          error: `Health checks failed: ${issuesMessage}`,
           data: result,
           warning: options.treatHealthAsWarning || false,
-          message: `Health checks found ${result.issues?.length || 0} issues` 
+          message: `Health checks found issues: ${issuesMessage}` 
         };
       }
       
@@ -859,10 +909,20 @@ export async function runProjectHealthCheck(options = {}) {
       };
     }
   } catch (error) {
-    silentLogger.error(`Health check error: ${error.message}`);
+    const errorMessage = error ? error.message || "Unknown error" : "Null error received";
+    silentLogger.error(`Health check error: ${errorMessage}`);
+    
+    // Add more detailed debug logging
+    if (error && error.stack) {
+      silentLogger.debug(`Health check error stack: ${error.stack}`);
+    }
+    
     return { 
       success: false, 
-      error: error.message 
+      error: errorMessage,
+      data: {
+        issues: [`Health check error: ${errorMessage}`]
+      } 
     };
   }
 }

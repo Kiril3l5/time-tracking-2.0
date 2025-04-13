@@ -1,5 +1,5 @@
 {
-  "_timestamp": 1744204101827,
+  "_timestamp": 1744509359133,
   "data": {
     "advancedChecks": {
       "typescript": {
@@ -23,17 +23,19 @@
         "data": {
           "success": true,
           "issues": [
-            null
+            "pnpm audit command failed with exit code non-zero"
           ],
           "warnings": [],
-          "duration": 1199,
+          "duration": 1535,
           "stats": {
             "security": {
-              "critical": 0,
-              "high": 0,
-              "medium": 0,
-              "low": 0,
-              "total": 0
+              "vulnerabilities": {
+                "critical": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+                "total": 0
+              }
             },
             "environment": {
               "missingVars": [],
@@ -97,10 +99,17 @@
         "success": false,
         "data": {
           "success": false,
-          "invalidWorkflows": 1
+          "invalidWorkflows": 1,
+          "issues": [
+            "Your GitHub Actions workflow may be missing one or more required security checks:",
+            "- Dependency vulnerability scan (npm/yarn/pnpm audit)",
+            "- Code scanning via CodeQL or similar tool",
+            "- Secret scanning for leaked credentials",
+            "- Vulnerability scanning for CVEs"
+          ]
         },
         "warning": true,
-        "message": "Workflow validation failed with 0 issues"
+        "message": "Workflow validation failed with 1 invalid workflow file(s)"
       },
       "docsQuality": {
         "success": true,
@@ -117,7 +126,7 @@
             }
           ],
           "metrics": {
-            "totalWords": 74632,
+            "totalWords": 74646,
             "totalCodeBlocks": 457,
             "totalImages": 0
           }
@@ -142,25 +151,76 @@
         "success": true,
         "duration": 500,
         "error": null,
-        "timestamp": "2025-04-09T13:07:14.914Z"
+        "timestamp": "2025-04-13T01:54:49.947Z"
       },
       {
         "name": "Advanced Checks",
         "phase": "Validation",
         "success": true,
-        "duration": 34575,
+        "duration": 35674,
         "error": null,
-        "timestamp": "2025-04-09T13:08:21.825Z"
+        "timestamp": "2025-04-13T01:55:59.130Z"
       },
       {
         "name": "Quality Checks",
         "phase": "Validation",
         "success": true,
-        "duration": 66912,
+        "duration": 69184,
         "error": null,
-        "timestamp": "2025-04-09T13:08:21.826Z"
+        "timestamp": "2025-04-13T01:55:59.131Z"
       }
     ],
-    "timestamp": 1744204101827
+    "warnings": [
+      {
+        "message": "Missing Prettier configuration file (.prettierrc)",
+        "phase": "Validation",
+        "step": "Quality Checks",
+        "severity": "warning",
+        "timestamp": "2025-04-13T01:55:00.576Z"
+      },
+      {
+        "message": "Documentation issue: undefined (workflow\\preview-deployment-guide.md)",
+        "phase": "Validation",
+        "step": "Documentation",
+        "severity": "warning",
+        "timestamp": "2025-04-13T01:55:59.120Z"
+      },
+      {
+        "message": "Workflow validation error: Your GitHub Actions workflow may be missing one or more required security checks:",
+        "phase": "Validation",
+        "step": "Workflow Validation",
+        "severity": "error",
+        "timestamp": "2025-04-13T01:55:59.123Z"
+      },
+      {
+        "message": "Workflow validation error: - Dependency vulnerability scan (npm/yarn/pnpm audit)",
+        "phase": "Validation",
+        "step": "Workflow Validation",
+        "severity": "error",
+        "timestamp": "2025-04-13T01:55:59.126Z"
+      },
+      {
+        "message": "Workflow validation error: - Code scanning via CodeQL or similar tool",
+        "phase": "Validation",
+        "step": "Workflow Validation",
+        "severity": "error",
+        "timestamp": "2025-04-13T01:55:59.127Z"
+      },
+      {
+        "message": "Workflow validation error: - Secret scanning for leaked credentials",
+        "phase": "Validation",
+        "step": "Workflow Validation",
+        "severity": "error",
+        "timestamp": "2025-04-13T01:55:59.128Z"
+      },
+      {
+        "message": "Workflow validation error: - Vulnerability scanning for CVEs",
+        "phase": "Validation",
+        "step": "Workflow Validation",
+        "severity": "error",
+        "timestamp": "2025-04-13T01:55:59.129Z"
+      }
+    ],
+    "timestamp": 1744509359132
   }
 }

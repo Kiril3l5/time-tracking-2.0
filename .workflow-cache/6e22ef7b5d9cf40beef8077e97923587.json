@@ -1,20 +1,20 @@
 {
-  "_timestamp": 1744468900351,
+  "_timestamp": 1744509362941,
   "data": {
     "buildMetrics": {
-      "duration": 3571,
-      "totalSize": 1844080.64,
+      "duration": 3803,
+      "totalSize": 1823866.8800000001,
       "fileCount": 14,
       "packages": {
         "admin": {
-          "duration": 3566,
-          "size": 920668.1599999999,
+          "duration": 3796,
+          "size": 923545.6000000001,
           "fileCount": 7,
           "success": true
         },
         "hours": {
-          "duration": 3522,
-          "size": 923412.48,
+          "duration": 3721,
+          "size": 900321.28,
           "fileCount": 7,
           "success": true
         }
@@ -26,11 +26,11 @@
         "name": "Package Build",
         "phase": "Build",
         "success": true,
-        "duration": 3571,
+        "duration": 3803,
         "error": null,
-        "timestamp": "2025-04-12T14:41:40.350Z"
+        "timestamp": "2025-04-13T01:56:02.940Z"
       }
     ],
-    "timestamp": 1744468900351
+    "timestamp": 1744509362940
   }
 }

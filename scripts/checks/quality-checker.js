@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { runStandardTests } from './test-runner.js'; // Import the improved test runner
 
 /* global process */
 
@@ -62,27 +63,32 @@ export class QualityChecker {
   }
 
   /**
-   * Run tests
-   * @returns {Promise<Object>} Result of test execution
+   * Run tests and capture coverage
+   * @returns {Promise<Object>} Result of test execution including coverage
    */
   async runTests() {
-    logger.info('Running tests...');
-    const result = await this.commandRunner.runCommandAsync('pnpm test', { 
-      stdio: 'pipe',
-      ignoreError: true
+    logger.info('Running tests and coverage...');
+    // Use the improved runStandardTests which handles coverage
+    const testSummary = await runStandardTests({
+      // Pass any relevant options if needed, e.g., verbose
     });
     
     // Parse test output for failures
-    if (!result.success && result.output) {
-      this._parseTestOutput(result.output);
+    if (!testSummary.success && testSummary.results) {
+      testSummary.results.forEach(result => {
+        if (!result.success && result.output) {
+          this._parseTestOutput(result.output, result.name);
+        }
+      });
     }
     
-    return result;
+    // Return the complete summary, including coverage
+    return testSummary; 
   }
 
   /**
    * Run all quality checks
-   * @returns {Promise<Object>} Combined results with warnings
+   * @returns {Promise<Object>} Combined results with warnings and coverage
    */
   async runAllChecks() {
     // Clear previous warnings
@@ -90,7 +96,8 @@ export class QualityChecker {
     
     const lintResult = await this.runLinting();
     const typeResult = await this.runTypeChecking();
-    const testResult = await this.runTests();
+    // Run tests and get the summary including coverage
+    const testSummary = await this.runTests(); 
     
     // Add warnings from package.json dependencies check
     this._checkDependencies();
@@ -99,13 +106,15 @@ export class QualityChecker {
     this._checkConfigFiles();
     
     return {
-      success: lintResult.success && typeResult.success && testResult.success,
+      success: lintResult.success && typeResult.success && testSummary.success,
       results: {
         linting: lintResult,
         typeChecking: typeResult,
-        testing: testResult
+        testing: testSummary // Store the full test summary
       },
-      warnings: this.warnings
+      warnings: this.warnings,
+      // Explicitly add coverage here if needed, though it's already in testSummary
+      coverage: testSummary.coverage 
     };
   }
   
@@ -170,24 +179,32 @@ export class QualityChecker {
   /**
    * Parse test output for failures
    * @private
+   * @param {string} output - The output from a single test command
+   * @param {string} testName - The name of the test that generated the output
    */
-  _parseTestOutput(output) {
+  _parseTestOutput(output, testName = 'Unknown Test') {
     if (!output) return;
     
-    // Check for "FAIL" lines
+    // Check for "FAIL" lines or common error patterns
     const lines = output.split('\n');
-    let currentTest = '';
+    let currentTest = testName;
     
     for (const line of lines) {
+      // Vitest failure format
       if (line.includes('FAIL')) {
-        currentTest = line.replace('FAIL', '').trim();
-      } else if (currentTest && (line.includes('●') || line.includes('×'))) {
+        currentTest = line.replace(/FAIL/g, '').trim();
+      } else if (line.includes('Error:') || line.includes('failed')) {
+        // Capture the error line associated with the FAIL line
         this.warnings.push({
           message: `Test failure: ${line.trim()}`,
-          file: currentTest,
+          file: currentTest, // Use the file/test name from the FAIL line
           phase: 'Validation',
           step: 'Testing'
         });
+        // Reset currentTest after logging the error line for it
+        if (currentTest !== testName) {
+          currentTest = testName;
+        }
       }
     }
   }

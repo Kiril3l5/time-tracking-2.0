@@ -77,28 +77,89 @@ export async function runChecks(options = {}) {
     // 1. Security Vulnerability Scan
     const securityResults = await runSecurityScan(options);
     if (!securityResults.success) {
-      results.issues.push(securityResults.error);
+      if (securityResults.issues && securityResults.issues.length > 0) {
+        results.issues.push(...securityResults.issues);
+      } else {
+        // Handle case where securityResults.error is null
+        results.issues.push('Security scan failed with an unknown error');
+        logger.debug('Security scan returned unsuccessful but with no specific issues');
+      }
     }
-    results.stats.security = securityResults.stats;
+    
+    // Always capture security stats, even if check failed
+    results.stats.security = {
+      vulnerabilities: securityResults.stats || {
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+        total: 0
+      }
+    };
+
+    // If security check reported warnings, add them
+    if (securityResults.warnings && securityResults.warnings.length > 0) {
+      securityResults.warnings.forEach(warning => {
+        results.warnings.push(warning);
+      });
+    }
 
     // 2. Environment Validation
     const envResults = await validateEnvironment(options);
     if (!envResults.success && !IS_DEVELOPMENT) {
-      results.issues.push(...envResults.issues);
+      if (envResults.issues && envResults.issues.length > 0) {
+        results.issues.push(...envResults.issues);
+      } else {
+        results.issues.push('Environment validation failed with an unknown error');
+      }
     }
-    results.stats.environment = envResults.stats;
+    results.stats.environment = envResults.stats || {
+      missingVars: [],
+      invalidConfigs: []
+    };
+
+    // Add environment warnings if any
+    if (envResults.warnings && envResults.warnings.length > 0) {
+      envResults.warnings.forEach(warning => {
+        results.warnings.push(warning);
+      });
+    }
 
     // 3. Git Configuration Check
     const gitResults = await checkGitConfig(options);
     if (!gitResults.success && !IS_DEVELOPMENT) {
-      results.issues.push(...gitResults.issues);
+      if (gitResults.issues && gitResults.issues.length > 0) {
+        results.issues.push(...gitResults.issues);
+      } else {
+        results.issues.push('Git configuration check failed with an unknown error');
+      }
     }
-    results.stats.git = gitResults.stats;
+    results.stats.git = gitResults.stats || {
+      issues: []
+    };
+
+    // Add git warnings if any
+    if (gitResults.warnings && gitResults.warnings.length > 0) {
+      gitResults.warnings.forEach(warning => {
+        results.warnings.push(warning);
+      });
+    }
 
     // 4. Module Syntax Validation
     const syntaxResults = await validateModuleSyntax(options);
     if (!syntaxResults.success) {
-      results.issues.push(...syntaxResults.issues);
+      if (syntaxResults.issues && syntaxResults.issues.length > 0) {
+        results.issues.push(...syntaxResults.issues);
+      } else {
+        results.issues.push('Module syntax validation failed with an unknown error');
+      }
+    }
+
+    // Add syntax warnings if any
+    if (syntaxResults.warnings && syntaxResults.warnings.length > 0) {
+      syntaxResults.warnings.forEach(warning => {
+        results.warnings.push(warning);
+      });
     }
 
     // Update success status - in development, only fail on syntax errors
@@ -119,7 +180,10 @@ export async function runChecks(options = {}) {
 
   } catch (error) {
     logger.error('Health checks failed:', error);
-    results.issues.push(`Health check failed: ${error.message}`);
+    results.issues.push(`Health check failed: ${error ? error.message || 'Unknown error' : 'Null error received'}`);
+    logger.debug(`Health check error details: ${error ? error.stack || 'No stack trace' : 'Null error object'}`);
+    results.success = false;
+    results.duration = Date.now() - startTime;
     return results;
   }
 }
@@ -145,10 +209,31 @@ async function runSecurityScan(options = {}) {
 
   try {
     // Run npm audit
-    const { stdout, stderr } = await commandRunner.runCommand('pnpm audit --json');
+    const { stdout, stderr, success } = await commandRunner.runCommand('pnpm audit --json');
     
     if (stderr) {
       results.warnings.push(`Audit produced stderr: ${stderr}`);
+    }
+
+    if (!success) {
+      results.success = false;
+      results.issues.push(`pnpm audit command failed with exit code ${success === false ? 'non-zero' : success}`);
+      return results;
+    }
+
+    // Basic validation of JSON format before parsing
+    if (!stdout || typeof stdout !== 'string') {
+      results.success = false;
+      results.issues.push(`Invalid audit output: ${stdout === undefined ? 'undefined' : typeof stdout}`);
+      return results;
+    }
+
+    // Check if the output looks like JSON
+    const trimmedOutput = stdout.trim();
+    if (!trimmedOutput.startsWith('{') || !trimmedOutput.endsWith('}')) {
+      results.success = false;
+      results.issues.push(`Audit output is not valid JSON format: ${trimmedOutput.substring(0, 100)}...`);
+      return results;
     }
 
     let auditResults;
@@ -157,6 +242,15 @@ async function runSecurityScan(options = {}) {
     } catch (parseError) {
       results.success = false;
       results.issues.push(`Failed to parse audit results: ${parseError.message}`);
+      logger.debug(`JSON parse error details: ${parseError.stack}`);
+      logger.debug(`First 200 chars of stdout: ${stdout.substring(0, 200)}`);
+      return results;
+    }
+
+    // Validate expected structure exists
+    if (!auditResults || typeof auditResults !== 'object') {
+      results.success = false;
+      results.issues.push(`Audit results not in expected format: ${typeof auditResults}`);
       return results;
     }
 
@@ -185,6 +279,46 @@ async function runSecurityScan(options = {}) {
       if (vulns.low > 0) {
         results.warnings.push(`Found ${vulns.low} low severity vulnerabilities`);
       }
+    } else if (auditResults.vulnerabilities) {
+      // Alternative format for some pnpm versions
+      const vulnsCount = Object.keys(auditResults.vulnerabilities).length;
+      
+      // Calculate severity counts manually
+      let critical = 0, high = 0, medium = 0, low = 0;
+      
+      for (const vuln of Object.values(auditResults.vulnerabilities)) {
+        if (vuln.severity === 'critical') critical++;
+        else if (vuln.severity === 'high') high++;
+        else if (vuln.severity === 'medium') medium++;
+        else if (vuln.severity === 'low') low++;
+      }
+      
+      results.stats = {
+        critical,
+        high,
+        medium,
+        low,
+        total: vulnsCount
+      };
+      
+      // Add issues based on manually counted severities
+      if (critical > 0) {
+        results.success = false;
+        results.issues.push(`Found ${critical} critical vulnerabilities`);
+      }
+      if (high > 0) {
+        results.warnings.push(`Found ${high} high severity vulnerabilities`);
+      }
+      if (medium > 0) {
+        results.warnings.push(`Found ${medium} medium severity vulnerabilities`);
+      }
+      if (low > 0) {
+        results.warnings.push(`Found ${low} low severity vulnerabilities`);
+      }
+    } else {
+      // No vulnerability data found
+      results.warnings.push(`No vulnerability data found in audit results`);
+      logger.debug(`Unexpected audit result format: ${JSON.stringify(auditResults).substring(0, 200)}...`);
     }
 
     // Check for outdated dependencies
@@ -196,12 +330,15 @@ async function runSecurityScan(options = {}) {
       }
     } catch (parseError) {
       results.warnings.push(`Failed to parse outdated dependencies: ${parseError.message}`);
+      logger.debug(`Outdated deps parse error: ${parseError.stack}`);
     }
 
     return results;
   } catch (error) {
     results.success = false;
     results.issues.push(`Security scan failed: ${error.message}`);
+    // Log more detailed error information for debugging
+    logger.debug(`Security scan error details: ${error.stack || 'No stack trace available'}`);
     return results;
   }
 }

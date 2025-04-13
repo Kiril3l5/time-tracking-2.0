@@ -156,6 +156,7 @@
     "jsdom": "^23.2.0",
     "open-cli": "^8.0.0",
     "prettier": "^3.2.5",
+    "qrcode": "^1.5.4",
     "react-hook-form": "^7.54.2",
     "react-router-dom": "^7.3.0",
     "tailwindcss": "^4.0.14",
@@ -163,10 +164,12 @@
     "typescript-eslint": "^7.18.0",
     "vite": "^6.2.4",
     "vite-plugin-static-copy": "^2.3.0",
-    "vitest": "^3.1.1",
+    "vitest": "^1.6.0",
     "webpack-cli": "^6.0.1",
     "zod": "^3.24.2",
-    "zustand": "^5.0.3"
+    "zustand": "^5.0.3",
+    "ts-prune": "^0.10.3",
+    "depcheck": "^1.4.7"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

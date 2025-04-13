@@ -465,31 +465,18 @@ export class DashboardGenerator {
     
     // Extract test results data
     const testResults = metrics.testResults || {};
-    let testCoverageValue = 'N/A';
+    let testCoverageValue = 'N/A'; // Default to N/A
     
-    if (testResults.coverage) {
-      testCoverageValue = `${testResults.coverage}%`;
-    } else if (testResults.passed !== undefined && testResults.total !== undefined) {
+    // Check if coverage is a valid number (including 0)
+    if (testResults.coverage !== null && testResults.coverage !== undefined && typeof testResults.coverage === 'number' && !isNaN(testResults.coverage)) {
+      testCoverageValue = `${testResults.coverage.toFixed(2)}%`; // Format valid number as percentage
+    } 
+    // Only fallback to passed/total if coverage is NOT a number (or null/undefined) AND tests actually ran
+    else if (testResults.passed !== undefined && testResults.total !== undefined && testResults.total > 0) {
       testCoverageValue = `${testResults.passed}/${testResults.total} tests`;
-    } else if (metrics.packageMetrics) {
-      // Try to aggregate test results from packages
-      let totalPassed = 0;
-      let totalTests = 0;
-      let hasCoverage = false;
-      
-      Object.values(metrics.packageMetrics).forEach(pkg => {
-        if (pkg.testResults) {
-          totalPassed += (pkg.testResults.passed || 0);
-          totalTests += (pkg.testResults.total || 0);
-          hasCoverage = true;
-        }
-      });
-      
-      if (hasCoverage && totalTests > 0) {
-        testCoverageValue = `${totalPassed}/${totalTests} tests`;
-      }
     }
-    
+    // If coverage is null/undefined/NaN AND total tests is 0 or undefined, it remains N/A.
+
     // More robust status handling
     let deploymentStatus = 'pending';
     if (metrics.deploymentStatus) {
@@ -1063,33 +1050,6 @@ export class DashboardGenerator {
               </div>
               ${cleanup.error ? `<p class="error">${this.escapeHtml(cleanup.error)}</p>` : ''}
             </div>
-            ${hasSiteBreakdown ? `
-              <div class="site-breakdown">
-                <h3>Site Breakdown</h3>
-                <table class="breakdown-table">
-                  <thead>
-                    <tr>
-                      <th>Site</th>
-                      <th>Channels Found</th>
-                      <th>Kept</th>
-                      <th>Deleted</th>
-                      <th>Errors</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${cleanup.sites.map(site => `
-                      <tr>
-                        <td>${this.escapeHtml(site.name || 'Unknown')}</td>
-                        <td>${site.found || 0}</td>
-                        <td>${site.kept || 0}</td>
-                        <td>${site.deleted || 0}</td>
-                        <td>${site.errors || 0}</td>
-                      </tr>
-                    `).join('')}
-                  </tbody>
-                </table>
-              </div>
-            ` : ''}
           </div>
         </section>
       `;

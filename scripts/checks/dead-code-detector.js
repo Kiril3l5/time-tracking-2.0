@@ -14,56 +14,13 @@ import { fileURLToPath } from 'url';
 import { logger } from '../core/logger.js';
 import { parseArgs } from 'node:util';
 import { getReportPath, getHtmlReportPath, createJsonReport } from '../reports/report-collector.js';
+import { globSync } from 'glob';
 
 // Use the full path for glob import to ensure it's found
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const nodeModulesDir = path.resolve(__dirname, '../../node_modules');
 const globPath = path.join(nodeModulesDir, 'glob');
-
-// Define a custom glob function to avoid direct dependency
-function simpleGlobSync(pattern, options) {
-  const baseDir = options?.cwd || process.cwd();
-  const results = [];
-  
-  const scanDir = (dir) => {
-    try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        const relativePath = path.relative(baseDir, fullPath);
-        
-        if (entry.isDirectory()) {
-          scanDir(fullPath);
-        } else {
-          // Simple pattern matching (supports only basic glob patterns)
-          if (pattern.endsWith('*')) {
-            const ext = pattern.replace('*', '');
-            if (entry.name.endsWith(ext)) {
-              results.push(relativePath);
-            }
-          } else if (pattern.includes('*')) {
-            const [prefix, suffix] = pattern.split('*');
-            if (entry.name.startsWith(prefix) && entry.name.endsWith(suffix)) {
-              results.push(relativePath);
-            }
-          } else if (pattern === entry.name) {
-            results.push(relativePath);
-          }
-        }
-      }
-    } catch (error) {
-      logger.warn(`Error scanning directory ${dir}: ${error.message}`);
-    }
-  };
-  
-  scanDir(baseDir);
-  return results;
-}
-
-// Use our simple glob implementation
-const globSync = simpleGlobSync;
 
 // Results storage location
 const RESULTS_FILE = path.join(process.cwd(), 'temp', '.dead-code-analysis.json');
@@ -171,7 +128,7 @@ function findUnusedDependencies(packageDirs) {
         });
       }
     } catch (error) {
-      logger.warning(`Failed to check unused dependencies in ${dir}: ${error.message}`);
+      logger.warn(`Failed to check unused dependencies in ${dir}: ${error.message}`);
     }
   }
   
@@ -179,59 +136,6 @@ function findUnusedDependencies(packageDirs) {
     success: true,
     unusedDependencies: unused
   };
-}
-
-/**
- * Find unused CSS classes in the project
- * @param {string[]} cssFiles - List of CSS files
- * @param {string[]} jsFiles - List of JS/TS files that might use the CSS classes
- * @returns {Object} Results of the analysis
- */
-function findUnusedCssClasses(cssFiles, jsFiles) {
-  try {
-    // Use PurgeCSS to find unused CSS
-    const tempDir = path.join(process.cwd(), '.temp-css-analysis');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir);
-    }
-    
-    // Create a PurgeCSS config
-    const purgeCssConfigPath = path.join(tempDir, 'purgecss.config.js');
-    fs.writeFileSync(purgeCssConfigPath, `
-      module.exports = {
-        content: ${JSON.stringify(jsFiles)},
-        css: ${JSON.stringify(cssFiles)},
-        rejected: true,
-        output: '${tempDir}'
-      }
-    `);
-    
-    // Run PurgeCSS
-    execSync(`npx purgecss --config ${purgeCssConfigPath}`, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
-    
-    // Parse results
-    const unusedCssClasses = [];
-    
-    // Cleanup
-    if (fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-    
-    return {
-      success: true,
-      unusedCssClasses
-    };
-  } catch (error) {
-    logger.error(`Error finding unused CSS classes: ${error.message}`);
-    return {
-      success: false,
-      error: error.message,
-      unusedCssClasses: []
-    };
-  }
 }
 
 /**
@@ -245,9 +149,8 @@ function estimateBundleSizeImpact(results) {
   const unusedDepsSize = results.unusedDependencies.reduce((sum, pkg) => {
     return sum + pkg.unusedDependencies.length * 50; // ~50KB per dependency as a rough estimate
   }, 0);
-  const unusedCssSize = results.unusedCssClasses.length * 0.05; // ~50 bytes per CSS class
   
-  const totalKB = unusedExportsSize + unusedDepsSize + unusedCssSize;
+  const totalKB = unusedExportsSize + unusedDepsSize;
   
   if (totalKB > 1024) {
     return `${(totalKB / 1024).toFixed(1)} MB`;
@@ -262,24 +165,22 @@ function estimateBundleSizeImpact(results) {
  * @returns {Object} - Summary of results
  */
 function summarizeResults(results) {
-  const { unusedExports, unusedDependencies, unusedFiles, unusedCssClasses } = results;
+  const { unusedExports, unusedDependencies, unusedFiles } = results;
   
   const totalUnusedExports = unusedExports ? unusedExports.length : 0;
   const totalUnusedDependencies = unusedDependencies ? unusedDependencies.length : 0;
   const totalUnusedFiles = unusedFiles ? unusedFiles.length : 0;
-  const totalUnusedCssClasses = unusedCssClasses ? unusedCssClasses.length : 0;
   
   const potentialSizeReduction = calculatePotentialSizeReduction(results);
   
   const totalIssues = totalUnusedExports + totalUnusedDependencies + 
-                      totalUnusedFiles + totalUnusedCssClasses;
+                      totalUnusedFiles;
   
   return {
     totalIssues,
     unusedExports: totalUnusedExports,
     unusedDependencies: totalUnusedDependencies,
     unusedFiles: totalUnusedFiles,
-    unusedCssClasses: totalUnusedCssClasses,
     potentialSizeReduction
   };
 }
@@ -320,129 +221,159 @@ function formatBytes(bytes) {
 /**
  * Analyze codebase for dead code
  * @param {Object} options - Analysis options
- * @returns {Promise<Object>} Analysis results
+ * @returns {Promise<Object>} Analysis results - Guaranteed to return an object
  */
 export async function analyzeDeadCode(options) {
-  const {
-    sourceDirectories = ['packages/*/src'],
-    packageDirectories = ['packages/*', '.'],
-    cssFiles = ['packages/*/src/**/*.css', 'packages/*/src/**/*.scss'],
-    ignorePatterns = ['**/*.test.{js,jsx,ts,tsx}', '**/node_modules/**'],
-    analyzeCss = true,
-    analyzeImports = true,
-    analyzeDependencies = true,
-    generateReport = true,
-    reportPath = getHtmlReportPath('deadCode')
-  } = options;
-  
-  logger.info('Analyzing codebase for dead code...');
-  
-  // Find all source files
-  let sourceFiles = [];
-  for (const pattern of sourceDirectories) {
-    const files = globSync(`${pattern}/**/*.{js,jsx,ts,tsx}`, {
-      ignore: ignorePatterns
-    });
-    sourceFiles.push(...files);
-  }
-  
-  logger.info(`Found ${sourceFiles.length} source files to analyze`);
-  
-  // Find all package directories
-  let pkgDirs = [];
-  for (const pattern of packageDirectories) {
-    const dirs = globSync(pattern, {
-      ignore: ['**/node_modules/**']
-    });
-    pkgDirs.push(...dirs);
-  }
-  
-  // Find all CSS files if needed
-  let stylesheetFiles = [];
-  if (analyzeCss) {
-    for (const pattern of cssFiles) {
-      const files = globSync(pattern, {
-        ignore: ['**/node_modules/**']
-      });
-      stylesheetFiles.push(...files);
-    }
-    logger.info(`Found ${stylesheetFiles.length} CSS files to analyze`);
-  }
-  
-  // Run analyses
+  // Initialize default results structure
   const analysisResults = {
+    success: false, // Default to false
     unusedExports: [],
     unusedDependencies: [],
-    unusedCssClasses: []
+    error: null
   };
-  
-  // Analyze imports
-  if (analyzeImports && sourceFiles.length > 0) {
-    logger.info('Analyzing unused exports...');
-    const exportsResult = findUnusedExports(sourceFiles);
-    if (exportsResult.success) {
+
+  try { // Add top-level try block
+    const {
+      sourceDirectories = ['packages/*/src'], 
+      packageDirectories = ['packages/*', '.'],
+      ignorePatterns = DEFAULT_EXCLUDE_PATTERNS,
+      analyzeImports = true,
+      analyzeDependencies = true,
+      generateReport = true, 
+      reportPath = getHtmlReportPath('deadCode') 
+    } = options;
+    
+    logger.info('Analyzing codebase for dead code...');
+    
+    // Find all source files using the imported globSync
+    let sourceFiles = [];
+    const globOptions = { 
+        ignore: ignorePatterns, 
+        cwd: process.cwd(), // Specify current working directory
+        absolute: true, // Get absolute paths for consistency
+        nodir: true // We only want files
+    };
+
+    for (const pattern of sourceDirectories) {
+      // Construct the full pattern
+      const fullPattern = `${pattern}/**/*.{js,jsx,ts,tsx}`;
+      logger.debug(`Globbing for source files with pattern: ${fullPattern}`);
+      try {
+          const files = globSync(fullPattern, globOptions);
+          sourceFiles.push(...files);
+      } catch (error) {
+          logger.error(`Error during glob execution for pattern ${fullPattern}: ${error.message}`);
+      }
+    }
+    
+    // Log relative paths for readability if verbose
+    if (options.verbose && sourceFiles.length > 0) {
+        logger.debug('Found source files:');
+        sourceFiles.forEach(f => logger.debug(`  - ${path.relative(process.cwd(), f)}`));
+    }
+    logger.info(`Found ${sourceFiles.length} source files to analyze`);
+    
+    // Find all package directories
+    let pkgDirs = [];
+    const pkgGlobOptions = { 
+        ignore: ['**/node_modules/**'], 
+        cwd: process.cwd(),
+        absolute: true,
+        onlyDirectories: true // We only want directories
+    };
+    for (const pattern of packageDirectories) {
+      logger.debug(`Globbing for package dirs with pattern: ${pattern}`);
+      try {
+          const dirs = globSync(pattern, pkgGlobOptions);
+          pkgDirs.push(...dirs);
+      } catch (error) {
+          logger.error(`Error during glob execution for pattern ${pattern}: ${error.message}`);
+      }
+    }
+    if (options.verbose && pkgDirs.length > 0) {
+        logger.debug('Found package directories:');
+        pkgDirs.forEach(d => logger.debug(`  - ${path.relative(process.cwd(), d)}`));
+    }
+    logger.info(`Found ${pkgDirs.length} package directories to analyze`);
+    
+    // --- Run analyses --- 
+    let allAnalysesSucceeded = true; // Track success of sub-analyses
+
+    // Analyze imports
+    if (analyzeImports && sourceFiles.length > 0) {
+      logger.info('Analyzing unused exports...');
+      const exportsResult = findUnusedExports(sourceFiles);
       analysisResults.unusedExports = exportsResult.unusedExports;
-      logger.info(`Found ${exportsResult.unusedExports.length} unused exports`);
+      if (!exportsResult.success) {
+        allAnalysesSucceeded = false;
+        analysisResults.error = analysisResults.error ? `${analysisResults.error}; ${exportsResult.error}` : exportsResult.error; 
+        logger.warn(`Unused export analysis failed: ${exportsResult.error}`);
+      } else {
+         logger.info(`Found ${exportsResult.unusedExports.length} unused exports`);
+      }
     }
-  }
-  
-  // Analyze dependencies
-  if (analyzeDependencies && pkgDirs.length > 0) {
-    logger.info('Analyzing unused dependencies...');
-    const depsResult = findUnusedDependencies(pkgDirs);
-    if (depsResult.success) {
+    
+    // Analyze dependencies
+    if (analyzeDependencies && pkgDirs.length > 0) {
+      logger.info('Analyzing unused dependencies...');
+      const depsResult = findUnusedDependencies(pkgDirs);
       analysisResults.unusedDependencies = depsResult.unusedDependencies;
-      const totalUnused = depsResult.unusedDependencies.reduce(
-        (sum, pkg) => sum + pkg.unusedDependencies.length, 0
-      );
-      logger.info(`Found ${totalUnused} unused dependencies across ${depsResult.unusedDependencies.length} packages`);
+      if (!depsResult.success) { // Although findUnusedDependencies currently always returns true, check anyway
+        allAnalysesSucceeded = false;
+         analysisResults.error = analysisResults.error ? `${analysisResults.error}; Dependency check failed` : 'Dependency check failed'; 
+        logger.warn('Unused dependency analysis reported failure or issues.');
+      } else {
+        const totalUnused = depsResult.unusedDependencies.reduce(
+          (sum, pkg) => sum + pkg.unusedDependencies.length, 0
+        );
+        logger.info(`Found ${totalUnused} unused dependencies across ${depsResult.unusedDependencies.length} packages`);
+      }
     }
-  }
-  
-  // Analyze CSS
-  if (analyzeCss && stylesheetFiles.length > 0) {
-    logger.info('Analyzing unused CSS classes...');
-    const cssResult = findUnusedCssClasses(stylesheetFiles, sourceFiles);
-    if (cssResult.success) {
-      analysisResults.unusedCssClasses = cssResult.unusedCssClasses;
-      logger.info(`Found ${cssResult.unusedCssClasses.length} unused CSS classes`);
+    
+    // Set overall success based on sub-analyses
+    analysisResults.success = allAnalysesSucceeded;
+
+    // Estimate potential bundle size reduction
+    const potentialBundleSizeReduction = estimateBundleSizeImpact(analysisResults);
+    
+    // Prepare final results object to be returned
+    const finalResults = {
+      ...analysisResults, // Includes success, unusedExports, unusedDependencies, error
+      summary: {
+        unusedExports: analysisResults.unusedExports.length,
+        unusedDependencies: analysisResults.unusedDependencies.reduce(
+          (sum, pkg) => sum + pkg.unusedDependencies.length, 0
+        ),
+        totalIssues: analysisResults.unusedExports.length + 
+                    analysisResults.unusedDependencies.reduce((sum, pkg) => sum + pkg.unusedDependencies.length, 0)
+      },
+      potentialBundleSizeReduction
+    };
+    
+    // Generate HTML report only if explicitly requested
+    if (generateReport && options.htmlOutput) { 
+      generateHtmlReport(finalResults, options.htmlOutput);
+      logger.info(`Dead code analysis HTML report generated at ${options.htmlOutput}`);
     }
+    
+    // Log summary
+    if (finalResults.summary.totalIssues > 0) {
+      logger.warning(`Found ${finalResults.summary.totalIssues} potential dead code issues`);
+      logger.info(`Potential bundle size reduction: ${potentialBundleSizeReduction}`);
+    } else if (finalResults.success) { // Only log success if analysis actually succeeded
+      logger.success('No dead code detected in the analyzed files');
+    } else {
+      logger.error('Dead code analysis completed with errors.');
+    }
+    
+    return finalResults; // Return the structured results object
+
+  } catch (error) { // Catch any unexpected errors in the main function
+    logger.error(`Unexpected error during dead code analysis: ${error.message}`);
+    analysisResults.success = false;
+    analysisResults.error = error.message;
+    return analysisResults; // Return the results object even on error
   }
-  
-  // Estimate potential bundle size reduction
-  const potentialBundleSizeReduction = estimateBundleSizeImpact(analysisResults);
-  
-  // Prepare final results
-  const results = {
-    ...analysisResults,
-    summary: {
-      unusedExports: analysisResults.unusedExports.length,
-      unusedDependencies: analysisResults.unusedDependencies.reduce(
-        (sum, pkg) => sum + pkg.unusedDependencies.length, 0
-      ),
-      unusedCssClasses: analysisResults.unusedCssClasses.length,
-      totalIssues: analysisResults.unusedExports.length + 
-                  analysisResults.unusedDependencies.reduce((sum, pkg) => sum + pkg.unusedDependencies.length, 0) + 
-                  analysisResults.unusedCssClasses.length
-    },
-    potentialBundleSizeReduction
-  };
-  
-  // Generate HTML report only if explicitly requested
-  if (generateReport) {
-    generateHtmlReport(results, reportPath);
-    logger.info(`Dead code analysis HTML report generated at ${reportPath}`);
-  }
-  
-  // Log summary
-  if (results.summary.totalIssues > 0) {
-    logger.warning(`Found ${results.summary.totalIssues} potential dead code issues`);
-    logger.info(`Potential bundle size reduction: ${potentialBundleSizeReduction}`);
-  } else {
-    logger.success('No dead code detected in the analyzed files');
-  }
-  
-  return results;
 }
 
 /**
@@ -644,6 +575,4 @@ function generateHtmlReport(results, reportPath) {
   } catch (err) {
     logger.error(`Failed to generate HTML report: ${err.message}`);
   }
-}
-
-// ... existing code ... 
+} 

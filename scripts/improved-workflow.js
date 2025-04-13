@@ -599,6 +599,18 @@ class Workflow {
         // Core quality checks (lint, type check, tests)
         const checkResult = await this.qualityChecker.runAllChecks();
         
+        // Update metrics with test results, including coverage
+        if (checkResult.results?.testing) {
+          this.metrics.testResults = {
+            ...(this.metrics.testResults || {}),
+            passed: checkResult.results.testing.passedTests,
+            failed: checkResult.results.testing.failedTests,
+            total: checkResult.results.testing.totalTests,
+            coverage: checkResult.results.testing.coverage // Directly use coverage from the summary
+          };
+          logger.debug(`Updated test metrics: ${JSON.stringify(this.metrics.testResults)}`);
+        }
+        
         // Record all quality check warnings
         if (checkResult.warnings && checkResult.warnings.length > 0) {
           checkResult.warnings.forEach(warning => {
