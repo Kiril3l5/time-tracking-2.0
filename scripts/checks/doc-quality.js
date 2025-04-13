@@ -343,13 +343,27 @@ function analyzeFile(content, filePath) {
     analysis.issues.push('File is too short (less than 100 characters)');
   }
 
-  // Simple H1 Check: More tolerant check for H1 heading
-  const trimmedContent = content.replace(/^\uFEFF/, '').trim(); // Remove BOM and trim all whitespace
+  // Simple H1 Check: Handle potential BOMs (UTF-8, UTF-16LE) and check first non-empty line
+  let cleanedContent = content;
+  if (content.charCodeAt(0) === 0xFEFF) { // UTF-8 BOM
+      cleanedContent = content.slice(1);
+  } else if (content.charCodeAt(0) === 0xFF && content.charCodeAt(1) === 0xFE) { // UTF-16 LE BOM
+      // This is tricky as the rest of the string might be misinterpreted if not handled as UTF16
+      // A simpler approach for now is to just remove the BOM bytes for the check
+      // A better solution would involve reading the file with the correct encoding initially
+      // For the check, we assume removing the BOM lets us see the '#'
+      cleanedContent = content.slice(1); // JS strings are UTF-16, slice(1) might work depending on interpretation
+      logger.debug(`Detected UTF-16 LE BOM in ${filePath}, attempting check after removal.`);
+  }
+  
+  const trimmedContent = cleanedContent.trim(); // Trim all whitespace
   const lines = trimmedContent.split(/\r?\n/); // Split into lines
   
   // Check if the *first non-empty line* starts with '# '
   const firstNonEmptyLine = lines.find(line => line.trim().length > 0);
   if (!firstNonEmptyLine || !firstNonEmptyLine.trim().startsWith('# ')) {
+    // Add more debug info if the check fails
+    logger.debug(`H1 check failed for ${filePath}. First non-empty line: "${firstNonEmptyLine ? firstNonEmptyLine.substring(0, 50) + '...' : '[None Found]'}"`);
     analysis.issues.push('Missing main heading (H1)');
   }
 

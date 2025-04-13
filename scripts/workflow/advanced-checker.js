@@ -117,12 +117,13 @@ async function runWithTimeout(operation, timeoutMs, operationName, fallbackValue
   // Set silent mode for this operation
   silentLogger.setSilent(options.silentMode || false);
   
-  // Allow overriding the timeout from options
-  const customTimeout = options.timeout && options.timeout[operationName.toLowerCase().replace(/\s+/g, '')];
-  const effectiveTimeout = customTimeout || timeoutMs;
+  // Determine the effective timeout: Use specific timeout from options if present, otherwise use the default timeoutMs
+  const checkNameKey = operationName.toLowerCase().replace(/\s+/g, ''); // e.g., 'docsfreshness'
+  const customTimeout = options.timeout && options.timeout[checkNameKey];
+  const effectiveTimeout = (typeof customTimeout === 'number' && customTimeout > 0) ? customTimeout : timeoutMs;
   
   if (options.verbose && !options.silentMode) {
-    silentLogger.debug(`Running '${operationName}' with ${effectiveTimeout/1000}s timeout`);
+    silentLogger.debug(`Running '${operationName}' with ${effectiveTimeout/1000}s timeout (Custom: ${customTimeout}, Default: ${timeoutMs})`);
   }
   
   const timeout = createTimeout(effectiveTimeout, operationName);

@@ -305,9 +305,9 @@ export async function runStandardTests(options = {}) {
               coverageRan = true;
               logger.debug('Coverage ran: Found coverage-final.json with content.');
 
-              // Updated Regex for Vitest v1.6.1 output
-              // Looks for the line starting with "All files" and captures the first number after the pipe
-              const coverageSummaryRegex = /^All files\s*\|\s*([\d.]+)/m;
+              // Updated Regex for Vitest v1.6.1 output (allowing leading spaces)
+              // Looks for the line starting with potentially spaces then "All files" and captures the first number after the pipe
+              const coverageSummaryRegex = /^\s*All files\s*\|\s*([\d.]+)/m;
               const match = output.match(coverageSummaryRegex);
               if (match && match[1]) {
                 coverageValue = parseFloat(match[1]);
