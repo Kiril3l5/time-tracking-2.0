@@ -119,15 +119,24 @@ async function runWithTimeout(operation, timeoutMs, operationName, fallbackValue
   silentLogger.setSilent(options.silentMode || false);
   
   // Determine the effective timeout: Use specific timeout from options if present, otherwise use the default timeoutMs
-  const checkNameKey = operationName.replace(/\s+(.)/g, (match, chr) => chr.toUpperCase()).replace(/^./, chr => chr.toLowerCase()); // e.g., "Documentation freshness check" -> "docsFreshnessCheck"
-  const customTimeout = options.timeout && typeof options.timeout === 'object' && options.timeout[checkNameKey];
+  // Ensure the key matches the configuration object key exactly.
+  const checkNameKey = 'docsFreshness'; // Hardcode the key used in the config for this specific check if needed
+  let customTimeout = undefined;
+  if (operationName === 'Documentation freshness check') { // Apply specific logic only for this check
+      customTimeout = options.timeout && typeof options.timeout === 'object' ? options.timeout[checkNameKey] : undefined;
+  } else {
+      // Fallback logic for other checks (if needed, though less critical now)
+      const genericKey = operationName.toLowerCase().replace(/\s+/g, '');
+      customTimeout = options.timeout && typeof options.timeout === 'object' ? options.timeout[genericKey] : undefined;
+  }
+
   const effectiveTimeout = (typeof customTimeout === 'number' && customTimeout > 0) ? customTimeout : timeoutMs;
   
-  // ---> Add Detailed Timeout Logging <---
+  // ---> Detailed Timeout Logging <---
   silentLogger.debug(`Timeout Debug for [${operationName}]:`);
   silentLogger.debug(` - Default timeoutMs: ${timeoutMs}`);
   silentLogger.debug(` - options.timeout object: ${JSON.stringify(options.timeout)}`);
-  silentLogger.debug(` - checkNameKey used: ${checkNameKey}`);
+  silentLogger.debug(` - checkNameKey used for lookup (if applicable): ${operationName === 'Documentation freshness check' ? checkNameKey : '(generic key)'}`);
   silentLogger.debug(` - customTimeout found: ${customTimeout} (Type: ${typeof customTimeout})`);
   silentLogger.debug(` - Effective Timeout Chosen: ${effectiveTimeout}`);
   // ---> End Detailed Timeout Logging <---

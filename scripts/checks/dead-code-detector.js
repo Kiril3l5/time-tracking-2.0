@@ -360,7 +360,6 @@ export async function analyzeDeadCode(options) {
 
       if (!depsResult.success) { 
         allAnalysesSucceeded = false;
-        // Add a general warning, specific errors are in analysisResults.depcheckErrors
         const errorMsg = `Depcheck analysis failed for ${analysisResults.depcheckErrors.length} package(s).`;
         analysisResults.error = analysisResults.error ? `${analysisResults.error}; ${errorMsg}` : errorMsg;
         logger.warn(errorMsg);
@@ -409,7 +408,7 @@ export async function analyzeDeadCode(options) {
     
     // Log summary
     if (finalResults.summary.totalIssues > 0) {
-      logger.warning(`Found ${finalResults.summary.totalIssues} potential dead code issues`);
+      logger.warn(`Found ${finalResults.summary.totalIssues} potential dead code issues`);
       logger.info(`Potential bundle size reduction: ${potentialBundleSizeReduction}`);
     } else if (finalResults.success) { // Only log success if analysis actually succeeded
       logger.success('No dead code detected in the analyzed files');
