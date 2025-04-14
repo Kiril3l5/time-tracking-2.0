@@ -305,17 +305,32 @@ export async function runStandardTests(options = {}) {
               coverageRan = true;
               logger.debug('Coverage ran: Found coverage-final.json with content.');
 
-              // Regex v4: Simplest attempt
-              const coverageSummaryRegex = /All files\s*\|\s*([\d.]+)/m;
-              const match = output.match(coverageSummaryRegex);
-              if (match && match[1]) {
-                coverageValue = parseFloat(match[1]);
-                logger.debug(`Parsed coverage value: ${coverageValue}%`);
-                errorMsg = null; // Clear error if value is parsed
-              } else {
-                logger.warn('Coverage file found, but could not parse percentage from output summary (regex mismatch).');
-                logger.debug(`Coverage Output Snippet:\n${output.substring(0, 500)}`); // Log beginning of output
-                errorMsg = 'Could not parse coverage percentage from output';
+              // Regex v5: Line-by-line parsing
+              coverageValue = null; // Reset before trying
+              const lines = output.split(/\r?\n/);
+              const headerLineIndex = lines.findIndex(line => /^\s*File\s*\| % Stmts/.test(line));
+              if (headerLineIndex !== -1 && lines.length > headerLineIndex + 2) {
+                  // The line after the header and separator should be "All files"
+                  const allFilesLine = lines[headerLineIndex + 2];
+                  if (allFilesLine && allFilesLine.trim().startsWith('All files')) {
+                      const parts = allFilesLine.split('|');
+                      if (parts.length > 1) {
+                          const stmtPercentageStr = parts[1].trim();
+                          const parsedValue = parseFloat(stmtPercentageStr);
+                          if (!isNaN(parsedValue)) {
+                              coverageValue = parsedValue;
+                              logger.debug(`Parsed coverage value (line-by-line): ${coverageValue}%`);
+                              errorMsg = null; // Clear error
+                          }
+                      }
+                  }
+              }
+
+              // If parsing failed, set error message
+              if (coverageValue === null) {
+                  logger.warn('Could not parse coverage percentage from output (line-by-line method).');
+                  logger.debug(`Coverage Output Snippet:\n${output.substring(0, 1000)}`);
+                  errorMsg = 'Could not parse coverage percentage from output';
               }
             } else {
                logger.warn('Coverage ran: Found coverage-final.json but it seems empty.');
