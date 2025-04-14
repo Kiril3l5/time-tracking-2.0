@@ -267,6 +267,7 @@ export async function saveValidationCache(cache, cacheKey, advancedChecks, workf
     advancedChecks,
     steps: stepsToCache,
     warnings: workflowWarnings, // Add warnings to cache
+    testResults: options.metrics?.testResults || {},
     timestamp: Date.now()
   };
   
