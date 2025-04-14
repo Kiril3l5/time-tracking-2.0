@@ -343,20 +343,23 @@ function analyzeFile(content, filePath) {
     analysis.issues.push('File is too short (less than 100 characters)');
   }
 
-  // Simple H1 Check: Handle potential BOMs (UTF-8, UTF-16LE) and check first non-empty line
+  // Simple H1 Check: Remove potential BOMs and other non-printable chars, check first non-empty line
   let cleanedContent = content;
+  // Remove common BOMs first
   if (content.charCodeAt(0) === 0xFEFF) { // UTF-8 BOM
       cleanedContent = content.slice(1);
   } else if (content.charCodeAt(0) === 0xFF && content.charCodeAt(1) === 0xFE) { // UTF-16 LE BOM
-      // This is tricky as the rest of the string might be misinterpreted if not handled as UTF16
-      // A simpler approach for now is to just remove the BOM bytes for the check
-      // A better solution would involve reading the file with the correct encoding initially
-      // For the check, we assume removing the BOM lets us see the '#'
-      cleanedContent = content.slice(1); // JS strings are UTF-16, slice(1) might work depending on interpretation
-      logger.debug(`Detected UTF-16 LE BOM in ${filePath}, attempting check after removal.`);
+      cleanedContent = content.slice(1);
+  } else if (content.charCodeAt(0) === 0xEF && content.charCodeAt(1) === 0xBB && content.charCodeAt(2) === 0xBF) { // Alternate UTF-8 BOM representation
+       cleanedContent = content.slice(3);
   }
   
-  const trimmedContent = cleanedContent.trim(); // Trim all whitespace
+  // Remove any other leading non-printable/control characters (except whitespace)
+  // Regex: ^[\s]* : Match leading whitespace (including line breaks)
+  //        [^\x20-\x7E]* : Match zero or more characters that are NOT standard printable ASCII (space to ~)
+  cleanedContent = cleanedContent.replace(/^[\\s]*[^\\x20-\\x7E]*/, '');
+  
+  const trimmedContent = cleanedContent.trim(); // Trim remaining whitespace
   const lines = trimmedContent.split(/\r?\n/); // Split into lines
   
   // Check if the *first non-empty line* starts with '# '
