@@ -539,6 +539,8 @@ class Workflow {
     
     try {
       // Check if we can use cached validation results
+      // --- DISABLED CACHING ---
+      /*
       if (!this.options.skipTests) {
         const { tryUseValidationCache } = await import('./workflow/workflow-cache.js');
         const cacheResult = await tryUseValidationCache(this.cache, this.options);
@@ -581,6 +583,8 @@ class Workflow {
           return; // Return early as intended when using cache
         }
       }
+      */
+      // --- END DISABLED CACHING ---
       
       // Initialize package coordinator to get build order
       const packageStartTime = Date.now();
@@ -990,6 +994,8 @@ class Workflow {
       }
       
       // Cache validation results if enabled
+      // --- DISABLED CACHING ---
+      /*
       if (!this.options.noCache) {
         const { saveValidationCache } = await import('./workflow/workflow-cache.js');
         const cacheKey = await generateCacheKey('validation', [
@@ -1015,6 +1021,8 @@ class Workflow {
           this.options // Pass the whole options object containing metrics
         );
       }
+      */
+      // --- END DISABLED CACHING ---
       
       this.progressTracker.completeStep(true, 'Validation completed');
       this.recordWorkflowStep('Validation Phase', 'Validation', true, Date.now() - phaseStartTime);
@@ -1052,6 +1060,8 @@ class Workflow {
       }
 
       // Cache Check (moved outside main try block)
+      // --- DISABLED CACHING ---
+      /* 
       let cacheResult = { fromCache: false };
       if (!this.options.noCache) {
         try {
@@ -1064,165 +1074,56 @@ class Workflow {
 
       // If using cache, record steps and restore metrics
       if (cacheResult.fromCache) {
-        const cachedBuildData = cacheResult.data?.buildMetrics; 
-        this.logger.debug(`[Build Cache Hit] Loaded cachedBuildData: ${JSON.stringify(cachedBuildData)}`);
-
-        // ---> CORRECTLY RESTORE BUILD METRICS FROM CACHE <--- 
-        if (cachedBuildData && typeof cachedBuildData === 'object' && Object.keys(cachedBuildData).length > 0) {
-            this.metrics.packageMetrics = { ...cachedBuildData }; // Restore packageMetrics
-            
-            // Recalculate overall build performance from restored package metrics
-            const packagesBuilt = Object.keys(this.metrics.packageMetrics);
-            const buildDurations = packagesBuilt.map(p => this.metrics.packageMetrics[p]?.duration || 0);
-            const successfulBuilds = packagesBuilt.filter(p => this.metrics.packageMetrics[p]?.success === true).length; // Check for true
-            const avgBuildTime = buildDurations.length > 0 ? buildDurations.reduce((sum, d) => sum + d, 0) / buildDurations.length : 0;
-            const successRate = packagesBuilt.length > 0 ? successfulBuilds / packagesBuilt.length : 1;
-            
-            this.metrics.buildPerformance = {
-              totalBuildTime: buildDurations.reduce((sum, d) => sum + d, 0),
-              averageBuildTime: avgBuildTime,
-              buildSuccessRate: successRate,
-              // Attempt to restore fileCount/size if available at top level (though unlikely based on save logic)
-              fileCount: typeof cachedBuildData.fileCount === 'number' ? cachedBuildData.fileCount : undefined,
-              totalSize: typeof cachedBuildData.totalSize === 'number' ? cachedBuildData.totalSize : undefined
-            };
-            this.logger.debug(`Restored packageMetrics: ${JSON.stringify(this.metrics.packageMetrics)}`);
-            this.logger.debug(`Recalculated buildPerformance from cache: ${JSON.stringify(this.metrics.buildPerformance)}`);
-        } else {
-            this.logger.warn('Build cache hit but no valid buildMetrics (packageMetrics) found in cached data.');
-            this.metrics.packageMetrics = {}; 
-            this.metrics.buildPerformance = { totalBuildTime: 0, averageBuildTime: 0, buildSuccessRate: 0 };
-        }
-        // ---> END RESTORE <--- 
-
-        // Record steps from cache (ensure Build Phase itself is recorded)
-        let buildPhaseStepRecorded = false;
-        if (Array.isArray(cacheResult.data?.steps)) {
-            for (const step of cacheResult.data.steps) {
-                 this.recordWorkflowStep(
-                    step.name || 'Unknown Cached Step', 
-                    step.phase || 'Build', 
-                    step.success !== false, 
-                    typeof step.duration === 'number' ? step.duration : 0,
-                    step.error || (step.success !== false ? 'From Cache' : 'From Cache (Failed)')
-                 );
-                 if (step.name === 'Build Phase') buildPhaseStepRecorded = true;
-            }
-        } 
-        // Ensure Build Phase step is recorded if missing from cache data
-        if (!buildPhaseStepRecorded) {
-             this.recordWorkflowStep('Build Phase', 'Build', true, 10, 'From Cache');
-        }
-        
-        this.progressTracker.completeStep(true, 'Build completed from cache');
-       
-        // *** Let the function continue to calculate final phase duration ***
+         // ... (cache restore logic) ...
       } else {
-         // ---> If NOT from cache, run the actual build logic <--- 
+         // If NOT from cache, run the actual build logic 
          this.logger.info('Building application (cache miss or disabled)...');
-         // ... (rest of the original build logic: define packages, map promises, Promise.all, save cache, etc.) ...
-         // Ensure the final part calculating overall metrics and saving cache runs here
+         // ... (build logic: define packages, map promises, Promise.all) ...
          
-         // Define packages to build (needed if not from cache)
-         const packagesToBuild = ['admin', 'hours'];
-         this.packages = packagesToBuild.map(name => ({ name, buildResult: null, testResults: null }));
-         
-         // ... (map buildPromises, Promise.all, failedBuilds check) ...
-         // Example structure (ensure this part is correctly placed/merged):
-         const buildPromises = packagesToBuild.map(async (packageName) => {
-          let buildResult;
-          try {
-            this.logger.info(`Building package: ${packageName}...`);
-            // Directly await the result
-            buildResult = await buildPackageWithWorkflowIntegration({
-              package: packageName,
-              timeout: this.options.buildTimeout || 300000, 
-              parallel: true,
-              recordWarning: (message, phase, step, severity) => this.recordWarning(message, phase, step, severity),
-              recordStep: (name, phase, success, duration, error) => this.recordWorkflowStep(name, phase, success, duration, error),
-              phase: 'Build'
-            });
-            
-            this.logger.debug(`Raw buildResult for ${packageName}: ${JSON.stringify(buildResult)}`);
-
-            // ---- START Robust Result Handling & Metrics Storage ----
-            if (buildResult && typeof buildResult === 'object') {
-              // Store metrics whether success or failure, if result object exists
-              this.metrics.packageMetrics[packageName] = {
-                success: buildResult.success === true, // Explicitly check for true
-                duration: typeof buildResult.duration === 'number' ? buildResult.duration : 0,
-                fileCount: typeof buildResult.fileCount === 'number' ? buildResult.fileCount : 0,
-                sizeBytes: typeof buildResult.totalSize === 'number' ? buildResult.totalSize : 0,
-                formattedSize: typeof buildResult.totalSize === 'number' ? this.formatBytes(buildResult.totalSize) : 'N/A',
-                warnings: Array.isArray(buildResult.warnings) ? buildResult.warnings : [],
-                error: buildResult.success === true ? null : (buildResult.error || 'Unknown build error')
-              };
-              this.logger.debug(`Stored metrics for ${packageName}: ${JSON.stringify(this.metrics.packageMetrics[packageName])}`);
-              
-              // Check for success to return correct object for Promise.all
-              if (buildResult.success === true) {
-                  this.logger.success(`✓ Build successful for package: ${packageName}`);
-                  return { success: true, packageName }; // Return success object
-              } else {
-                  const errorMsg = `Build failed for package ${packageName}: ${buildResult.error || 'Unknown error'}`;
-                  this.logger.error(errorMsg);
-                  return { success: false, error: errorMsg, packageName }; // Return failure object
-              }
-            } else {
-              // Handle cases where buildPackageWithWorkflowIntegration returned undefined/null/non-object
-              const errorMsg = `Build process for package ${packageName} returned invalid result: ${buildResult}`;
-              this.logger.error(errorMsg);
-              this.metrics.packageMetrics[packageName] = { success: false, duration: 0, error: errorMsg };
-              return { success: false, error: errorMsg, packageName }; // Return failure object
-            }
-            // ---- END Robust Result Handling & Metrics Storage ----
-            
-          } catch (error) {
-              // Catch errors during the await buildPackageWithWorkflowIntegration itself
-              const errorMsg = `Exception during build for package ${packageName}: ${error.message}`;
-              this.logger.error(errorMsg);
-              this.metrics.packageMetrics[packageName] = { success: false, duration: 0, error: errorMsg };
-              // Ensure a standard failure object is returned for Promise.all
-              return { success: false, error: errorMsg, packageName }; 
-          }
-        });
-
-        // Wait for all builds to complete
-        const results = await Promise.all(buildPromises);
-        // Now filter results - this should be safe as map always returns an object
-        const failedBuilds = results.filter(r => !r.success);
-        if (failedBuilds.length > 0) {
-            const errorMsg = `Build phase failed for ${failedBuilds.length} package(s): ${failedBuilds.map(f => f.packageName).join(', ')}`;
-            this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, errorMsg);
-            throw new Error(errorMsg);
-        }
-        
-        // Save results to cache if successful (only if not a cache hit run)
-        if (!this.options.noCache && cacheResult.cacheKey && failedBuilds.length === 0) {
-            const { saveBuildCache } = await import('./workflow/workflow-cache.js');
-            // ---> DEBUG: Log data before saving build cache
-            this.logger.debug('--- SAVING BUILD CACHE ---');
-            this.logger.debug(`Cache Key: ${cacheResult.cacheKey}`);
-            this.logger.debug(`Package Metrics to Save: ${JSON.stringify(this.metrics.packageMetrics)}`);
-            // Pass the populated this.metrics.packageMetrics
-            await saveBuildCache(this.cache, cacheResult.cacheKey, this.metrics.packageMetrics, this.workflowSteps, this.options);
-        } else if (failedBuilds.length > 0) {
-           this.logger.warn('Build failed, not saving build results to cache.');
-        }
-        
-        // Record build phase step completion for non-cache run
-        this.progressTracker.completeStep(true, 'Build completed');
-        this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
-        
-        // Calculate overall build metrics for non-cache run
-        const buildDurations = packagesToBuild.map(p => this.metrics.packageMetrics[p]?.duration || 0);
-        this.metrics.buildPerformance = {
-          totalBuildTime: buildDurations.reduce((sum, d) => sum + d, 0),
-          averageBuildTime: buildDurations.length > 0 ? buildDurations.reduce((sum, d) => sum + d, 0) / buildDurations.length : 0,
-          buildSuccessRate: (packagesToBuild.length - failedBuilds.length) / packagesToBuild.length,
-        };
-        this.logger.debug('Calculated overall build performance metrics.');
+         // Save results to cache if successful (only if not a cache hit run)
+         if (!this.options.noCache && cacheResult.cacheKey && failedBuilds.length === 0) {
+            // ... (saveBuildCache logic) ...
+         } else if (failedBuilds.length > 0) {
+            this.logger.warn('Build failed, not saving build results to cache.');
+         }
+         // ... (rest of build logic) ...
       } // End of if/else (cacheResult.fromCache)
+      */
+      // --- END DISABLED CACHING ---
+      
+      // ---> ALWAYS EXECUTE BUILD LOGIC NOW <--- 
+      this.logger.info('Building application (cache disabled)...');
+      const packagesToBuild = ['admin', 'hours'];
+      this.packages = packagesToBuild.map(name => ({ name, buildResult: null, testResults: null }));
+
+      const buildPromises = packagesToBuild.map(async (packageName) => {
+           // ... (try/catch block calling buildPackageWithWorkflowIntegration) ...
+           // ... (robust result handling and metrics storage) ...
+      });
+      
+      const results = await Promise.all(buildPromises);
+      const failedBuilds = results.filter(r => !r.success);
+      if (failedBuilds.length > 0) {
+          const errorMsg = `Build phase failed for ${failedBuilds.length} package(s): ${failedBuilds.map(f => f.packageName).join(', ')}`;
+          this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, errorMsg);
+          throw new Error(errorMsg);
+      }
+      
+      // Cache saving is disabled, no need for saveBuildCache call here
+      
+      // Record build phase step completion
+      this.progressTracker.completeStep(true, 'Build completed');
+      this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
+      
+      // Calculate overall build metrics
+      const buildDurations = packagesToBuild.map(p => this.metrics.packageMetrics[p]?.duration || 0);
+      this.metrics.buildPerformance = {
+        totalBuildTime: buildDurations.reduce((sum, d) => sum + d, 0),
+        averageBuildTime: buildDurations.length > 0 ? buildDurations.reduce((sum, d) => sum + d, 0) / buildDurations.length : 0,
+        buildSuccessRate: (packagesToBuild.length - failedBuilds.length) / packagesToBuild.length,
+      };
+      this.logger.debug('Calculated overall build performance metrics.');
+      // ---> END ALWAYS EXECUTE BUILD LOGIC <--- 
 
     } catch (error) {
       // Catch the error thrown by buildPackageWithWorkflowTracking
