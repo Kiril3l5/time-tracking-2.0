@@ -1,16 +1,24 @@
 {
-  "_timestamp": 1744566226959,
+  "_timestamp": 1744594083402,
   "data": {
     "buildMetrics": {
       "admin": {
-        "success": false,
+        "success": true,
         "duration": 0,
-        "output": "Build result unavailable"
+        "fileCount": 0,
+        "sizeBytes": 0,
+        "formattedSize": "N/A",
+        "warnings": [],
+        "error": null
       },
       "hours": {
-        "success": false,
+        "success": true,
         "duration": 0,
-        "output": "Build result unavailable"
+        "fileCount": 0,
+        "sizeBytes": 0,
+        "formattedSize": "N/A",
+        "warnings": [],
+        "error": null
       }
     },
     "steps": [
@@ -18,11 +26,11 @@
         "name": "Package Build",
         "phase": "Build",
         "success": true,
-        "duration": 4424,
+        "duration": 4242,
         "error": null,
-        "timestamp": "2025-04-13T17:43:46.957Z"
+        "timestamp": "2025-04-14T01:28:03.400Z"
       }
     ],
-    "timestamp": 1744566226959
+    "timestamp": 1744594083402
   }
 }
