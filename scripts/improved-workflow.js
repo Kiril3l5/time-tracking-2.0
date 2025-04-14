@@ -991,13 +991,20 @@ class Workflow {
           '.eslintignore'
         ]);
         
+        // ---> DEBUG: Log data before saving validation cache
+        this.logger.debug('--- SAVING VALIDATION CACHE ---');
+        this.logger.debug(`Cache Key: ${cacheKey}`);
+        this.logger.debug(`Advanced Checks: ${JSON.stringify(this.advancedCheckResults).substring(0, 200)}...`);
+        this.logger.debug(`Warnings: ${this.workflowWarnings.length}`);
+        this.logger.debug(`Test Results: ${JSON.stringify(this.metrics.testResults)}`);
+        // Pass this.options which should contain metrics
         await saveValidationCache(
           this.cache, 
           cacheKey, 
           this.advancedCheckResults, 
           this.workflowSteps,
           this.workflowWarnings,
-          this.options
+          this.options // Pass the whole options object containing metrics
         );
       }
       
@@ -1114,10 +1121,16 @@ class Workflow {
          }
          
          // Save results to cache if successful (only if not a cache hit run)
-         if (!this.options.noCache && cacheResult.cacheKey) {
+         if (!this.options.noCache && cacheResult.cacheKey && failedBuilds.length === 0) {
              const { saveBuildCache } = await import('./workflow/workflow-cache.js');
+             // ---> DEBUG: Log data before saving build cache
+             this.logger.debug('--- SAVING BUILD CACHE ---');
+             this.logger.debug(`Cache Key: ${cacheResult.cacheKey}`);
+             this.logger.debug(`Package Metrics to Save: ${JSON.stringify(this.metrics.packageMetrics)}`);
              // Pass the populated this.metrics.packageMetrics
              await saveBuildCache(this.cache, cacheResult.cacheKey, this.metrics.packageMetrics, this.workflowSteps, this.options);
+         } else if (failedBuilds.length > 0) {
+            this.logger.warn('Build failed, not saving build results to cache.');
          }
          
          // Record build phase step completion for non-cache run
