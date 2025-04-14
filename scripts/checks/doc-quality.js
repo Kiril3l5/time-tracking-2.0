@@ -314,12 +314,25 @@ export async function analyzeDocumentation(options) {
         results.filesWithIssues++;
         results.issues.push({
           file: relativePath,
-          issues: fileAnalysis.issues
+          issues: fileAnalysis.issues,
+          canAutoFixH1: fileAnalysis.issues.includes('Missing main heading (H1)'),
+          wordCount: fileAnalysis.wordCount,
+          codeBlocks: fileAnalysis.codeBlocks,
+          images: fileAnalysis.images
         });
       }
     }
 
-    // Generate reports
+    // After analysis, attempt fixes if requested
+    if (options.autoFix && results.issues.length > 0) {
+      // Pass the detailed issues array which now includes canAutoFixH1
+      const fixResults = await applyDocQualityFixes(results.issues, options);
+      logger.info(`Auto-fix summary: ${fixResults.fixedCount} issues fixed.`);
+      // Optionally, re-analyze after fixing or just report initial findings?
+      // For now, we just report the fix attempt.
+    }
+    
+    // Generate reports (based on initial analysis)
     await generateReports(results);
 
     logger.success('Documentation analysis completed successfully!');
@@ -368,6 +381,9 @@ function analyzeFile(content, filePath) {
     // Add more debug info if the check fails
     logger.debug(`H1 check failed for ${filePath}. First non-empty line: "${firstNonEmptyLine ? firstNonEmptyLine.substring(0, 50) + '...' : '[None Found]'}"`);
     analysis.issues.push('Missing main heading (H1)');
+    analysis.canAutoFixH1 = true; // Mark that this issue can be auto-fixed
+  } else {
+    analysis.canAutoFixH1 = false;
   }
 
   if (content.includes('TODO') || content.includes('FIXME')) {
@@ -460,7 +476,7 @@ async function _main() {
     const jsonReportPath = args.jsonOutput || getReportPath('docQuality');
     const htmlReportPath = args.htmlOutput || getHtmlReportPath('docQuality');
     
-    // Run analysis
+    // Run analysis, passing the autoFix option
     const results = await analyzeDocumentation({
       rootDir: args.root || '.',
       includePatterns: args.include ? args.include.split(',') : _DEFAULT_INCLUDE_PATTERNS,
@@ -470,6 +486,7 @@ async function _main() {
       checkComponentDocs: !args.skipComponentDocs,
       checkTsDoc: !args.skipTsDoc,
       checkJsDoc: !args.skipJsDoc,
+      autoFix: args.autoFix || false, // Get auto-fix flag from args
       verbose: args.verbose
     });
     
@@ -516,6 +533,7 @@ function parseArguments() {
     'skip-js-doc': { type: 'boolean', default: false },
     'json-output': { type: 'string' },
     'html-output': { type: 'string' },
+    'auto-fix': { type: 'boolean', default: false },
     'verbose': { type: 'boolean', default: false },
     'help': { type: 'boolean', default: false }
   };
@@ -553,6 +571,7 @@ ${colors.bold}Options:${colors.reset}
   --skip-component-docs     Skip component documentation checking
   --skip-ts-doc             Skip TypeScript documentation checking
   --skip-js-doc             Skip JSDoc documentation checking
+  --auto-fix                Attempt to automatically fix detected issues (e.g., add missing H1)
   --verbose                 Enable verbose logging
   --help                    Show this help message
 
@@ -587,6 +606,35 @@ function printSummary(results, minCoverage) {
     logger.warn(`Documentation analysis completed with ${results.filesWithIssues} issues`);
     logger.info(`Found ${results.issues.length} documentation issues to fix`);
   }
+}
+
+// Add a new function to apply fixes
+async function applyDocQualityFixes(issues, options) {
+  if (!options.autoFix) return { fixedCount: 0 };
+  
+  let fixedCount = 0;
+  logger.info('Attempting to auto-fix documentation issues...');
+
+  for (const fileIssue of issues) {
+    const canFixH1 = fileIssue.issues.includes('Missing main heading (H1)') && fileIssue.canAutoFixH1;
+    // Add other fixable issues here if needed
+    
+    if (canFixH1) {
+      const absolutePath = path.join(process.cwd(), 'docs', fileIssue.file); // Assuming files are relative to docs dir
+      try {
+        let content = await fs.readFile(absolutePath, 'utf8');
+        // Simple fix: Add a placeholder H1 at the beginning
+        const placeholderTitle = `# ${path.basename(fileIssue.file, path.extname(fileIssue.file)).replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}`; // Generate title from filename
+        content = `${placeholderTitle}\n\n${content}`;
+        await fs.writeFile(absolutePath, content, 'utf8');
+        logger.success(`✓ Auto-fixed H1 for: ${fileIssue.file}`);
+        fixedCount++;
+      } catch (error) {
+        logger.warn(`✗ Failed to auto-fix H1 for ${fileIssue.file}: ${error.message}`);
+      }
+    }
+  }
+  return { fixedCount };
 }
 
 // Run analysis if this file is executed directly

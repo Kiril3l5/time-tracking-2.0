@@ -22,6 +22,7 @@ import path from 'path';
 import fs from 'fs';
 import process from 'node:process';
 import { createHash } from 'crypto';
+import { performance } from 'node:perf_hooks';
 
 /**
  * A wrapper around the logger that respects silent mode
@@ -121,6 +122,15 @@ async function runWithTimeout(operation, timeoutMs, operationName, fallbackValue
   const checkNameKey = operationName.toLowerCase().replace(/\s+/g, ''); // e.g., 'docsfreshness'
   const customTimeout = options.timeout && options.timeout[checkNameKey];
   const effectiveTimeout = (typeof customTimeout === 'number' && customTimeout > 0) ? customTimeout : timeoutMs;
+  
+  // ---> Add Detailed Timeout Logging <---
+  silentLogger.debug(`Timeout Debug for [${operationName}]:`);
+  silentLogger.debug(` - Default timeoutMs: ${timeoutMs}`);
+  silentLogger.debug(` - options.timeout object: ${JSON.stringify(options.timeout)}`);
+  silentLogger.debug(` - checkNameKey used: ${checkNameKey}`);
+  silentLogger.debug(` - customTimeout found: ${customTimeout} (Type: ${typeof customTimeout})`);
+  silentLogger.debug(` - Effective Timeout Chosen: ${effectiveTimeout}`);
+  // ---> End Detailed Timeout Logging <---
   
   if (options.verbose && !options.silentMode) {
     silentLogger.debug(`Running '${operationName}' with ${effectiveTimeout/1000}s timeout (Custom: ${customTimeout}, Default: ${timeoutMs})`);
@@ -984,246 +994,98 @@ export async function runProjectHealthCheck(options = {}) {
  * @returns {Promise<Object>} - Results of all checks
  */
 export async function runAllAdvancedChecks(options = {}) {
-  // Default options
-  const defaultOptions = {
-    skipBundleCheck: false,
-    skipDeadCodeCheck: false,
-    skipDocsFreshnessCheck: false,
-    skipDocsCheck: false,
-    skipTypeCheck: false,
-    skipLintCheck: false,
-    skipWorkflowValidation: false,
-    skipHealthCheck: false,
-    ignoreAdvancedFailures: false,
-    parallelChecks: true,
-    verbose: false,
-    treatLintAsWarning: false,
-    treatHealthAsWarning: false,
-    silentMode: false,
-    promptFn: null
-  };
-  
-  // Start timing the advanced checks
-  const startTime = Date.now();
-  
-  // Merge with provided options
-  const mergedOptions = { ...defaultOptions, ...options };
-  
-  const results = {
-    results: {},
-    success: true
-  };
-  
-  // Set silent mode for this operation
-  silentLogger.setSilent(mergedOptions.silentMode);
-  
-  // Handle explicitly run checks (don't mark them as skipped)
-  // Track already run checks so we don't mark them as skipped later
-  const alreadyRunChecks = new Set();
-  
-  // Load and initialize workflow state for saving results
-  const workflowState = getWorkflowState();
-  
-  try {
-    // Initialize results.results with existing state from workflowState if available
-    // This ensures checks run earlier are not overwritten by skip logic later
-    results.results = { ...(workflowState.checkResults || {}) };
+  // Initialize logger, results, etc.
+  silentLogger.setSilent(options.silentMode || false);
+  const results = {};
+  let overallSuccess = true;
+  const startTime = performance.now();
 
-    // If typescript was already run, ensure skipped: false is set
-    if (results.results.typescript) {
-      results.results.typescript.skipped = false;
-      alreadyRunChecks.add('typescript');
-    }
-    
-    // If lint was already run, ensure skipped: false is set
-    if (results.results.lint) {
-      results.results.lint.skipped = false;
-      alreadyRunChecks.add('lint');
-    }
-    
-    // Define checks to run
-    const checks = [];
-    
-    if (!mergedOptions.skipBundleCheck && !alreadyRunChecks.has('bundleSize')) {
-      checks.push({
-        name: 'Bundle Size Analysis',
-        id: 'bundleSize',
-        fn: runBundleSizeCheck,
-        skip: mergedOptions.skipBundleCheck
-      });
-    }
-    
-    if (!mergedOptions.skipDeadCodeCheck && !alreadyRunChecks.has('deadCode')) {
-      checks.push({
-        name: 'Dead Code Detection',
-        id: 'deadCode',
-        fn: runDeadCodeCheck,
-        skip: mergedOptions.skipDeadCodeCheck
-      });
-    }
-    
-    if (!mergedOptions.skipDocsCheck && !alreadyRunChecks.has('docsQuality')) {
-      checks.push({
-        name: 'Documentation Quality',
-        id: 'docsQuality',
-        fn: runDocsQualityCheck,
-        skip: mergedOptions.skipDocsCheck
-      });
-    }
-    
-    if (!mergedOptions.skipDocsFreshnessCheck && !alreadyRunChecks.has('docsFreshness')) {
-      checks.push({
-        name: 'Documentation Freshness',
-        id: 'docsFreshness',
-        fn: runDocsFreshnessCheck,
-        skip: mergedOptions.skipDocsFreshnessCheck
-      });
-    }
-    
-    if (!mergedOptions.skipTypeCheck && !alreadyRunChecks.has('typescript')) {
-      checks.push({
-        name: 'TypeScript Validation',
-        id: 'typescript',
-        fn: runAdvancedTypeScriptCheck,
-        skip: mergedOptions.skipTypeCheck,
-        treatWarningAsSuccess: false
-      });
-    }
-    
-    if (!mergedOptions.skipLintCheck && !alreadyRunChecks.has('lint')) {
-      checks.push({
-        name: 'ESLint Validation',
-        id: 'lint',
-        fn: runAdvancedLintCheck,
-        skip: mergedOptions.skipLintCheck,
-        treatWarningAsSuccess: mergedOptions.treatLintAsWarning
-      });
-    }
-    
-    if (!mergedOptions.skipWorkflowValidation && !alreadyRunChecks.has('workflowValidation')) {
-      checks.push({
-        name: 'Workflow Validation',
-        id: 'workflowValidation',
-        fn: runWorkflowValidationCheck,
-        skip: mergedOptions.skipWorkflowValidation
-      });
-    }
-    
-    if (!mergedOptions.skipHealthCheck && !alreadyRunChecks.has('health')) {
-      checks.push({
-        name: 'Health Check',
-        id: 'health',
-        fn: runProjectHealthCheck,
-        skip: mergedOptions.skipHealthCheck,
-        treatWarningAsSuccess: mergedOptions.treatHealthAsWarning
-      });
-    }
-    
-    // Generate array of check execution promises
-    const checkPromises = checks
-      .filter(check => !check.skip && typeof check.fn === 'function')
-      .map(check => {
-        return async () => {
-          try {
-            silentLogger.info(`Running ${check.name}...`);
-            
-            // Run the check
-            const result = await check.fn({
-              ...mergedOptions, // Pass through all options
-              silentMode: mergedOptions.silentMode, // Control logging
-              verbose: mergedOptions.verbose
-            });
-            
-            // Check if special handling is needed
-            const warningButSuccess = 
-              check.treatWarningAsSuccess && 
-              result.warning && 
-              !result.success;
-            
-            // Handle special case of warning as success
-            const finalSuccess = warningButSuccess ? true : result.success;
-            
-            // Store result
-            results.results[check.id] = {
-              ...result,
-              success: finalSuccess,
-              warning: result.warning || false
-            };
-            
-            // Update overall success flag
-            if (!finalSuccess && !mergedOptions.ignoreAdvancedFailures) {
-              results.success = false;
-            }
-            
-            silentLogger.info(`${check.name} ${finalSuccess ? 'passed' : 'failed'}`);
-            
-            return results.results[check.id];
-          } catch (error) {
-            silentLogger.error(`Error in ${check.name}: ${error.message}`);
-            
-            // Store error result
-            results.results[check.id] = {
-              success: false,
-              error: error.message
-            };
-            
-            // Update overall success flag
-            if (!mergedOptions.ignoreAdvancedFailures) {
-              results.success = false;
-            }
-            
-            return results.results[check.id];
+  silentLogger.info('Starting advanced checks...');
+
+  // --- Run Checks ---
+  // Define all possible checks and their functions
+  const allChecks = {
+    bundleSize: runBundleSizeCheck,
+    deadCode: runDeadCodeCheck,
+    docsQuality: runDocsQualityCheck,
+    docsFreshness: runDocsFreshnessCheck,
+    typescript: runAdvancedTypeScriptCheck,
+    lint: runAdvancedLintCheck,
+    workflowValidation: runWorkflowValidationCheck,
+    health: runProjectHealthCheck
+  };
+
+  // Filter checks based on options
+  const checksToRun = Object.entries(allChecks)
+    .filter(([name]) => !options[`skip${name.charAt(0).toUpperCase() + name.slice(1)}Check`])
+    .map(([name, fn]) => ({ name, fn }));
+
+  // Run checks (parallel or sequential)
+  if (checksToRun.length > 0) {
+    if (options.parallelChecks) {
+      silentLogger.info(`Running ${checksToRun.length} checks in parallel...`);
+      const promises = checksToRun.map(check => 
+          check.fn(options).catch(error => ({ 
+              success: false, 
+              error: error.message,
+              name: check.name 
+          }))
+      );
+      const settledResults = await Promise.allSettled(promises);
+      
+      settledResults.forEach((settledResult, index) => {
+          const checkName = checksToRun[index].name;
+          if (settledResult.status === 'fulfilled') {
+              results[checkName] = settledResult.value;
+              if (settledResult.value && settledResult.value.success === false && !options.ignoreAdvancedFailures) {
+                  overallSuccess = false;
+              }
+          } else {
+              results[checkName] = { success: false, error: settledResult.reason?.message || 'Unknown check error' };
+              overallSuccess = false;
+              silentLogger.error(`Error running check ${checkName}: ${settledResult.reason?.message}`);
           }
-        };
       });
-    
-    // Execute checks (parallel or sequential)
-    if (mergedOptions.parallelChecks && checkPromises.length > 0) {
-      silentLogger.info(`Running ${checkPromises.length} checks in parallel...`);
-      await Promise.all(checkPromises.map(fn => fn()));
-    } else if (checkPromises.length > 0) {
-      silentLogger.info(`Running ${checkPromises.length} checks sequentially...`);
-      await runChecksSequentially(checkPromises, results);
+    } else {
+      silentLogger.info(`Running ${checksToRun.length} checks sequentially...`);
+      await runChecksSequentially(checksToRun, results, options);
+      overallSuccess = Object.values(results).every(r => r.success !== false || options.ignoreAdvancedFailures);
     }
-    
-    // Mark skipped checks explicitly, ONLY if no result exists from previous steps.
-    checks.forEach(check => {
-      if (check.skip && !alreadyRunChecks.has(check.id) && !results.results[check.id]) {
-        results.results[check.id] = { 
-          success: true, 
-          skipped: true,
-          message: `${check.name} was skipped` 
-        };
+  }
+
+  // --- Final Reporting --- (Ensure this part remains)
+  const duration = performance.now() - startTime;
+  silentLogger.info(`Advanced checks completed in ${(duration / 1000).toFixed(1)}s`);
+
+  // Report summary
+  Object.entries(results).forEach(([name, result]) => {
+      if (result && result.success === false && !options.ignoreAdvancedFailures) {
+          silentLogger.error(`- ${name}: Failed (${result.error || 'Check failed'})`);
+      } else if (result && result.warning) {
+          silentLogger.warn(`- ${name}: Passed with warnings`);
+      } else if (result) {
+         // Only log success in verbose mode to keep output cleaner
+         if (options.verbose) {
+            silentLogger.success(`- ${name}: Passed`);
+         }
       }
-    });
-  } catch (error) {
-    silentLogger.error(`Advanced checks error: ${error.message}`);
-    results.error = error.message;
-    results.success = false;
-  }
-  
-  // Calculate total duration for all advanced checks
-  const endTime = Date.now();
-  const totalDuration = endTime - startTime;
-  
-  // Add duration to results object
-  results.duration = totalDuration;
-  
-  if (options.verbose) {
-    silentLogger.info(`Advanced checks completed in ${totalDuration}ms`);
-  }
-  
-  return results;
+  });
+
+  return {
+    success: overallSuccess,
+    duration,
+    results
+  };
 }
 
 /**
  * Helper function to run checks sequentially
  */
-async function runChecksSequentially(checksToRun, results) {
-  for (const { name, func, options } of checksToRun) {
+async function runChecksSequentially(checksToRun, results, options) {
+  for (const { name, fn, options: checkOptions } of checksToRun) {
     try {
       silentLogger.info(`Running ${name} check...`);
-      const result = await func(options);
+      const result = await fn(checkOptions);
       results[name] = result || { success: false, error: `${name} check returned no result` };
     } catch (error) {
       silentLogger.error(`${name} check error: ${error.message}`);

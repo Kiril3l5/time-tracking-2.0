@@ -441,9 +441,17 @@ export class DashboardGenerator {
     
     // Get test results if available
     const tests = metrics.testResults || {};
-    const testStats = tests.passed !== undefined && tests.total !== undefined
-      ? `${tests.passed}/${tests.total} tests`
-      : 'No test data';
+    const coverage = tests.coverage; // Directly access the parsed coverage value
+    let coverageDisplay = 'N/A';
+
+    if (typeof coverage === 'number') {
+        coverageDisplay = `${coverage.toFixed(2)}%`;
+    } else if (tests.passed !== undefined && tests.total !== undefined) {
+        // Fallback to test count if coverage number isn't available but tests ran
+        coverageDisplay = `${tests.passed}/${tests.total} tests (Coverage N/A)`;
+    } else {
+        coverageDisplay = 'No test data';
+    }
     
     // Get build performance
     const buildPerformance = metrics.buildPerformance || {};
@@ -541,7 +549,7 @@ export class DashboardGenerator {
           </div>
           <div class="status-item">
             <h4>Test Coverage</h4>
-            <div class="value">${testStats}</div>
+            <div class="value">${coverageDisplay}</div>
           </div>
           <div class="status-item">
             <h4>Deployment</h4>
