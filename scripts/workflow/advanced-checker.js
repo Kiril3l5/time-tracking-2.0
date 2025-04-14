@@ -118,28 +118,26 @@ async function runWithTimeout(operation, timeoutMs, operationName, fallbackValue
   // Set silent mode for this operation
   silentLogger.setSilent(options.silentMode || false);
   
-  // Determine the effective timeout: Use specific timeout from options if present, otherwise use the default timeoutMs
-  // Ensure the key matches the configuration object key exactly.
-  const checkNameKey = 'docsFreshness'; // Hardcode the key used in the config for this specific check if needed
-  let customTimeout = undefined;
-  if (operationName === 'Documentation freshness check') { // Apply specific logic only for this check
-      customTimeout = options.timeout && typeof options.timeout === 'object' ? options.timeout[checkNameKey] : undefined;
+  // --- START REPLACEMENT for effectiveTimeout calculation ---
+  let effectiveTimeout = timeoutMs; // Start with default
+  let customTimeout = undefined; // Keep track if custom was attempted
+
+  if (operationName === 'Documentation freshness check') {
+    // Force 60s specifically for this check, overriding default and options
+    effectiveTimeout = 60000;
+    silentLogger.debug(`Timeout Override for [${operationName}]: Forcing ${effectiveTimeout}ms.`);
   } else {
-      // Fallback logic for other checks (if needed, though less critical now)
-      const genericKey = operationName.toLowerCase().replace(/\s+/g, '');
-      customTimeout = options.timeout && typeof options.timeout === 'object' ? options.timeout[genericKey] : undefined;
+    // Use logic for other checks (respecting options if present)
+    // Corrected key generation: Convert operationName to camelCase matching the options object keys
+    const checkNameKey = operationName.replace(/\s+(.)/g, (match, chr) => chr.toUpperCase()).replace(/^./, chr => chr.toLowerCase());
+    customTimeout = options.timeout && typeof options.timeout === 'object' ? options.timeout[checkNameKey] : undefined;
+    if (typeof customTimeout === 'number' && customTimeout > 0) {
+         effectiveTimeout = customTimeout;
+    }
   }
 
-  const effectiveTimeout = (typeof customTimeout === 'number' && customTimeout > 0) ? customTimeout : timeoutMs;
-  
-  // ---> Detailed Timeout Logging <---
-  silentLogger.debug(`Timeout Debug for [${operationName}]:`);
-  silentLogger.debug(` - Default timeoutMs: ${timeoutMs}`);
-  silentLogger.debug(` - options.timeout object: ${JSON.stringify(options.timeout)}`);
-  silentLogger.debug(` - checkNameKey used for lookup (if applicable): ${operationName === 'Documentation freshness check' ? checkNameKey : '(generic key)'}`);
-  silentLogger.debug(` - customTimeout found: ${customTimeout} (Type: ${typeof customTimeout})`);
-  silentLogger.debug(` - Effective Timeout Chosen: ${effectiveTimeout}`);
-  // ---> End Detailed Timeout Logging <---
+  silentLogger.debug(`Timeout Final for [${operationName}]: Effective Timeout Chosen: ${effectiveTimeout} (Default: ${timeoutMs}, Custom Attempted: ${customTimeout})`);
+  // --- END REPLACEMENT ---
   
   if (options.verbose && !options.silentMode) {
     silentLogger.debug(`Running '${operationName}' with ${effectiveTimeout/1000}s timeout (Custom: ${customTimeout}, Default: ${timeoutMs})`);

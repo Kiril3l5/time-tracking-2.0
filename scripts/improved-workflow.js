@@ -1097,21 +1097,72 @@ class Workflow {
       this.packages = packagesToBuild.map(name => ({ name, buildResult: null, testResults: null }));
 
       const buildPromises = packagesToBuild.map(async (packageName) => {
-           // ... (try/catch block calling buildPackageWithWorkflowIntegration) ...
-           // ... (robust result handling and metrics storage) ...
+        let buildResult;
+        try {
+          this.logger.info(`Building package: ${packageName}...`);
+          buildResult = await buildPackageWithWorkflowIntegration({
+            package: packageName,
+            timeout: this.options.buildTimeout || 300000, 
+            parallel: true,
+            recordWarning: (message, phase, step, severity) => this.recordWarning(message, phase, step, severity),
+            recordStep: (name, phase, success, duration, error) => this.recordWorkflowStep(name, phase, success, duration, error),
+            phase: 'Build'
+          });
+          
+          this.logger.debug(`Raw buildResult for ${packageName}: ${JSON.stringify(buildResult)}`);
+
+          // ---- START Robust Result Handling & Metrics Storage ----
+          if (buildResult && typeof buildResult === 'object') {
+            this.metrics.packageMetrics[packageName] = {
+              success: buildResult.success === true,
+              duration: typeof buildResult.duration === 'number' ? buildResult.duration : 0,
+              fileCount: typeof buildResult.fileCount === 'number' ? buildResult.fileCount : 0,
+              sizeBytes: typeof buildResult.totalSize === 'number' ? buildResult.totalSize : 0,
+              formattedSize: typeof buildResult.totalSize === 'number' ? this.formatBytes(buildResult.totalSize) : 'N/A',
+              warnings: Array.isArray(buildResult.warnings) ? buildResult.warnings : [],
+              error: buildResult.success === true ? null : (buildResult.error || 'Unknown build error')
+            };
+            this.logger.debug(`Stored metrics for ${packageName}: ${JSON.stringify(this.metrics.packageMetrics[packageName])}`);
+            
+            if (buildResult.success === true) {
+                this.logger.success(`✓ Build successful for package: ${packageName}`);
+                return { success: true, packageName };
+            } else {
+                const errorMsg = `Build failed for package ${packageName}: ${buildResult.error || 'Unknown error'}`;
+                this.logger.error(errorMsg);
+                return { success: false, error: errorMsg, packageName };
+            }
+          } else {
+            const errorMsg = `Build process for package ${packageName} returned invalid result: ${buildResult}`;
+            this.logger.error(errorMsg);
+            this.metrics.packageMetrics[packageName] = { success: false, duration: 0, error: errorMsg };
+            return { success: false, error: errorMsg, packageName }; 
+          }
+          // ---- END Robust Result Handling & Metrics Storage ----
+          
+        } catch (error) {
+            const errorMsg = `Exception during build for package ${packageName}: ${error.message}`;
+            this.logger.error(errorMsg);
+            this.metrics.packageMetrics[packageName] = { success: false, duration: 0, error: errorMsg };
+            return { success: false, error: errorMsg, packageName }; 
+        }
       });
-      
+
       const results = await Promise.all(buildPromises);
-      const failedBuilds = results.filter(r => !r.success);
+      // Ensure results array contains only valid objects before filtering
+      const validResults = results.filter(r => r && typeof r === 'object');
+      const failedBuilds = validResults.filter(r => !r.success); // Filter on the validated array
+      
       if (failedBuilds.length > 0) {
           const errorMsg = `Build phase failed for ${failedBuilds.length} package(s): ${failedBuilds.map(f => f.packageName).join(', ')}`;
           this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, errorMsg);
+          // Log individual errors
+          failedBuilds.forEach(f => this.logger.error(` - ${f.packageName}: ${f.error}`));
           throw new Error(errorMsg);
       }
       
-      // Cache saving is disabled, no need for saveBuildCache call here
+      // Cache saving is disabled 
       
-      // Record build phase step completion
       this.progressTracker.completeStep(true, 'Build completed');
       this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
       
