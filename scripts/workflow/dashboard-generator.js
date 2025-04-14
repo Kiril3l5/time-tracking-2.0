@@ -444,10 +444,11 @@ export class DashboardGenerator {
     const coverage = tests.coverage; // Directly access the parsed coverage value
     let coverageDisplay = 'N/A';
 
-    if (typeof coverage === 'number') {
+    // Prioritize showing the numerical coverage value if it's a number (even 0)
+    if (typeof coverage === 'number' && !isNaN(coverage)) {
         coverageDisplay = `${coverage.toFixed(2)}%`;
     } else if (tests.passed !== undefined && tests.total !== undefined) {
-        // Fallback to test count if coverage number isn't available but tests ran
+        // Fallback to test count ONLY if coverage number isn't available
         coverageDisplay = `${tests.passed}/${tests.total} tests (Coverage N/A)`;
     } else {
         coverageDisplay = 'No test data';
@@ -574,9 +575,11 @@ export class DashboardGenerator {
     let html = '<ul class="package-metrics-list">';
     for (const [packageName, metrics] of Object.entries(packageMetrics)) {
       const statusClass = metrics.success ? 'success' : 'error';
-      const duration = metrics.duration ? this.formatDuration(metrics.duration) : 'N/A';
+      // Ensure duration is treated as a number before formatting
+      const durationMs = typeof metrics.duration === 'number' ? metrics.duration : 0;
+      const duration = durationMs > 0 ? this.formatDuration(durationMs) : 'N/A';
       // Use the pre-formatted size or indicate N/A
-      const details = metrics.formattedSize && metrics.fileCount 
+      const details = metrics.formattedSize && typeof metrics.fileCount === 'number' 
                       ? `${metrics.fileCount} files, ${metrics.formattedSize}` 
                       : 'Details N/A'; 
       html += `
