@@ -544,33 +544,41 @@ class Workflow {
         const cacheResult = await tryUseValidationCache(this.cache, this.options);
         
         if (cacheResult.fromCache) {
-          this.advancedCheckResults = cacheResult.data.advancedChecks;
+          // Restore data from cache
+          this.advancedCheckResults = cacheResult.data.advancedChecks || {}; // Use empty object as fallback
+          this.workflowWarnings = Array.isArray(cacheResult.data.warnings) ? cacheResult.data.warnings : [];
           
-          // Restore warnings from cache
-          if (cacheResult.data.warnings && Array.isArray(cacheResult.data.warnings)) {
-            this.workflowWarnings = cacheResult.data.warnings;
-            this.logger.debug(`Restored ${this.workflowWarnings.length} warnings from cache`);
-          }
-          
-          // ---> RESTORE TEST RESULTS FROM CACHE <--- 
-          if (cacheResult.data.testResults) {
-             this.metrics.testResults = cacheResult.data.testResults;
+          // ---> CORRECTLY RESTORE TEST RESULTS FROM CACHE <--- 
+          if (cacheResult.data.testResults && typeof cacheResult.data.testResults === 'object') { 
+             this.metrics.testResults = { ...cacheResult.data.testResults }; // Assign directly
              this.logger.debug(`Restored testResults from cache: ${JSON.stringify(this.metrics.testResults)}`);
           } else {
-             // Initialize if missing in cache to prevent errors
+             // Initialize if missing or invalid in cache
              this.metrics.testResults = { passed: 0, failed: 0, total: 0, coverage: null }; 
-             this.logger.debug('No testResults found in validation cache, initializing.');
+             this.logger.warn('No valid testResults found in validation cache, initializing.');
           }
           // ---> END RESTORE <--- 
           
-          // Record success steps from cache
-          for (const step of cacheResult.data.steps) {
-            this.recordWorkflowStep(step.name, step.phase, step.success, step.duration);
+          // Record steps from cache
+          if (Array.isArray(cacheResult.data.steps)) {
+              for (const step of cacheResult.data.steps) {
+                // Add fallback for potentially missing properties in cached steps
+                this.recordWorkflowStep(
+                    step.name || 'Unknown Cached Step', 
+                    step.phase || 'Validation', 
+                    step.success !== false, // Assume success if not explicitly false
+                    typeof step.duration === 'number' ? step.duration : 0,
+                    step.error || (step.success !== false ? 'From Cache' : 'From Cache (Failed)')
+                );
+              }
+          } else {
+              this.recordWorkflowStep('Validation Phase', 'Validation', true, 10, 'From Cache (No Steps Data)');
           }
           
           this.progressTracker.completeStep(true, 'Validation completed from cache');
-          this.recordWorkflowStep('Validation Phase', 'Validation', true, Date.now() - phaseStartTime);
-          return;
+          // Ensure the main phase step is also recorded correctly
+          this.recordWorkflowStep('Validation Phase', 'Validation', true, 10, 'From Cache'); 
+          return; // Return early as intended when using cache
         }
       }
       
@@ -1056,46 +1064,59 @@ class Workflow {
 
       // If using cache, record steps and restore metrics
       if (cacheResult.fromCache) {
-        // Load metrics from cache
-        const cachedBuildData = cacheResult.data?.buildMetrics; // This IS the packageMetrics structure
+        const cachedBuildData = cacheResult.data?.buildMetrics; 
         this.logger.debug(`[Build Cache Hit] Loaded cachedBuildData: ${JSON.stringify(cachedBuildData)}`);
 
+        // ---> CORRECTLY RESTORE BUILD METRICS FROM CACHE <--- 
         if (cachedBuildData && typeof cachedBuildData === 'object' && Object.keys(cachedBuildData).length > 0) {
-            // Restore package-specific metrics directly
-            this.metrics.packageMetrics = cachedBuildData;
+            this.metrics.packageMetrics = { ...cachedBuildData }; // Restore packageMetrics
             
-            // Recalculate overall build performance from cached package metrics
-            const packagesBuilt = Object.keys(cachedBuildData);
-            const buildDurations = packagesBuilt.map(p => cachedBuildData[p]?.duration || 0);
-            const successfulBuilds = packagesBuilt.filter(p => cachedBuildData[p]?.success).length;
+            // Recalculate overall build performance from restored package metrics
+            const packagesBuilt = Object.keys(this.metrics.packageMetrics);
+            const buildDurations = packagesBuilt.map(p => this.metrics.packageMetrics[p]?.duration || 0);
+            const successfulBuilds = packagesBuilt.filter(p => this.metrics.packageMetrics[p]?.success === true).length; // Check for true
+            const avgBuildTime = buildDurations.length > 0 ? buildDurations.reduce((sum, d) => sum + d, 0) / buildDurations.length : 0;
+            const successRate = packagesBuilt.length > 0 ? successfulBuilds / packagesBuilt.length : 1;
+            
             this.metrics.buildPerformance = {
               totalBuildTime: buildDurations.reduce((sum, d) => sum + d, 0),
-              averageBuildTime: buildDurations.length > 0 ? buildDurations.reduce((sum, d) => sum + d, 0) / buildDurations.length : 0,
-              buildSuccessRate: packagesBuilt.length > 0 ? successfulBuilds / packagesBuilt.length : 1, 
+              averageBuildTime: avgBuildTime,
+              buildSuccessRate: successRate,
+              // Attempt to restore fileCount/size if available at top level (though unlikely based on save logic)
+              fileCount: typeof cachedBuildData.fileCount === 'number' ? cachedBuildData.fileCount : undefined,
+              totalSize: typeof cachedBuildData.totalSize === 'number' ? cachedBuildData.totalSize : undefined
             };
-            this.logger.debug('Restored packageMetrics and recalculated buildPerformance from cache.');
+            this.logger.debug(`Restored packageMetrics: ${JSON.stringify(this.metrics.packageMetrics)}`);
+            this.logger.debug(`Recalculated buildPerformance from cache: ${JSON.stringify(this.metrics.buildPerformance)}`);
         } else {
-            this.logger.warn('Build cache hit but no valid buildMetrics found in cached data.');
+            this.logger.warn('Build cache hit but no valid buildMetrics (packageMetrics) found in cached data.');
             this.metrics.packageMetrics = {}; 
             this.metrics.buildPerformance = { totalBuildTime: 0, averageBuildTime: 0, buildSuccessRate: 0 };
         }
+        // ---> END RESTORE <--- 
 
-        // Record success steps from cache
-        if (cacheResult.data?.steps) {
+        // Record steps from cache (ensure Build Phase itself is recorded)
+        let buildPhaseStepRecorded = false;
+        if (Array.isArray(cacheResult.data?.steps)) {
             for (const step of cacheResult.data.steps) {
-              // Ensure step names are consistent (e.g., 'Package Build' might not be in cache)
-              this.recordWorkflowStep(step.name, step.phase, step.success, step.duration, step.error || 'From Cache');
+                 this.recordWorkflowStep(
+                    step.name || 'Unknown Cached Step', 
+                    step.phase || 'Build', 
+                    step.success !== false, 
+                    typeof step.duration === 'number' ? step.duration : 0,
+                    step.error || (step.success !== false ? 'From Cache' : 'From Cache (Failed)')
+                 );
+                 if (step.name === 'Build Phase') buildPhaseStepRecorded = true;
             }
-        } else {
-            this.recordWorkflowStep('Package Build', 'Build', true, 0, 'From Cache (No Steps Data)');
+        } 
+        // Ensure Build Phase step is recorded if missing from cache data
+        if (!buildPhaseStepRecorded) {
+             this.recordWorkflowStep('Build Phase', 'Build', true, 10, 'From Cache');
         }
-        // We need to record the overall Build Phase step completion using cache info
-        this.progressTracker.completeStep(true, 'Build completed from cache');
-        // Use a small, non-zero duration to indicate cache was used
-        this.recordWorkflowStep('Build Phase', 'Build', true, 10, 'From Cache'); 
         
-        // *** IMPORTANT: Do NOT return here. Let the function continue to the end. ***
-        // The rest of the function calculates final phase duration.
+        this.progressTracker.completeStep(true, 'Build completed from cache');
+       
+        // *** Let the function continue to calculate final phase duration ***
       } else {
          // ---> If NOT from cache, run the actual build logic <--- 
          this.logger.info('Building application (cache miss or disabled)...');
