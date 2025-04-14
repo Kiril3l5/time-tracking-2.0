@@ -101,8 +101,7 @@ function findUnusedExports(files) {
  * @param {string[]} packageDirs - Directories containing package.json files
  * @returns {Object} Results of the analysis
  */
-function findUnusedDependencies(packageDirs) {
-  const unused = [];
+async function findUnusedDependencies(packageDirs) {
   const depcheckPromises = [];
   
   // Helper function to run depcheck for a single directory
@@ -154,20 +153,21 @@ function findUnusedDependencies(packageDirs) {
   }
 
   // Wait for all depcheck processes to complete
-  return Promise.all(depcheckPromises).then(results => {
-    const unused = results.filter(r => r && !r.error && r.unusedDependencies && r.unusedDependencies.length > 0);
-    const errors = results.filter(r => r && r.error);
+  const results = await Promise.all(depcheckPromises);
     
-    if (errors.length > 0) {
-       logger.warn(`Depcheck encountered errors in ${errors.length} directories.`);
-    }
+  // Rename this variable to avoid conflict
+  const validUnused = results.filter(r => r && !r.error && r.unusedDependencies && r.unusedDependencies.length > 0);
+  const errors = results.filter(r => r && r.error);
+    
+  if (errors.length > 0) {
+     logger.warn(`Depcheck encountered errors in ${errors.length} directories.`);
+  }
 
-    return {
-      success: errors.length === 0, // Consider analysis successful if no errors occurred, even if unused deps were found
-      unusedDependencies: unused,
-      errors: errors // Include errors in the result for transparency
-    };
-  });
+  return {
+    success: errors.length === 0, // Consider analysis successful if no errors occurred
+    unusedDependencies: validUnused, // Return the filtered valid results
+    errors: errors // Include errors in the result for transparency
+  };
 }
 
 /**
@@ -177,9 +177,12 @@ function findUnusedDependencies(packageDirs) {
  */
 function estimateBundleSizeImpact(results) {
   // Rough estimation based on typical code sizes
-  const unusedExportsSize = results.unusedExports.length * 0.2; // ~200 bytes per export
-  const unusedDepsSize = results.unusedDependencies.reduce((sum, pkg) => {
-    return sum + pkg.unusedDependencies.length * 50; // ~50KB per dependency as a rough estimate
+  const unusedExportsCount = results.unusedExports?.length || 0;
+  const unusedDepsPackages = results.unusedDependencies || [];
+  
+  const unusedExportsSize = unusedExportsCount * 0.2; // ~200 bytes per export
+  const unusedDepsSize = unusedDepsPackages.reduce((sum, pkg) => {
+    return sum + (pkg.unusedDependencies?.length || 0) * 50; // ~50KB per dependency
   }, 0);
   
   const totalKB = unusedExportsSize + unusedDepsSize;
@@ -197,23 +200,23 @@ function estimateBundleSizeImpact(results) {
  * @returns {Object} - Summary of results
  */
 function summarizeResults(results) {
-  const { unusedExports, unusedDependencies, unusedFiles } = results;
-  
-  const totalUnusedExports = unusedExports ? unusedExports.length : 0;
-  const totalUnusedDependencies = unusedDependencies ? unusedDependencies.length : 0;
-  const totalUnusedFiles = unusedFiles ? unusedFiles.length : 0;
-  
-  const potentialSizeReduction = calculatePotentialSizeReduction(results);
-  
-  const totalIssues = totalUnusedExports + totalUnusedDependencies + 
-                      totalUnusedFiles;
+  const unusedExportsCount = results.unusedExports?.length || 0;
+  const unusedDepsPackages = results.unusedDependencies || [];
+  const depcheckErrorCount = results.errors?.length || 0;
+
+  const totalUnusedDeps = unusedDepsPackages.reduce(
+    (sum, pkg) => sum + (pkg.unusedDependencies?.length || 0), 0
+  );
+
+  const totalIssues = unusedExportsCount + totalUnusedDeps + depcheckErrorCount;
   
   return {
     totalIssues,
-    unusedExports: totalUnusedExports,
-    unusedDependencies: totalUnusedDependencies,
-    unusedFiles: totalUnusedFiles,
-    potentialSizeReduction
+    unusedExports: unusedExportsCount,
+    unusedDependencies: totalUnusedDeps,
+    depcheckErrors: depcheckErrorCount,
+    unusedFiles: results.unusedFiles?.length || 0,
+    potentialSizeReduction: calculatePotentialSizeReduction(results)
   };
 }
 
@@ -348,24 +351,26 @@ export async function analyzeDeadCode(options) {
     // Analyze dependencies
     if (analyzeDependencies && pkgDirs.length > 0) {
       logger.info('Analyzing unused dependencies...');
-      const depsResult = findUnusedDependencies(pkgDirs);
-      // Filter out errors before processing
-      const validDepsResults = depsResult.unusedDependencies.filter(r => r && !r.error);
-      analysisResults.unusedDependencies = validDepsResults; // Store only valid results
+      // IMPORTANT: findUnusedDependencies is now async due to Promise.all
+      const depsResult = await findUnusedDependencies(pkgDirs); 
       
-      if (!depsResult.success) { // Check overall success flag from the function
+      // Store both successful results and errors separately
+      analysisResults.unusedDependencies = depsResult.unusedDependencies || []; // Array of { packagePath, unusedDependencies: [...] }
+      analysisResults.depcheckErrors = depsResult.errors || []; // Array of { packagePath, error }
+
+      if (!depsResult.success) { 
         allAnalysesSucceeded = false;
-         analysisResults.error = analysisResults.error ? `${analysisResults.error}; Dependency check failed` : 'Dependency check failed'; 
-        logger.warn('Unused dependency analysis reported failure or issues.');
-        // Log specific errors if available
-        if (depsResult.errors && depsResult.errors.length > 0) {
-            depsResult.errors.forEach(e => logger.warn(` - Error in ${e.packagePath}: ${e.error}`));
-        }
+        // Add a general warning, specific errors are in analysisResults.depcheckErrors
+        const errorMsg = `Depcheck analysis failed for ${analysisResults.depcheckErrors.length} package(s).`;
+        analysisResults.error = analysisResults.error ? `${analysisResults.error}; ${errorMsg}` : errorMsg;
+        logger.warn(errorMsg);
+        analysisResults.depcheckErrors.forEach(e => logger.warn(` - Error in ${e.packagePath}: ${e.error}`));
       } else {
-        const totalUnused = validDepsResults.reduce(
+        // Calculate total unused only from successful results
+        const totalUnused = analysisResults.unusedDependencies.reduce(
           (sum, pkg) => sum + (pkg.unusedDependencies ? pkg.unusedDependencies.length : 0), 0
         );
-        logger.info(`Found ${totalUnused} unused dependencies across ${validDepsResults.length} packages`);
+        logger.info(`Found ${totalUnused} unused dependencies across ${analysisResults.unusedDependencies.length} packages checked successfully.`);
       }
     }
     
@@ -373,18 +378,25 @@ export async function analyzeDeadCode(options) {
     analysisResults.success = allAnalysesSucceeded;
 
     // Estimate potential bundle size reduction (using valid results)
-    const potentialBundleSizeReduction = estimateBundleSizeImpact(analysisResults);
+    // Ensure estimateBundleSizeImpact can handle potentially empty/missing arrays
+    const potentialBundleSizeReduction = estimateBundleSizeImpact(analysisResults); 
     
     // Prepare final results object to be returned
     const finalResults = {
-      ...analysisResults, // Includes success, unusedExports, potentially filtered unusedDependencies, error
+      success: analysisResults.success,
+      unusedExports: analysisResults.unusedExports || [],
+      unusedDependencies: analysisResults.unusedDependencies || [], // Ensure array exists
+      depcheckErrors: analysisResults.depcheckErrors || [], // Include errors
+      error: analysisResults.error, // Overall error message
       summary: {
-        unusedExports: analysisResults.unusedExports.length,
-        unusedDependencies: analysisResults.unusedDependencies.reduce(
+        unusedExports: (analysisResults.unusedExports || []).length,
+        // Calculate summary based only on packages where depcheck succeeded
+        unusedDependencies: (analysisResults.unusedDependencies || []).reduce(
           (sum, pkg) => sum + (pkg.unusedDependencies ? pkg.unusedDependencies.length : 0), 0
         ),
-        totalIssues: analysisResults.unusedExports.length + 
-                    analysisResults.unusedDependencies.reduce((sum, pkg) => sum + (pkg.unusedDependencies ? pkg.unusedDependencies.length : 0), 0)
+        totalIssues: (analysisResults.unusedExports || []).length + 
+                     (analysisResults.unusedDependencies || []).reduce((sum, pkg) => sum + (pkg.unusedDependencies ? pkg.unusedDependencies.length : 0), 0) + 
+                     (analysisResults.depcheckErrors || []).length // Count errors as issues
       },
       potentialBundleSizeReduction
     };
@@ -539,6 +551,8 @@ ${colors.bold}Examples:${colors.reset}
  */
 function generateHtmlReport(results, reportPath) {
   try {
+    const unusedDepsCount = (results.unusedDependencies || []).reduce((sum, pkg) => sum + (pkg.unusedDependencies?.length || 0), 0);
+    const depcheckErrorCount = results.depcheckErrors?.length || 0;
     const html = `
     <!DOCTYPE html>
     <html>
@@ -556,6 +570,9 @@ function generateHtmlReport(results, reportPath) {
         .error { color: #d32f2f; }
         .warning { color: #f57c00; }
         .success { color: #388e3c; }
+        .error-section { background: #ffebee; border: 1px solid #e57373; padding: 10px; margin-bottom: 15px; border-radius: 4px; }
+        .error-section h3 { color: #c62828; margin-top: 0; }
+        .error-detail { color: #d32f2f; font-style: italic; }
       </style>
     </head>
     <body>
@@ -564,13 +581,31 @@ function generateHtmlReport(results, reportPath) {
       <div class="summary">
         <h2>Summary</h2>
         <p>Generated on: ${new Date().toLocaleString()}</p>
-        <p>Unused exports: ${results.unusedExports.length}</p>
-        <p>Unused dependencies: ${results.unusedDependencies.reduce((sum, pkg) => sum + pkg.unusedDependencies.length, 0)}</p>
-        <p>Potential bundle size reduction: ${results.potentialBundleSizeReduction}</p>
+        <p>Unused exports: ${results.unusedExports?.length || 0}</p>
+        <p>Unused dependencies: ${unusedDepsCount}</p>
+        <p>Depcheck Errors: ${depcheckErrorCount}</p> 
+        <p>Potential bundle size reduction: ${results.potentialBundleSizeReduction || 'N/A'}</p>
       </div>
       
+      <!-- Depcheck Errors Section -->
+      ${(results.depcheckErrors && results.depcheckErrors.length > 0) ? `
+      <div class="error-section">
+        <h3>Depcheck Errors (${results.depcheckErrors.length})</h3>
+        <table>
+          <tr><th>Package</th><th>Error</th></tr>
+          ${results.depcheckErrors.map(item => `
+            <tr>
+              <td>${item.packagePath}</td>
+              <td class="error-detail">${item.error}</td>
+            </tr>
+          `).join('')}
+        </table>
+      </div>
+      ` : ''}
+
       <!-- Unused exports section -->
-      <h2>Unused Exports (${results.unusedExports.length})</h2>
+      <h2>Unused Exports (${results.unusedExports?.length || 0})</h2>
+      ${(results.unusedExports && results.unusedExports.length > 0) ? `
       <table>
         <tr>
           <th>File</th>
@@ -587,30 +622,36 @@ function generateHtmlReport(results, reportPath) {
           </tr>
         `).join('')}
       </table>
+      ` : '<p>None found.</p>'}
       
       <!-- Unused dependencies section -->
-      <h2>Unused Dependencies (${results.unusedDependencies.reduce((sum, pkg) => sum + pkg.unusedDependencies.length, 0)})</h2>
-      ${results.unusedDependencies.map(pkg => `
-        <h3>${pkg.packagePath}</h3>
-        <table>
-          <tr>
-            <th>Dependency</th>
-            <th>Type</th>
-          </tr>
-          ${pkg.unusedDependencies.map(dep => `
+      <h2>Unused Dependencies (${unusedDepsCount})</h2>
+      ${(results.unusedDependencies && results.unusedDependencies.length > 0) ? 
+        results.unusedDependencies.map(pkg => `
+          <h3>${pkg.packagePath}</h3>
+          <table>
             <tr>
-              <td>${dep.name}</td>
-              <td>${dep.type}</td>
+              <th>Dependency</th>
+              <th>Type</th>
             </tr>
-          `).join('')}
-        </table>
-      `).join('')}
+            ${pkg.unusedDependencies.map(dep => `
+              <tr>
+                <td>${dep.name}</td>
+                <td>${dep.type}</td>
+              </tr>
+            `).join('')}
+          </table>
+        `).join('') : '<p>None found.</p>'
+      }
     </body>
     </html>
     `;
 
-    fs.writeFileSync(reportPath, html);
-    logger.info(`Dead code analysis report generated at ${reportPath}`);
+    // Use async write file
+    fs.writeFile(reportPath, html, 'utf8')
+      .then(() => logger.info(`Dead code analysis HTML report generated at ${reportPath}`))
+      .catch(err => logger.error(`Failed to generate HTML report: ${err.message}`));
+
   } catch (err) {
     logger.error(`Failed to generate HTML report: ${err.message}`);
   }
