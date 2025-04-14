@@ -259,6 +259,12 @@ function formatBytes(bytes) {
  * @returns {Promise<Object>} Analysis results - Guaranteed to return an object
  */
 export async function analyzeDeadCode(options) {
+  // ---> DEBUG: Inspect logger object <---
+  logger.debug('--- Inside analyzeDeadCode --- Logger object:');
+  logger.debug(typeof logger);
+  logger.debug(Object.keys(logger).join(', '));
+  // ---> END DEBUG <---
+
   // Initialize default results structure
   const analysisResults = {
     success: false, // Default to false

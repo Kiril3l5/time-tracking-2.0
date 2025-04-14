@@ -305,8 +305,8 @@ export async function runStandardTests(options = {}) {
               coverageRan = true;
               logger.debug('Coverage ran: Found coverage-final.json with content.');
 
-              // Regex v3: More robust, handles spacing and escapes pipe
-              const coverageSummaryRegex = /^\s*All files\s*\|\s*([\d.]+)\s*\|/m;
+              // Regex v4: Simplest attempt
+              const coverageSummaryRegex = /All files\s*\|\s*([\d.]+)/m;
               const match = output.match(coverageSummaryRegex);
               if (match && match[1]) {
                 coverageValue = parseFloat(match[1]);
