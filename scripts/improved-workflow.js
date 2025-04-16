@@ -9,48 +9,23 @@ import { commandRunner } from './core/command-runner.js';
 import { getCurrentBranch, hasUncommittedChanges, commitChanges } from './workflow/branch-manager.js';
 import { QualityChecker } from './checks/quality-checker.js';
 import { PackageCoordinator } from './workflow/package-coordinator.js';
-import { deployPackage, createChannelId, deployPackageWithWorkflowIntegration } from './workflow/deployment-manager.js';
+import { createChannelId, deployPackageWithWorkflowIntegration } from './workflow/deployment-manager.js';
 import * as progressTracker from './core/progress-tracker.js';
 import { colors, styled } from './core/colors.js';
 import { performanceMonitor } from './core/performance-monitor.js';
 import { setTimeout } from 'timers/promises';
 import { runAllAdvancedChecks, runSingleCheckWithWorkflowIntegration } from './workflow/advanced-checker.js';
 import { verifyAllAuth } from './auth/auth-manager.js';
-import { createPR } from './github/pr-manager.js';
-import getWorkflowState from './workflow/workflow-state.js';
 import { execSync } from 'child_process';
-import { buildPackageWithWorkflowIntegration } from './workflow/build-manager.js';
-import { getWorkflowConfig } from './workflow/workflow-config.js';
-import { WorkflowCache, generateCacheKey } from './workflow/workflow-cache.js';
-import { createRequire } from 'module';
+import { buildPackageWithWorkflowTracking } from './workflow/build-manager.js';
+import { WorkflowCache } from './workflow/workflow-cache.js';
 import path from 'path';
 import { rotateFiles } from './core/command-runner.js';
-import { createHash } from 'crypto';
 import { cleanupChannels } from './firebase/channel-cleanup.js';
 import { generateWorkflowDashboard } from './workflow/dashboard-integration.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-/**
- * Format duration in milliseconds to a human-readable string
- * @param {number} milliseconds - Duration in milliseconds
- * @returns {string} Formatted duration string
- */
-function formatDuration(milliseconds) {
-  if (!milliseconds) return '0s';
-  
-  if (milliseconds < 1000) return `${milliseconds}ms`;
-  
-  const seconds = Math.floor(milliseconds / 1000) % 60;
-  const minutes = Math.floor(milliseconds / (1000 * 60)) % 60;
-  
-  if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
-  }
-  
-  return `${seconds}s`;
-}
 
 /**
  * Clean up existing workflow state files to prevent showing errors from previous runs
@@ -261,12 +236,13 @@ class Workflow {
       
       // ENHANCEMENT: Also add to the warnings collection to ensure it shows in Issues & Warnings
       // Only add if it's an actual error, not just a "skipped" message
-      if (error !== 'Skipped' && !error.includes('skipped')) {
+      // ---> AND check if it's the generic parent step failure which is handled elsewhere <-----
+      if (error !== 'Skipped' && !error.includes('skipped') && !name?.endsWith(' Phase') && name !== 'Quality Checks') {
         this.recordWarning(
           `${name}: ${error}`,
           phase,
           name,
-          'error'
+          'error' // Mark as error severity
         );
       }
     }
@@ -351,7 +327,7 @@ class Workflow {
       await this.validate();
       
       // 3. Build Phase
-      const buildMetrics = await this.build();
+      const _ = await this.build();
       
       // 4. Deploy Phase
       await this.deploy();
@@ -622,17 +598,30 @@ class Workflow {
         // Core quality checks (lint, type check, tests)
         const checkResult = await this.qualityChecker.runAllChecks();
         
-        // Update metrics with test results, including coverage
-        if (checkResult.results?.testing) {
-          this.metrics.testResults = {
-            ...(this.metrics.testResults || {}),
-            passed: checkResult.results.testing.passedTests,
-            failed: checkResult.results.testing.failedTests,
-            total: checkResult.results.testing.totalTests,
-            coverage: checkResult.results.testing.coverage // Directly use coverage from the summary
-          };
-          logger.debug(`Updated test metrics: ${JSON.stringify(this.metrics.testResults)}`);
+        // ---> Update metrics with DETAILED test results <-----
+        // Ensure this.metrics.testResults exists
+        if (!this.metrics.testResults || typeof this.metrics.testResults !== 'object') {
+            this.logger.warn('Initializing this.metrics.testResults as it was missing or invalid.');
+            this.metrics.testResults = {}; 
         }
+        
+        // Store results from qualityChecker, prioritizing the specific fields
+        this.metrics.testResults.lintSuccess = checkResult.results?.linting?.success ?? null;
+        this.metrics.testResults.typeCheckSuccess = checkResult.results?.typeChecking?.success ?? null;
+        this.metrics.testResults.testStepsSuccess = checkResult.results?.testing?.success ?? null; // Success of the test runner steps
+
+        // Store actual unit test counts from the new structure
+        const unitTestData = checkResult.unitTests || {};
+        this.metrics.testResults.unitTestsPassed = unitTestData.passed ?? 0;
+        this.metrics.testResults.unitTestsTotal = unitTestData.total ?? 0;
+        this.metrics.testResults.testFiles = unitTestData.files ?? []; // Store the test files information
+
+        // Store coverage percentage
+        this.metrics.testResults.coverage = (typeof checkResult.coverage === 'number' && !isNaN(checkResult.coverage)) 
+                                          ? checkResult.coverage 
+                                          : null; 
+
+        logger.debug(`Updated test metrics: ${JSON.stringify(this.metrics.testResults)}`);
         
         // Record all quality check warnings
         if (checkResult.warnings && checkResult.warnings.length > 0) {
@@ -965,16 +954,58 @@ class Workflow {
             remainingResults.duration || performanceMonitor.measure('advancedChecks')
           );
           
+          // ---> Define qualityErrorMsg outside the if block <-----
+          let qualityErrorMsg = null;
+          
           // Determine overall quality check status based on the primary checker (not the additional ones)
           if (!checkResult.success) {
-            // If we get here, quality checks failed but aren't critical enough to stop the workflow
+            qualityErrorMsg = checkResult.error || 'Quality checks failed without specific error message'; // Assign value here
             this.logger.warn('Quality checks finished with warnings or errors');
-            this.logger.warn(checkResult.error || 'See dashboard for details');
-            this.recordWorkflowStep('Quality Checks', 'Validation', false, Date.now() - qualityStartTime, checkResult.error || 'Quality checks had warnings or errors');
+            this.logger.warn(`Specific Error: ${qualityErrorMsg}`);
+            
+            // Record the Quality Checks step itself as failed, using the specific error message
+            this.recordWorkflowStep(
+              'Quality Checks', 
+              'Validation', 
+              false, // Mark step as failed
+              Date.now() - qualityStartTime, 
+              qualityErrorMsg // Use the specific error here for the step details
+            );
+            
+            // ---> DO NOT add a separate Warning for the generic step failure <--- 
+            // The specific error is already captured in the step details and 
+            // potentially by the `generateIssues` function looking at failed steps or specific warnings from sub-modules.
+            
           } else {
             this.logger.success('✓ All quality checks passed');
             this.recordWorkflowStep('Quality Checks', 'Validation', true, Date.now() - qualityStartTime);
           }
+          
+          // ---> Process general warnings AFTER determining step success/failure <-----
+          // (This was moved from an earlier incorrect position)
+          if (checkResult.warnings && Array.isArray(checkResult.warnings) && checkResult.warnings.length > 0) {
+            this.logger.debug(`Processing ${checkResult.warnings.length} general warnings from QualityChecker...`);
+            // ---> Get the main error message if Quality Checks failed <-----
+            const qualityCheckStepError = !checkResult.success ? qualityErrorMsg : null;
+            
+            checkResult.warnings.forEach(warning => {
+              const msg = typeof warning === 'string' ? warning : warning?.message;
+              // ---> Prevent adding warnings that duplicate the main Quality Check error <-----
+              // Also skip generic phase failure messages if step context is missing
+              const isRedundantError = qualityCheckStepError && msg?.includes(qualityCheckStepError);
+              const isGenericPhaseFailure = !warning?.step && msg?.includes('Phase failed');
+              
+              if (msg && !isRedundantError && !isGenericPhaseFailure) { 
+                this.recordWarning(
+                  msg,
+                  warning?.phase || 'Validation', 
+                  warning?.step || 'Quality Checks', 
+                  warning?.severity || 'warning' 
+                );
+              }
+            });
+          }
+          // ---> END PROCESSING GENERAL WARNINGS <-----
           
           // Log warning count for the dashboard
           const warningCount = this.workflowWarnings.length;
@@ -1059,146 +1090,158 @@ class Workflow {
         return;
       }
 
-      // Cache Check (moved outside main try block)
-      // --- DISABLED CACHING ---
-      /* 
-      let cacheResult = { fromCache: false };
-      if (!this.options.noCache) {
-        try {
-          const { tryUseBuildCache } = await import('./workflow/workflow-cache.js');
-          cacheResult = await tryUseBuildCache(this.cache, this.options);
-        } catch (cacheError) {
-          this.recordWarning(`Build cache check failed: ${cacheError.message}`, 'Build', 'Cache Check');
-        }
-      }
-
-      // If using cache, record steps and restore metrics
-      if (cacheResult.fromCache) {
-         // ... (cache restore logic) ...
-      } else {
-         // If NOT from cache, run the actual build logic 
-         this.logger.info('Building application (cache miss or disabled)...');
-         // ... (build logic: define packages, map promises, Promise.all) ...
-         
-         // Save results to cache if successful (only if not a cache hit run)
-         if (!this.options.noCache && cacheResult.cacheKey && failedBuilds.length === 0) {
-            // ... (saveBuildCache logic) ...
-         } else if (failedBuilds.length > 0) {
-            this.logger.warn('Build failed, not saving build results to cache.');
-         }
-         // ... (rest of build logic) ...
-      } // End of if/else (cacheResult.fromCache)
-      */
-      // --- END DISABLED CACHING ---
-      
-      // ---> ALWAYS EXECUTE BUILD LOGIC NOW <--- 
-      this.logger.info('Building application (cache disabled)...');
+      // Build logic - create a completely new packageMetrics object for clean state
+      this.metrics.packageMetrics = {};
+      this.logger.info('Building application...');
       const packagesToBuild = ['admin', 'hours'];
       this.packages = packagesToBuild.map(name => ({ name, buildResult: null, testResults: null }));
 
+      // Run builds for each package
       const buildPromises = packagesToBuild.map(async (packageName) => {
         let buildResult;
         try {
           this.logger.info(`Building package: ${packageName}...`);
-          buildResult = await buildPackageWithWorkflowIntegration({
+          // Call the individual build function directly for cleaner data flow
+          buildResult = await buildPackageWithWorkflowTracking({
             package: packageName,
-            timeout: this.options.buildTimeout || 300000, 
-            parallel: true,
+            timeout: this.options.buildTimeout || 300000,
             recordWarning: (message, phase, step, severity) => this.recordWarning(message, phase, step, severity),
             recordStep: (name, phase, success, duration, error) => this.recordWorkflowStep(name, phase, success, duration, error),
             phase: 'Build'
           });
           
+          // Debug log the raw build result
           this.logger.debug(`Raw buildResult for ${packageName}: ${JSON.stringify(buildResult)}`);
 
-          // ---- START Robust Result Handling & Metrics Storage ----
-          if (buildResult && typeof buildResult === 'object') {
-            this.metrics.packageMetrics[packageName] = {
-              success: buildResult.success === true,
-              duration: typeof buildResult.duration === 'number' ? buildResult.duration : 0,
-              fileCount: typeof buildResult.fileCount === 'number' ? buildResult.fileCount : 0,
-              sizeBytes: typeof buildResult.totalSize === 'number' ? buildResult.totalSize : 0,
-              formattedSize: typeof buildResult.totalSize === 'number' ? this.formatBytes(buildResult.totalSize) : 'N/A',
-              warnings: Array.isArray(buildResult.warnings) ? buildResult.warnings : [],
-              error: buildResult.success === true ? null : (buildResult.error || 'Unknown build error')
-            };
-            this.logger.debug(`Stored metrics for ${packageName}: ${JSON.stringify(this.metrics.packageMetrics[packageName])}`);
-            
-            if (buildResult.success === true) {
-                this.logger.success(`✓ Build successful for package: ${packageName}`);
-                return { success: true, packageName };
-            } else {
-                const errorMsg = `Build failed for package ${packageName}: ${buildResult.error || 'Unknown error'}`;
-                this.logger.error(errorMsg);
-                return { success: false, error: errorMsg, packageName };
-            }
-          } else {
-            const errorMsg = `Build process for package ${packageName} returned invalid result: ${buildResult}`;
-            this.logger.error(errorMsg);
-            this.metrics.packageMetrics[packageName] = { success: false, duration: 0, error: errorMsg };
-            return { success: false, error: errorMsg, packageName }; 
+          // Store build metrics with consistent property names
+          // Initialize the packageMetrics object for this package if needed
+          if (!this.metrics.packageMetrics[packageName]) {
+            this.metrics.packageMetrics[packageName] = {};
           }
-          // ---- END Robust Result Handling & Metrics Storage ----
           
-        } catch (error) {
-            const errorMsg = `Exception during build for package ${packageName}: ${error.message}`;
+          // Store metrics with consistent property names (totalSize not size)
+          this.metrics.packageMetrics[packageName] = {
+            success: buildResult.success === true,
+            duration: typeof buildResult.duration === 'number' ? buildResult.duration : 0,
+            fileCount: typeof buildResult.fileCount === 'number' ? buildResult.fileCount : 0,
+            totalSize: typeof buildResult.totalSize === 'number' ? buildResult.totalSize : 0,
+            sizeBytes: typeof buildResult.totalSize === 'number' ? buildResult.totalSize : 0,
+            formattedSize: typeof buildResult.totalSize === 'number' ? 
+              this.formatBytes(buildResult.totalSize) : 'N/A',
+            warnings: Array.isArray(buildResult.warnings) ? buildResult.warnings : [],
+            error: buildResult.success !== true ? (buildResult.error || 'Unknown build error') : null
+          };
+          
+          // Log the stored metrics for debugging
+          this.logger.debug(`Stored metrics for ${packageName}: ${JSON.stringify(this.metrics.packageMetrics[packageName])}`);
+          
+          // Return success or failure for this package
+          if (buildResult.success === true) {
+            this.logger.success(`✓ Build successful for package: ${packageName}`);
+            return { success: true, packageName };
+          } else {
+            const errorMsg = `Build failed for package ${packageName}: ${buildResult.error || 'Unknown error'}`;
             this.logger.error(errorMsg);
-            this.metrics.packageMetrics[packageName] = { success: false, duration: 0, error: errorMsg };
-            return { success: false, error: errorMsg, packageName }; 
+            return { success: false, error: errorMsg, packageName };
+          }
+        } catch (error) {
+          const errorMsg = `Exception during build for package ${packageName}: ${error.message}`;
+          this.logger.error(errorMsg);
+          
+          // Store error metrics
+          if (!this.metrics.packageMetrics[packageName]) {
+            this.metrics.packageMetrics[packageName] = {};
+          }
+          
+          this.metrics.packageMetrics[packageName] = { 
+            success: false, 
+            duration: 0, 
+            error: errorMsg,
+            fileCount: 0,
+            totalSize: 0,
+            sizeBytes: 0,
+            formattedSize: 'N/A'
+          };
+          
+          return { success: false, error: errorMsg, packageName }; 
         }
       });
 
+      // Process the build results
       const results = await Promise.all(buildPromises);
-      // Ensure results array contains only valid objects before filtering
       const validResults = results.filter(r => r && typeof r === 'object');
-      const failedBuilds = validResults.filter(r => !r.success); // Filter on the validated array
+      const failedBuilds = validResults.filter(r => !r.success);
       
       if (failedBuilds.length > 0) {
-          const errorMsg = `Build phase failed for ${failedBuilds.length} package(s): ${failedBuilds.map(f => f.packageName).join(', ')}`;
-          this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, errorMsg);
-          // Log individual errors
-          failedBuilds.forEach(f => this.logger.error(` - ${f.packageName}: ${f.error}`));
-          throw new Error(errorMsg);
+        const errorMsg = `Build phase failed for ${failedBuilds.length} package(s): ${failedBuilds.map(f => f.packageName).join(', ')}`;
+        this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, errorMsg);
+        failedBuilds.forEach(f => this.logger.error(` - ${f.packageName}: ${f.error}`));
+        throw new Error(errorMsg);
       }
-      
-      // Cache saving is disabled 
       
       this.progressTracker.completeStep(true, 'Build completed');
       this.recordWorkflowStep('Build Phase', 'Build', true, Date.now() - phaseStartTime);
       
       // Calculate overall build metrics
-      const buildDurations = packagesToBuild.map(p => this.metrics.packageMetrics[p]?.duration || 0);
+      const buildDurations = Object.values(this.metrics.packageMetrics)
+        .map(pkg => typeof pkg.duration === 'number' ? pkg.duration : 0);
+        
+      const totalFileCount = Object.values(this.metrics.packageMetrics)
+        .reduce((sum, pkg) => sum + (typeof pkg.fileCount === 'number' ? pkg.fileCount : 0), 0);
+        
+      const totalSize = Object.values(this.metrics.packageMetrics)
+        .reduce((sum, pkg) => sum + (typeof pkg.totalSize === 'number' ? pkg.totalSize : 0), 0);
+      
+      // Store calculated metrics for build performance
       this.metrics.buildPerformance = {
         totalBuildTime: buildDurations.reduce((sum, d) => sum + d, 0),
-        averageBuildTime: buildDurations.length > 0 ? buildDurations.reduce((sum, d) => sum + d, 0) / buildDurations.length : 0,
-        buildSuccessRate: (packagesToBuild.length - failedBuilds.length) / packagesToBuild.length,
+        averageBuildTime: buildDurations.length > 0 ? 
+          buildDurations.reduce((sum, d) => sum + d, 0) / buildDurations.length : 0,
+        buildSuccessRate: packagesToBuild.length > 0 ?
+          (packagesToBuild.length - failedBuilds.length) / packagesToBuild.length : 0,
+        totalFileCount: totalFileCount,
+        totalSize: totalSize,
+        formattedTotalSize: this.formatBytes(totalSize)
       };
-      this.logger.debug('Calculated overall build performance metrics.');
-      // ---> END ALWAYS EXECUTE BUILD LOGIC <--- 
-
+      
+      // Debug log build performance metrics
+      this.logger.debug('Build performance metrics:');
+      this.logger.debug(JSON.stringify(this.metrics.buildPerformance, null, 2));
+      
     } catch (error) {
-      // Catch the error thrown by buildPackageWithWorkflowTracking
       this.logger.error('🔴 Build Phase Failed:');
       this.logger.error(`➤ Error Details: ${error.message}`);
 
-      // Optionally log stack trace if verbose
       if (this.options.verbose && error.stack) {
         this.logger.error('\nStack Trace:');
         this.logger.error(error.stack);
       }
 
       this.progressTracker.completeStep(false, `Build failed: ${error.message}`);
-      this.recordWorkflowStep('Package Build', 'Build', false, 0, error.message); // Record failure
+      this.recordWorkflowStep('Package Build', 'Build', false, 0, error.message);
       this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, error.message);
-      throw error; // Re-throw to stop the main workflow
+      throw error;
     }
 
-    // Record phase duration (happens regardless of cache hit)
+    // Calculate phase duration
     const phaseEndTime = Date.now();
     this.metrics.phaseDurations.build = phaseEndTime - phaseStartTime;
     
-    // Return the *current* package metrics from the main state
+    // Return the package metrics
     return this.metrics.packageMetrics; 
+  }
+  
+  // Helper function to format bytes
+  formatBytes(bytes, decimals = 2) {
+    if (bytes === 0 || isNaN(bytes)) return '0 B';
+    
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+    
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
   }
 
   /**

@@ -105,16 +105,35 @@ export class QualityChecker {
     // Add warnings from common configuration files
     this._checkConfigFiles();
     
+    // ---> Determine overall success and extract specific error message <-----
+    const overallSuccess = lintResult.success && typeResult.success && testSummary.success;
+    let overallError = null;
+    if (!overallSuccess) {
+      // Prioritize the first specific error found
+      if (!testSummary.success && testSummary.error) {
+        overallError = testSummary.error; // Specific error from test runner
+      } else if (!typeResult.success && typeResult.error) {
+        overallError = typeResult.error; // Error from type checker
+      } else if (!lintResult.success && lintResult.error) {
+        overallError = lintResult.error; // Error from linter
+      } else {
+        overallError = 'Quality checks failed without specific error message'; // Fallback
+      }
+    }
+    // ---> End error extraction <-----
+    
     return {
-      success: lintResult.success && typeResult.success && testSummary.success,
+      success: overallSuccess,
       results: {
         linting: lintResult,
         typeChecking: typeResult,
-        testing: testSummary // Store the full test summary
+        testing: testSummary // Store the full test summary (contains steps, coverage, unitTests, error)
       },
       warnings: this.warnings,
-      // Explicitly add coverage here if needed, though it's already in testSummary
-      coverage: testSummary.coverage 
+      // Explicitly pass unit test details and coverage up
+      unitTests: testSummary.unitTests || { passed: 0, total: 0 }, // Use parsed unit tests or default
+      coverage: testSummary.coverage, // Parsed coverage or null
+      error: overallError 
     };
   }
   

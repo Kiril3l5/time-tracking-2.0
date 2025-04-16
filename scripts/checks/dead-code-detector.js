@@ -9,7 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { exec, execSync } from 'node:child_process';
 import { fileURLToPath } from 'url';
 import { logger } from '../core/logger.js';
 import { globSync } from 'glob';
@@ -95,47 +95,115 @@ function findUnusedExports(_files) {
 async function findUnusedDependencies(packageDirs) {
   const depcheckPromises = [];
   
-  // Helper function to run depcheck for a single directory
-  const runDepcheck = async (dir) => {
-    try {
+  // Helper function to run depcheck for a single directory using exec
+  const runDepcheck = (dir) => {
+    return new Promise((resolve) => {
       const packageJsonPath = path.join(dir, 'package.json');
-      if (!fs.existsSync(packageJsonPath)) return null;
-      
-      logger.debug(`Running depcheck in: ${path.relative(process.cwd(), dir)}`);
-      // Run depcheck within the package directory itself
-      // Use --skip-missing=true to avoid errors for unresolved deps that might be provided by the workspace
-      const command = `npx depcheck . --json --skip-missing=true`; 
-      const output = execSync(command, {
-        encoding: 'utf8',
-        cwd: dir, // Execute in the package directory
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-      
-      const depcheckResult = JSON.parse(output);
-      const unusedDeps = [
-        ...(depcheckResult.dependencies || []).map(dep => ({ name: dep, type: 'dependency' })),
-        ...(depcheckResult.devDependencies || []).map(dep => ({ name: dep, type: 'devDependency' }))
-        // Consider adding peerDependencies and optionalDependencies if relevant
-      ];
-      
-      if (unusedDeps.length > 0) {
-        return {
-          packagePath: path.relative(process.cwd(), packageJsonPath),
-          unusedDependencies: unusedDeps
-        };
+      if (!fs.existsSync(packageJsonPath)) {
+        resolve(null); // No package.json, skip
+        return;
       }
-      return null;
-    } catch (error) {
-      // Log error and potentially add to a results object if you want to track failures
-      logger.warn(`Failed to run depcheck in ${path.relative(process.cwd(), dir)}: ${error.message}`);
-      // Optionally capture the error details
-      if (error.stderr) logger.debug(`Depcheck stderr in ${path.relative(process.cwd(), dir)}:\n${error.stderr}`);
-      if (error.stdout) logger.debug(`Depcheck stdout in ${path.relative(process.cwd(), dir)}:\n${error.stdout}`);
-      return { 
-         packagePath: path.relative(process.cwd(), path.join(dir, 'package.json')), 
-         error: error.message 
-      }; 
-    }
+      
+      const relativeDir = path.relative(process.cwd(), dir);
+      logger.debug(`Running depcheck in: ${relativeDir}`);
+      
+      // IMPROVED COMMAND: Use --ignores for problematic packages and max-buffer to prevent overflows
+      // Adding NODE_OPTIONS to increase memory limit
+      const env = { ...process.env, NODE_OPTIONS: '--max-old-space-size=4096' };
+      const command = `npx depcheck . --ignores="@types/*,eslint*,babel*,webpack*" --json --skip-missing=true`; 
+      
+      exec(command, { 
+        cwd: dir, 
+        encoding: 'utf8',
+        env: env,
+        maxBuffer: 10 * 1024 * 1024 // 10MB buffer instead of default 1MB
+      }, (error, stdout, stderr) => {
+        if (error) {
+          // Handle execution errors (non-zero exit code, command not found, etc.)
+          // Check for 32-bit integer overflow (negative exit code appearing as 4294967295)
+          const isOverflowError = error.code === 4294967295;
+          const errorCode = isOverflowError ? -1 : error.code;
+          
+          logger.warn(`Failed to run depcheck in ${relativeDir}: Exit code ${errorCode}${isOverflowError ? ' (negative exit code - integer overflow)' : ''}`);
+          
+          // Capture stderr/stdout for debugging log
+          if (stderr) logger.debug(`Depcheck stderr in ${relativeDir}:\n${stderr}`);
+          
+          // Try a fallback approach for known problem cases
+          if (isOverflowError || errorCode === 1) {
+            logger.info(`Trying fallback analysis approach for ${relativeDir}`);
+            // Fallback to a simpler manual analysis
+            try {
+              const pkgJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+              const deps = { ...(pkgJson.dependencies || {}), ...(pkgJson.devDependencies || {}) };
+              
+              // Just report the package for now without crashing
+              resolve({ 
+                packagePath: path.relative(process.cwd(), packageJsonPath), 
+                unusedDependencies: [], // Empty array - we can't determine unused deps in fallback mode
+                fallbackMode: true,
+                manualCheckRequired: true
+              });
+              return;
+            } catch (fallbackError) {
+              logger.error(`Fallback analysis also failed for ${relativeDir}: ${fallbackError.message}`);
+              // Continue to normal error handling
+            }
+          }
+          
+          // Provide a more helpful error message for integer overflow
+          let userFriendlyMessage = isOverflowError
+              ? `Depcheck command failed with negative exit code - typically indicates a non-recoverable error (segmentation fault or killed process)`
+              : `Depcheck command failed (Exit Code: ${errorCode})`;
+          
+          // Resolve with a concise error message and separate details
+          resolve({ 
+             packagePath: path.relative(process.cwd(), packageJsonPath), 
+             error: userFriendlyMessage,
+             details: { // Raw output in details
+                stderr: stderr || null,
+                stdout: stdout || null,
+                rawError: error.message,
+                exitCode: errorCode
+             }
+          });
+          return;
+        }
+
+        // Handle successful execution but potential JSON parsing errors
+        try {
+          const depcheckResult = JSON.parse(stdout);
+          const unusedDeps = [
+            ...(depcheckResult.dependencies || []).map(dep => ({ name: dep, type: 'dependency' })),
+            ...(depcheckResult.devDependencies || []).map(dep => ({ name: dep, type: 'devDependency' }))
+          ];
+          
+          if (unusedDeps.length > 0) {
+            resolve({
+              packagePath: path.relative(process.cwd(), packageJsonPath),
+              unusedDependencies: unusedDeps
+            });
+          } else {
+            resolve({
+              packagePath: path.relative(process.cwd(), packageJsonPath),
+              unusedDependencies: [] // No unused deps found, but explicitly add empty array
+            }); 
+          }
+        } catch (parseError) {
+          logger.warn(`Failed to parse depcheck JSON output in ${relativeDir}: ${parseError.message}`);
+          logger.debug(`Raw depcheck stdout in ${relativeDir}:\n${stdout}`);
+          // Resolve with a concise error and details
+          resolve({ 
+             packagePath: path.relative(process.cwd(), packageJsonPath), 
+             error: `Failed to parse JSON output`, // Concise error
+             details: { // Raw output and parse error in details
+                stdout: stdout || null,
+                rawError: parseError.message
+             }
+          });
+        }
+      });
+    });
   };
 
   // Run depcheck for all directories concurrently

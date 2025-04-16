@@ -117,7 +117,7 @@ export async function runTest(options) {
  * @param {Object} [options] - Run options
  * @param {boolean} [options.stopOnFailure=true] - Whether to stop on first failure
  * @param {boolean} [options.verbose=false] - Whether to show detailed output
- * @returns {Object} - Test suite results
+ * @returns {Object} - Test suite results including parsed unit test counts and coverage
  */
 export async function runTests(tests, options = {}) {
   const {
@@ -131,64 +131,56 @@ export async function runTests(tests, options = {}) {
   const results = [];
   let allPassed = true;
   const startTime = Date.now();
-  let coverageResult = null; // Variable to store coverage result
+  let coverageResult = null;
+  let firstError = null;
+  let totalUnitTestsRun = 0;
+  let totalUnitTestsPassed = 0;
   
   for (let i = 0; i < tests.length; i++) {
     const test = tests[i];
-    // Use simple logging instead of progressTracker steps for sub-tasks
     logger.info(`  Running sub-check: ${test.name}...`); 
     
-    const result = await runTest({
-      ...test,
-      verbose
-    });
-    
+    const result = await runTest({ ...test, verbose });
     results.push(result);
 
-    // Determine success: Use command success primarily. Validator success is secondary.
     let stepPassed = result.success;
-    let stepMessage = `${test.name} ${stepPassed ? 'passed' : 'failed'}`;
-
-    // Special handling for Test Coverage step
-    if (test.name === 'Test Coverage') {
-      if (result.success && result.validatorResult?.coverage !== undefined && result.validatorResult?.coverage !== null) {
-        // Command succeeded AND coverage was parsed
-        coverageResult = result.validatorResult.coverage;
-        stepPassed = true; // Ensure it's marked as passed
-        stepMessage = `${test.name} passed (Coverage: ${coverageResult.toFixed(2)}%)`;
-        logger.debug(`  Captured test coverage: ${coverageResult.toFixed(2)}%`);
-      } else if (result.success) {
-        // Command succeeded BUT coverage wasn't parsed by validator
-        stepPassed = true; // Mark as passed but log a warning
-        stepMessage = `${test.name} passed (Coverage value not parsed)`;
-        logger.warn(`  Test Coverage step completed but did not parse coverage value.`);
-      } else {
-        // Command itself failed (e.g., the Vitest crash)
+    if (result.validatorResult && result.validatorResult.valid === false) {
         stepPassed = false;
-        stepMessage = `${test.name} failed (Command execution error)`;
-        logger.error(`  Test Coverage command failed: ${result.error}`);
-      }
-    } else if (!result.success) {
-        // Standard handling for other failed tests
-        stepPassed = false; 
-        // Error details are logged within runTest, just update summary message
-        stepMessage = `${test.name} failed`; 
-        logger.error(`  Sub-check failed: ${test.name}`); // Log failure
-    } else {
-        // Log success for other steps
-        logger.info(`  Sub-check passed: ${test.name}`);
     }
 
-    // Update overall status but DO NOT use progressTracker.completeStep here
+    if (test.name === 'Unit Tests' && result.validatorResult) {
+      totalUnitTestsRun = result.validatorResult.unitTestsTotal ?? 0;
+      totalUnitTestsPassed = result.validatorResult.unitTestsPassed ?? 0;
+      logger.debug(`Captured unit test counts: Passed=${totalUnitTestsPassed}, Total=${totalUnitTestsRun}`);
+    }
+    
+    if (test.name === 'Test Coverage') {
+      if (stepPassed && result.validatorResult?.coverage !== undefined && result.validatorResult?.coverage !== null) {
+        coverageResult = result.validatorResult.coverage;
+        logger.debug(`  Captured test coverage: ${coverageResult.toFixed(2)}%`);
+      } else if (stepPassed) {
+        logger.warn(`  Test Coverage step completed but did not parse coverage value.`);
+        coverageResult = null;
+      } else {
+        logger.error(`  Test Coverage command failed: ${result.error}`);
+        coverageResult = null;
+      }
+      stepPassed = result.success; 
+    } 
+    
     if (!stepPassed) {
       allPassed = false; 
-      // Only stop if stopOnFailure is true
+      if (!firstError) {
+          firstError = result.error || `${test.name} failed without specific error message`;
+      }
+      logger.error(`  Sub-check failed: ${test.name} - Error: ${result.error || 'N/A'}`); 
       if (stopOnFailure) {
         logger.warn('Stopping test suite execution due to failure');
-        break; // Exit loop
+        break; 
       }
+    } else {
+        logger.info(`  Sub-check passed: ${test.name}`);
     }
-    // Removed progressTracker.completeStep calls
   }
   
   const endTime = Date.now();
@@ -196,23 +188,22 @@ export async function runTests(tests, options = {}) {
   
   const summary = {
     success: allPassed,
-    totalTests: tests.length,
-    passedTests: results.filter(r => r.success).length,
-    failedTests: results.filter(r => !r.success).length,
+    totalSteps: tests.length,
+    passedSteps: results.filter(r => r.success).length,
+    failedSteps: results.filter(r => !r.success).length,
     duration,
     results,
-    coverage: coverageResult // Add coverage to the summary
+    coverage: coverageResult,
+    error: allPassed ? null : firstError,
+    unitTests: {
+        passed: totalUnitTestsPassed,
+        total: totalUnitTestsRun,
+        files: results.find(r => r.name === 'Unit Tests')?.validatorResult?.testFiles || []
+    }
   };
   
-  // Finish progress tracking with the final status
-  // This should be handled by the calling function (e.g., qualityChecker)
-  // progressTracker.finishProgress(allPassed, allPassed ? 
-  //  `All tests passed in ${duration.toFixed(1)}s` : 
-  //  `Some tests failed (${summary.failedTests}/${summary.totalTests})`
-  // );
-  
-  // Log the overall test suite result
   logger.info(`Test suite finished in ${duration.toFixed(1)}s. Overall success: ${allPassed}`);
+  logger.debug(`runTests summary: ${JSON.stringify(summary)}`);
   
   return summary;
 }
@@ -236,12 +227,11 @@ export async function runStandardTests(options = {}) {
     stopOnFailure = true,
     skipLint = false,
     skipTypecheck = false,
-    skipTests = false, // This flag now skips both unit tests and coverage
-    autoFixTypescript = false, // Keep the option but remove the call
-    fixQueryTypes = false // Keep the option but remove the call
+    skipTests = false,
+    autoFixTypescript = false,
+    fixQueryTypes = false
   } = options;
   
-  // If all checks are skipped, return early
   if (skipLint && skipTypecheck && skipTests) {
     logger.info('All quality checks skipped');
     return {
@@ -251,7 +241,7 @@ export async function runStandardTests(options = {}) {
       failedTests: 0,
       duration: 0,
       results: [],
-      coverage: null // Ensure coverage is null when skipped
+      coverage: null
     };
   }
   
@@ -261,7 +251,6 @@ export async function runStandardTests(options = {}) {
     tests.push({
       name: 'ESLint Check',
       command: 'pnpm run lint'
-      // No validator needed, runTest uses command success status
     });
   }
   
@@ -269,87 +258,151 @@ export async function runStandardTests(options = {}) {
     tests.push({
       name: 'TypeScript Type Check',
       command: 'pnpm run typecheck'
-      // No validator needed, runTest uses command success status
     });
   }
   
-  // Only add Unit Tests and Coverage if skipTests is false
   if (!skipTests) {
     tests.push({
       name: 'Unit Tests',
-      command: 'pnpm run test', // Keep running unit tests separately
-      validator: (_output) => {
-        // Basic validator for test output - look for failure indicators
-        const hasFailures = /failed|failure|error/i.test(_output);
+      command: 'pnpm run test',
+      validator: (output, _result) => {
+        let unitTestsPassed = 0;
+        let unitTestsTotal = 0;
+        let error = null;
+        let valid = false;
+        let testFiles = [];
+        
+        if (_result.success) {
+          // Extract test files and their test counts
+          const testFileMatches = output.matchAll(/✓\s+([\w/.\\-]+)\s+\((\d+)\)/g);
+          if (testFileMatches) {
+            for (const match of testFileMatches) {
+              if (match.length >= 3) {
+                const testFile = match[1];
+                const testCount = parseInt(match[2], 10);
+                if (!isNaN(testCount)) {
+                  testFiles.push({ file: testFile, count: testCount });
+                  unitTestsTotal += testCount;
+                  unitTestsPassed += testCount; // All are passed since they have a ✓
+                }
+              }
+            }
+          }
+          
+          // Fallback to overall count if we couldn't parse individual files
+          if (testFiles.length === 0) {
+            const match = output.match(/Test Files\s+(\d+).+Tests\s+(\d+)\s+passed/);
+            if (match && match.length >= 3) {
+              unitTestsPassed = parseInt(match[2], 10);
+              unitTestsTotal = parseInt(match[2], 10);
+              if (!isNaN(unitTestsPassed) && !isNaN(unitTestsTotal)) {
+                  valid = true;
+                  logger.debug(`Parsed unit test results: ${unitTestsPassed}/${unitTestsTotal}`);
+              } else {
+                  error = 'Failed to parse test count numbers from output';
+                  logger.warn(`Could not parse numbers from Vitest output: ${match[0]}`);
+              }
+            } else {
+              if (/failed|failure|error/i.test(output)) {
+                  error = 'Test failures reported in output despite command success';
+                  logger.warn('Command succeeded, but output contains failure indicators.');
+              } else {
+                   valid = true; 
+                   error = 'Could not parse specific test counts from Vitest output';
+                   logger.warn(error);
+              }
+            }
+          } else {
+            valid = true;
+            logger.debug(`Parsed ${testFiles.length} test files with ${unitTestsTotal} total tests`);
+          }
+        } else {
+          error = _result.error || 'Unit test command failed to execute';
+          valid = false;
+        }
+
         return {
-          valid: !hasFailures,
-          error: hasFailures ? 'Test failures detected' : null
+          valid: valid,
+          error: error,
+          unitTestsPassed: unitTestsPassed, 
+          unitTestsTotal: unitTestsTotal,
+          testFiles: testFiles
         };
       }
     });
     
-    // Add coverage test that will capture coverage metrics
     tests.push({
       name: 'Test Coverage',
       command: 'pnpm run test:coverage',
-      validator: (output) => {
-        let coverageRan = false;
+      validator: (_output, _result) => {
         let coverageValue = null;
-        const finalCoveragePath = path.join(process.cwd(), 'coverage', 'coverage-final.json');
-        let errorMsg = 'Coverage output file not found or empty';
+        const summaryPath = path.join(process.cwd(), 'coverage', 'coverage-final.json');
+        let errorMsg = null;
+        let coverageFileFound = false;
 
         try {
-          if (fs.existsSync(finalCoveragePath)) {
-            const stats = fs.statSync(finalCoveragePath);
-            if (stats.size > 10) {
-              coverageRan = true;
-              logger.debug('Coverage ran: Found coverage-final.json with content.');
-
-              // Regex v5: Line-by-line parsing
-              coverageValue = null; // Reset before trying
-              const lines = output.split(/\r?\n/);
-              const headerLineIndex = lines.findIndex(line => /^\s*File\s*\| % Stmts/.test(line));
-              if (headerLineIndex !== -1 && lines.length > headerLineIndex + 2) {
-                  // The line after the header and separator should be "All files"
-                  const allFilesLine = lines[headerLineIndex + 2];
-                  if (allFilesLine && allFilesLine.trim().startsWith('All files')) {
-                      const parts = allFilesLine.split('|');
-                      if (parts.length > 1) {
-                          const stmtPercentageStr = parts[1].trim();
-                          const parsedValue = parseFloat(stmtPercentageStr);
-                          if (!isNaN(parsedValue)) {
-                              coverageValue = parsedValue;
-                              logger.debug(`Parsed coverage value (line-by-line): ${coverageValue}%`);
-                              errorMsg = null; // Clear error
-                          }
-                      }
-                  }
-              }
-
-              // If parsing failed, set error message
-              if (coverageValue === null) {
-                  logger.warn('Could not parse coverage percentage from output (line-by-line method).');
-                  logger.debug(`Coverage Output Snippet:\n${output.substring(0, 1000)}`);
-                  errorMsg = 'Could not parse coverage percentage from output';
+          if (fs.existsSync(summaryPath)) {
+            coverageFileFound = true;
+            const summaryContent = fs.readFileSync(summaryPath, 'utf8');
+            const summaryData = JSON.parse(summaryContent);
+            
+            // Parse coverage from coverage-final.json format (different structure than summary.json)
+            if (summaryData) {
+              // Calculate overall statement coverage from all files
+              let totalStatements = 0;
+              let coveredStatements = 0;
+              
+              Object.values(summaryData).forEach(fileData => {
+                if (fileData.statementMap && fileData.s) {
+                  const statementsCount = Object.keys(fileData.statementMap).length;
+                  const coveredCount = Object.values(fileData.s).filter(v => v > 0).length;
+                  
+                  totalStatements += statementsCount;
+                  coveredStatements += coveredCount;
+                }
+              });
+              
+              // Calculate percentage
+              if (totalStatements > 0) {
+                coverageValue = (coveredStatements / totalStatements) * 100;
+                logger.debug(`Parsed coverage from ${summaryPath}: ${coverageValue.toFixed(2)}%`);
+                logger.debug(`Coverage details: ${coveredStatements}/${totalStatements} statements`);
+              } else {
+                logger.warn(`Found coverage file but no statements to measure`);
+                errorMsg = 'No statements to measure coverage';
+                coverageValue = 0; // Set to 0 instead of null to indicate empty but valid coverage
               }
             } else {
-               logger.warn('Coverage ran: Found coverage-final.json but it seems empty.');
-               errorMsg = 'Coverage output file is empty';
+              logger.warn(`${summaryPath} has unexpected structure.`);
+              errorMsg = 'Invalid structure in coverage-final.json';
             }
           } else {
-            logger.warn(`Coverage did not run or output file not found at: ${finalCoveragePath}`);
-            errorMsg = 'Coverage output file not found';
+            logger.warn(`Coverage file not found at: ${summaryPath}`);
+            errorMsg = 'Coverage file not found';
+            if (_result.success) {
+                logger.warn('Test coverage command succeeded but coverage file is missing.');
+            } else {
+                logger.error('Test coverage command failed AND coverage file is missing.');
+            }
           }
         } catch (error) {
-          logger.error(`Error checking/parsing coverage: ${error.message}`);
+          logger.error(`Error reading/parsing coverage file ${summaryPath}: ${error.message}`);
           errorMsg = `Error accessing coverage data: ${error.message}`;
-          coverageRan = false; // Mark as not run if there was an access error
+          coverageFileFound = false;
         }
         
+        const commandSucceeded = _result.success;
+        const coverageParsed = coverageFileFound && coverageValue !== null;
+        const isValid = commandSucceeded && coverageParsed;
+
+        if (!commandSucceeded) {
+           errorMsg = _result.error || 'Test coverage command failed';
+        }
+
         return {
-          valid: coverageRan && coverageValue !== null, // Valid only if ran AND value was parsed
-          coverage: coverageValue, // Parsed coverage percentage or null
-          error: errorMsg // Detailed error message
+          valid: isValid,
+          coverage: coverageValue,
+          error: errorMsg
         };
       }
     });
@@ -364,11 +417,10 @@ export async function runStandardTests(options = {}) {
       failedTests: 0,
       duration: 0,
       results: [],
-      coverage: null // Ensure coverage is null when no tests run
+      coverage: null
     };
   }
   
-  // This now returns the summary object which includes the 'coverage' field
   return runTests(tests, {
     stopOnFailure,
     verbose
@@ -387,7 +439,6 @@ export async function checkTestSetup() {
     for (const pkg of packages) {
       const pkgJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'packages', pkg, 'package.json'), 'utf8'));
       
-      // Check for test dependencies
       const hasVitest = pkgJson.devDependencies?.vitest;
       const hasTestingLibrary = pkgJson.devDependencies?.['@testing-library/react'];
       
@@ -398,7 +449,6 @@ export async function checkTestSetup() {
         issues.push(`${pkg}: Missing React Testing Library`);
       }
 
-      // Check for test coverage script
       if (!pkgJson.scripts?.['test:coverage']) {
         issues.push(`${pkg}: Missing test coverage script`);
       }

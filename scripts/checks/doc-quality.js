@@ -20,6 +20,7 @@ import { logger } from '../core/logger.js';
 import { parseArgs } from 'node:util';
 import { getReportPath, getHtmlReportPath, createJsonReport } from '../reports/report-collector.js';
 import { execSync } from 'child_process';
+import { Buffer } from 'node:buffer';
 
 // Convert callbacks to promises
 const readdir = promisify(fs.readdir);
@@ -301,8 +302,46 @@ export async function analyzeDocumentation(options) {
     };
 
     for (const file of files) {
-      const content = await _readFile(file.path, 'utf8');
       const relativePath = path.relative(docsDir, file.path);
+      let content;
+      let encoding = 'utf8'; // Default encoding
+      try {
+        // Read as buffer first
+        const buffer = await _readFile(file.path);
+        
+        // Detect encoding from BOM
+        if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+          encoding = 'utf16le';
+          logger.debug(`Detected UTF-16 LE for ${relativePath}`);
+          content = buffer.slice(2).toString(encoding); // Decode skipping BOM
+        } else if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+          // Note: Node's buffer.toString doesn't typically support utf16be directly
+          // This case is less common, might need iconv-lite if required
+          encoding = 'utf16be'; 
+          logger.warn(`Detected UTF-16 BE for ${relativePath} - Decoding might be imperfect.`);
+          // Simple swap for demo, might not be robust
+          content = buffer.slice(2).swap16().toString('utf16le'); 
+        } else if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+          encoding = 'utf8';
+          logger.debug(`Detected UTF-8 BOM for ${relativePath}`);
+          content = buffer.slice(3).toString(encoding); // Decode skipping BOM
+        } else {
+          // No BOM or unrecognized, assume UTF-8
+          content = buffer.toString(encoding);
+        }
+        
+        // Log raw bytes for the problem file (Keep for now if needed)
+        // Removed temporary raw buffer log
+        /*
+        if (relativePath === 'workflow\\preview-deployment-guide.md' || relativePath === 'workflow/preview-deployment-guide.md') { 
+           logger.info(`Raw buffer start for ${relativePath}: <${buffer.slice(0, 15).toString('hex')}>`);
+        }
+        */
+
+      } catch (readError) {
+         logger.error(`Failed to read file ${relativePath}: ${readError.message}`);
+         continue; // Skip this file
+      }
       
       // Analyze content
       const fileAnalysis = analyzeFile(content, relativePath);
@@ -312,6 +351,8 @@ export async function analyzeDocumentation(options) {
 
       if (fileAnalysis.issues.length > 0) {
         results.filesWithIssues++;
+        // Log the specific file and issues found
+        logger.warn(`Issue found in ${relativePath}: ${fileAnalysis.issues.join(', ')}`); 
         results.issues.push({
           file: relativePath,
           issues: fileAnalysis.issues,
@@ -356,33 +397,46 @@ function analyzeFile(content, filePath) {
     analysis.issues.push('File is too short (less than 100 characters)');
   }
 
-  // Simple H1 Check: Remove potential BOMs and other non-printable chars, check first non-empty line
+  // Enhanced H1 Check with better handling of invisible characters
+  // First convert to buffer to inspect first bytes (to check for BOM)
+  const buffer = Buffer.from(content);
   let cleanedContent = content;
-  // Remove common BOMs first
-  if (content.charCodeAt(0) === 0xFEFF) { // UTF-8 BOM
-      cleanedContent = content.slice(1);
-  } else if (content.charCodeAt(0) === 0xFF && content.charCodeAt(1) === 0xFE) { // UTF-16 LE BOM
-      cleanedContent = content.slice(1);
-  } else if (content.charCodeAt(0) === 0xEF && content.charCodeAt(1) === 0xBB && content.charCodeAt(2) === 0xBF) { // Alternate UTF-8 BOM representation
-       cleanedContent = content.slice(3);
+  
+  // Remove any potential BOM or other invisible characters that might be present
+  if (buffer.length >= 3 && buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
+    // UTF-8 BOM detected - remove first 3 bytes
+    logger.debug(`UTF-8 BOM detected in ${filePath}`);
+    cleanedContent = buffer.slice(3).toString('utf8');
   }
   
-  // Remove any other leading non-printable/control characters (except whitespace)
-  // Regex: ^[\s]* : Match leading whitespace (including line breaks)
-  //        [^\x20-\x7E]* : Match zero or more characters that are NOT standard printable ASCII (space to ~)
-  cleanedContent = cleanedContent.replace(/^[\\s]*[^\\x20-\\x7E]*/, '');
+  // Remove any other control characters (except whitespace)
+  // eslint-disable-next-line no-control-regex
+  cleanedContent = cleanedContent.replace(/[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
   
-  const trimmedContent = cleanedContent.trim(); // Trim remaining whitespace
-  const lines = trimmedContent.split(/\r?\n/); // Split into lines
+  const trimmedContent = cleanedContent.trim();
+  const lines = trimmedContent.split(/\r?\n/);
   
-  // Check if the *first non-empty line* starts with '# '
-  const firstNonEmptyLine = lines.find(line => line.trim().length > 0);
-  if (!firstNonEmptyLine || !firstNonEmptyLine.trim().startsWith('# ')) {
-    // Add more debug info if the check fails
-    logger.debug(`H1 check failed for ${filePath}. First non-empty line: "${firstNonEmptyLine ? firstNonEmptyLine.substring(0, 50) + '...' : '[None Found]'}"`);
+  // Find first non-empty line
+  let firstNonEmptyLine = null;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim().length > 0) {
+      firstNonEmptyLine = lines[i].trim();
+      break;
+    }
+  }
+  
+  // Log line for debugging
+  logger.info(`[H1 Check] First non-empty line in ${filePath}: "${firstNonEmptyLine}"`);
+  
+  // Check for H1 using more flexible regex that handles various whitespace arrangements
+  const hasH1 = firstNonEmptyLine && /^#{1}\s+\S+/.test(firstNonEmptyLine);
+  
+  if (!hasH1) {
+    logger.warn(`Missing H1 heading in ${filePath}. First non-empty line: "${firstNonEmptyLine ? firstNonEmptyLine.substring(0, 50) + '...' : '[None Found]'}"`);
     analysis.issues.push('Missing main heading (H1)');
-    analysis.canAutoFixH1 = true; // Mark that this issue can be auto-fixed
+    analysis.canAutoFixH1 = true;
   } else {
+    logger.debug(`H1 heading found in ${filePath}: "${firstNonEmptyLine}"`);
     analysis.canAutoFixH1 = false;
   }
 
@@ -476,12 +530,19 @@ async function _main() {
     const jsonReportPath = args.jsonOutput || getReportPath('docQuality');
     const htmlReportPath = args.htmlOutput || getHtmlReportPath('docQuality');
     
+    // Manually parse min-coverage as a number
+    let minCoverage = parseInt(args['min-coverage'], 10);
+    if (isNaN(minCoverage)) {
+        logger.warn(`Invalid value provided for --min-coverage: "${args['min-coverage']}". Using default 80.`);
+        minCoverage = 80;
+    }
+    
     // Run analysis, passing the autoFix option
     const results = await analyzeDocumentation({
       rootDir: args.root || '.',
       includePatterns: args.include ? args.include.split(',') : _DEFAULT_INCLUDE_PATTERNS,
       excludePatterns: args.exclude ? args.exclude.split(',') : _DEFAULT_EXCLUDE_PATTERNS,
-      minCoverage: args.minCoverage || DEFAULT_MIN_COVERAGE,
+      minCoverage: minCoverage, // Use parsed number
       checkFunctionDocs: !args.skipFunctionDocs,
       checkComponentDocs: !args.skipComponentDocs,
       checkTsDoc: !args.skipTsDoc,
@@ -500,7 +561,7 @@ async function _main() {
     }
     
     // Print summary to console
-    printSummary(results, args.minCoverage || DEFAULT_MIN_COVERAGE);
+    printSummary(results, minCoverage); // Use parsed number
     
     // Determine exit code based on results
     const success = results.metrics.totalWords > 0 && results.filesWithIssues === 0;
@@ -526,7 +587,7 @@ function parseArguments() {
     'root': { type: 'string', default: 'src' },
     'include': { type: 'string' },
     'exclude': { type: 'string' },
-    'min-coverage': { type: 'number', default: 80 },
+    'min-coverage': { type: 'string', default: '80' },
     'skip-function-docs': { type: 'boolean', default: false },
     'skip-component-docs': { type: 'boolean', default: false },
     'skip-ts-doc': { type: 'boolean', default: false },

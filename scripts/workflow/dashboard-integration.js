@@ -53,6 +53,28 @@ import open from 'open';
  */
 export async function generateWorkflowDashboard(workflow, options = {}) {
   try {
+    // Add debug logs for metrics values
+    logger.info(`DEBUG: Raw workflow metrics before dashboard generation:`);
+    logger.info(`  - Duration: ${workflow.metrics?.duration || 'undefined'} ms`);
+    logger.info(`  - Setup start: ${workflow.metrics?.setupStart ? new Date(workflow.metrics.setupStart).toISOString() : 'undefined'}`);
+    logger.info(`  - Phase durations: Setup=${workflow.metrics?.phaseDurations?.setup || 0}, Validation=${workflow.metrics?.phaseDurations?.validation || 0}, Build=${workflow.metrics?.phaseDurations?.build || 0}`);
+    
+    if (!workflow.metrics || typeof workflow.metrics.duration !== 'number' || workflow.metrics.duration === 0) {
+      logger.warn(`WARNING: workflow.metrics.duration is ${workflow.metrics?.duration}. Calculating from start/end times.`);
+      
+      // Try to recreate duration from more reliable sources
+      if (workflow.startTime) {
+        const calculatedDuration = Date.now() - workflow.startTime;
+        logger.info(`  - Calculated duration from workflow.startTime: ${calculatedDuration} ms`);
+        
+        // If metrics exists but duration is zero, update it
+        if (workflow.metrics) {
+          workflow.metrics.duration = calculatedDuration;
+          logger.info(`  - Updated workflow.metrics.duration to ${workflow.metrics.duration} ms`);
+        }
+      }
+    }
+    
     // Extract and normalize workflow state
     const workflowState = {
       steps: Array.isArray(workflow.workflowSteps) ? workflow.workflowSteps :
@@ -64,8 +86,11 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
         duration: workflow.metrics?.duration || 0,
         phaseDurations: workflow.metrics?.phaseDurations || {},
         buildPerformance: workflow.metrics?.buildPerformance || {},
-        packageMetrics: workflow.metrics?.packageMetrics || {},
-        testResults: workflow.metrics?.testResults || {},
+        packageMetrics: {},  // Initialize as empty object that we'll properly fill
+        testResults: workflow.metrics?.testResults || {
+          totalTests: 0,
+          passedTests: 0
+        },
         deploymentStatus: workflow.metrics?.deploymentStatus || null,
         channelCleanup: workflow.metrics?.channelCleanup || null,
         dashboardPath: workflow.metrics?.dashboardPath || null
@@ -87,6 +112,43 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
         ...options
       }
     };
+    
+    // Properly extract and normalize package metrics
+    if (workflow.metrics?.packageMetrics && typeof workflow.metrics.packageMetrics === 'object') {
+      Object.keys(workflow.metrics.packageMetrics).forEach(pkgName => {
+        const pkgMetrics = workflow.metrics.packageMetrics[pkgName];
+        
+        if (pkgMetrics && typeof pkgMetrics === 'object') {
+          // Create normalized package metrics with consistent property names and proper fallbacks
+          workflowState.metrics.packageMetrics[pkgName] = {
+            success: pkgMetrics.success === true,
+            duration: typeof pkgMetrics.duration === 'number' ? pkgMetrics.duration : 0,
+            
+            // Handle both totalSize and size property names
+            totalSize: typeof pkgMetrics.totalSize === 'number' ? pkgMetrics.totalSize :
+                       typeof pkgMetrics.size === 'number' ? pkgMetrics.size : 0,
+                       
+            // Handle sizeBytes as well
+            sizeBytes: typeof pkgMetrics.sizeBytes === 'number' ? pkgMetrics.sizeBytes :
+                       typeof pkgMetrics.totalSize === 'number' ? pkgMetrics.totalSize :
+                       typeof pkgMetrics.size === 'number' ? pkgMetrics.size : 0,
+                       
+            fileCount: typeof pkgMetrics.fileCount === 'number' ? pkgMetrics.fileCount : 0,
+            
+            // Handle preformatted sizes
+            formattedSize: pkgMetrics.formattedSize || null,
+            
+            // Pass through errors and warnings
+            error: pkgMetrics.error || null,
+            warnings: Array.isArray(pkgMetrics.warnings) ? pkgMetrics.warnings : []
+          };
+        }
+      });
+    }
+    
+    // Add debug logging to help diagnose issues
+    logger.debug('Normalized packageMetrics for dashboard:');
+    logger.debug(JSON.stringify(workflowState.metrics.packageMetrics, null, 2));
     
     // Process steps to extract proper status
     workflowState.steps = workflowState.steps.map(step => {
@@ -156,6 +218,17 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
         }
       });
     }
+    
+    // ---> Add debug logging before passing state to generator <-----
+    logger.debug('--- Data passed to DashboardGenerator ---');
+    logger.debug(`Steps Count: ${workflowState.steps?.length}`);
+    logger.debug(`Errors Count: ${workflowState.errors?.length}`);
+    logger.debug(`Warnings Count: ${workflowState.warnings?.length}`);
+    logger.debug(`Preview URLs Present: ${!!workflowState.preview}`);
+    logger.debug(`Metrics Keys: ${Object.keys(workflowState.metrics || {}).join(', ')}`);
+    logger.debug(`Metrics.buildPerformance: ${JSON.stringify(workflowState.metrics?.buildPerformance)}`);
+    logger.debug(`Advanced Checks Keys: ${Object.keys(workflowState.advancedChecks || {}).join(', ')}`);
+    // ---> End debug log <-----
     
     // Initialize dashboard generator
     const generator = new DashboardGenerator({

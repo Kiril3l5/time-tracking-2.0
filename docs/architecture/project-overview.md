@@ -1,3 +1,5 @@
+# Project Overview
+
 # Time Tracking System Architecture Overview
 
 > **Note:** This document provides a high-level overview of the current architecture implementation. For detailed module structure, see [Module Overview](../structure/modules.md). For the complete architecture blueprint, see [Architecture 2.0](../main_readme/PROJECT-2.0.md).

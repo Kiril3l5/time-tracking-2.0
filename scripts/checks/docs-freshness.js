@@ -5,6 +5,8 @@
  * @module checks/docs-freshness
  */
 
+/* globals global */ // Allow 'global' for standalone mock
+/* eslint-env node */ // Specify Node.js environment for ESLint
 import process from 'node:process';
 import { logger } from '../core/logger.js';
 import { fileURLToPath } from 'url';
@@ -51,39 +53,63 @@ const DEFAULT_MAX_STALENESS_DAYS = 90; // 3 months
  */
 
 /**
- * Gets the last Git commit date for a file.
- * @param {string} filePath - Absolute path to the file.
- * @returns {Promise<Date|null>} - The last commit date or null if not found/error.
+ * Gets the last Git commit dates for multiple files efficiently.
+ * Uses a single `git log` command with null delimiters for robustness.
+ * @param {string[]} filePaths - Array of absolute paths to the files.
+ * @returns {Promise<Map<string, Date|null>>} - Map of file path -> last commit Date object, or null if history not found.
  */
-async function getGitLastCommitDate(filePath) {
+async function getGitLastCommitDatesBatch(filePaths) {
+  const dateMap = new Map();
+  if (filePaths.length === 0) return dateMap;
+
+  // Git command to get last commit timestamp (%ct) and filename (%N) for multiple files
+  // Uses null characters as delimiters for safety with weird filenames
+  const command = `git log --format=format:"%ct %N" --name-only -z -- ${filePaths.map(p => `"${p.replace(/\\/g, '/')}"`).join(' ')}`;
+
   try {
-    const quotedPath = `"${filePath.replace(/\/g, '/')}"`; // Use forward slashes and quote
-    const { stdout } = await execPromise(`git log -1 --format=%ct -- ${quotedPath}`);
-    const timestamp = parseInt(stdout.trim(), 10);
-    if (isNaN(timestamp)) {
-      logger.warn(`Could not parse Git timestamp for ${relative(process.cwd(), filePath)}. Output: ${stdout}`);
-      return null;
+    // Increase maxBuffer if dealing with many files
+    const { stdout } = await execPromise(command, { maxBuffer: 10 * 1024 * 1024, encoding: 'utf8' });
+
+    // Parse the null-delimited output
+    const entries = stdout.trim().split('\0');
+    let currentTimestamp = null;
+    for (const entry of entries) {
+      if (!entry) continue;
+      // Check if the line contains a timestamp (start of a commit log entry)
+      const timestampMatch = entry.match(/^(\d+)\s/);
+      if (timestampMatch) {
+         currentTimestamp = parseInt(timestampMatch[1], 10);
+      } else if (currentTimestamp) {
+         // This entry is a filename associated with the current timestamp
+         const filePath = resolve(process.cwd(), entry.trim()); // Resolve relative to cwd
+         // Only store the latest timestamp for each file
+         if (!dateMap.has(filePath)) {
+           dateMap.set(filePath, new Date(currentTimestamp * 1000));
+         }
+      }
     }
-    return new Date(timestamp * 1000);
+    
+    // Add null for files that weren't in the git output (maybe not committed)
+    filePaths.forEach(fp => {
+      if (!dateMap.has(fp)) {
+        dateMap.set(fp, null);
+      }
+    });
+    
+    return dateMap;
   } catch (error) {
-    const relativePath = relative(process.cwd(), filePath);
-    // @ts-ignore - Allow checking error properties
-    logger.debug(`Git log command failed for ${relativePath}: ${error.message}. Code: ${error.code}, Signal: ${error.signal}`);
-    // @ts-ignore
-    if (error.stderr && error.stderr.includes('fatal: not a git repository')) {
-      logger.error('Not a Git repository or Git is not available in PATH.');
-    // @ts-ignore
-    } else if (error.stderr && error.stderr.includes('does not have any commits')) {
-      logger.warn(`File not committed yet: ${relativePath}`);
-    } else {
-      // Avoid overly verbose warnings
-    }
-    return null;
+    logger.error(`Error getting batch Git commit dates: ${error.message}`);
+    logger.debug(`Failed Git command: ${command.substring(0, 500)}...`);
+    // Fallback: return map with null for all files
+    filePaths.forEach(fp => dateMap.set(fp, null));
+    return dateMap;
   }
 }
 
 /**
  * Finds linked source code files within a documentation file.
+ * Uses regex to find markdown links pointing to likely source files (.ts, .js, etc.)
+ * within specified directories (packages, scripts).
  * @param {string} docFilePath - Absolute path to the documentation file.
  * @param {string} srcDir - Absolute path to the source directory root.
  * @returns {Promise<string[]>} - Array of absolute paths to existing linked code files.
@@ -110,7 +136,7 @@ async function findLinkedCodeFiles(docFilePath, srcDir) {
       }
     }
   } catch (error) {
-    // @ts-ignore
+    // @ts-expect-error - Allow checking error properties
     logger.warn(`Error reading or parsing doc file ${relative(process.cwd(), docFilePath)} for links: ${error.message}`);
   }
   return linkedFiles;
@@ -118,6 +144,8 @@ async function findLinkedCodeFiles(docFilePath, srcDir) {
 
 /**
  * Checks documentation freshness against source code changes.
+ * Fetches Git history for docs and linked code files in a batch,
+ * then compares last commit dates to identify potentially stale docs.
  * @param {DocFreshnessOptions} [options={}] - Configuration options.
  * @returns {Promise<DocFreshnessReport>} - Report object containing analysis results.
  */
@@ -177,10 +205,23 @@ export async function checkDocsFreshness(options = {}) {
       return report;
     }
 
+    // --- Batch Git Date Fetching --- 
+    // 1. Find all potential code files linked across *all* docs first
+    let allLinkedCodeFiles = new Set();
+    for (const docFile of docFiles) {
+       const linked = await findLinkedCodeFiles(docFile, config.srcDir);
+       linked.forEach(file => allLinkedCodeFiles.add(file));
+    }
+    const filesToGetDatesFor = [...docFiles, ...Array.from(allLinkedCodeFiles)];
+    logger.info(`Fetching Git history for ${filesToGetDatesFor.length} unique files...`);
+    const commitDateMap = await getGitLastCommitDatesBatch(filesToGetDatesFor);
+    logger.info('Git history fetched.');
+    // --- End Batch Fetching --- 
+
     const analysisPromises = docFiles.map(async (docFile) => {
       const relativeDocPath = relative(process.cwd(), docFile);
       logger.debug(`Analyzing doc: ${relativeDocPath}`);
-      const docLastUpdated = await getGitLastCommitDate(docFile);
+      const docLastUpdated = commitDateMap.get(docFile);
 
       if (!docLastUpdated) {
         logger.warn(`Skipping freshness check for ${relativeDocPath} (Could not get Git history).`);
@@ -205,7 +246,7 @@ export async function checkDocsFreshness(options = {}) {
       if (linkedCodeFiles.length > 0) {
         logger.debug(`Found ${linkedCodeFiles.length} linked code files in ${relativeDocPath}`);
         for (const codeFile of linkedCodeFiles) {
-          const codeLastUpdated = await getGitLastCommitDate(codeFile);
+          const codeLastUpdated = commitDateMap.get(codeFile);
           if (codeLastUpdated && codeLastUpdated > docLastUpdated) {
             const relativeCodePath = relative(process.cwd(), codeFile);
             logger.warn(`Stale doc (code changed): ${relativeDocPath} - Linked code file ${relativeCodePath} updated more recently.`);
@@ -234,9 +275,9 @@ export async function checkDocsFreshness(options = {}) {
     });
 
   } catch (error) {
-    // @ts-ignore
+    // @ts-expect-error - Allow checking error properties
     logger.error(`Error during documentation freshness check: ${error.message}`);
-    // @ts-ignore
+    // @ts-expect-error - Allow checking error properties
     report.errors.push(error.message);
     report.success = false;
   }
@@ -260,7 +301,7 @@ export async function checkDocsFreshness(options = {}) {
 async function runStandalone() {
   // Mock fileExists if necessary for standalone run
   if (typeof fileExists !== 'function') {
-    // @ts-ignore
+    // @ts-expect-error - Allow mocking global
     global.fileExists = async (filePath) => {
       try {
         await fs.access(filePath);
@@ -274,30 +315,30 @@ async function runStandalone() {
 
   const result = await checkDocsFreshness({});
 
-  console.log('\n--- Documentation Freshness Report ---');
-  console.log(`Success: ${result.success}`);
-  console.log(`Duration: ${(result.duration / 1000).toFixed(2)}s`);
-  console.log(`Total Docs Checked: ${result.totalDocsChecked}`);
-  console.log(`Stale Documents Found: ${result.staleDocuments.length}`);
+  logger.info('\n--- Documentation Freshness Report ---');
+  logger.info(`Success: ${result.success}`);
+  logger.info(`Duration: ${(result.duration / 1000).toFixed(2)}s`);
+  logger.info(`Total Docs Checked: ${result.totalDocsChecked}`);
+  logger.info(`Stale Documents Found: ${result.staleDocuments.length}`);
 
   if (result.staleDocuments.length > 0) {
-    console.log('\nStale Documents:');
+    logger.info('\nStale Documents:');
     result.staleDocuments.forEach(doc => {
-      console.log(` - ${doc.file} (Last Update: ${new Date(doc.lastUpdated).toLocaleDateString()}, Reason: ${doc.reason})`);
+      logger.info(` - ${doc.file} (Last Update: ${new Date(doc.lastUpdated).toLocaleDateString()}, Reason: ${doc.reason})`);
     });
   }
 
   if (result.errors.length > 0) {
-    console.error('\nErrors encountered:');
-    result.errors.forEach(err => console.error(` - ${err}`));
+    logger.error('\nErrors encountered:');
+    result.errors.forEach(err => logger.error(` - ${err}`));
   }
-  console.log('------------------------------------');
+  logger.info('------------------------------------');
 }
 
 // Check if the script is run directly
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   runStandalone().catch(err => {
-    console.error('Standalone execution failed:', err);
+    logger.error('Standalone execution failed:', err);
     process.exit(1);
   });
 } 

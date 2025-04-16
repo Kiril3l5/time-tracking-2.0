@@ -162,6 +162,8 @@ export async function buildPackageWithWorkflowTracking(options = {}) {
     timeout = 180000,  // 3 minute timeout
   } = options;
   
+  const startTime = Date.now();
+  
   try {
     // Log step
     logger.debug(`Building package ${packageName} (${target})`);
@@ -296,6 +298,8 @@ export async function buildPackageWithWorkflowTracking(options = {}) {
     logger.debug(`[Vite Parse - ${packageName}] Final Count: ${viteFileCount}, Final Size: ${viteTotalSize} bytes`);
 
     // Handle successful build
+    // Remove adding build output stats as a "warning"
+    /*
     if (recordWarning) {
       // Record build warnings from stderr
       viteWarnings.forEach(warning => {
@@ -305,23 +309,48 @@ export async function buildPackageWithWorkflowTracking(options = {}) {
       // Record build output stats
       recordWarning(`Build output: ${viteFileCount} files, ${(viteTotalSize / 1024).toFixed(2)}KB total`, phase, `${packageName} Build`, 'info');
     }
-    
-    // Explicitly ensure totalSize and fileCount are set
-    return {
+    */
+    // Log build info directly instead of using recordWarning
+    logger.info(`Build output for ${packageName}: ${viteFileCount} files, ${(viteTotalSize / 1024).toFixed(2)}KB total`);
+    viteWarnings.forEach(warning => {
+        logger.warn(`Build warning for ${packageName}: ${warning}`);
+        if (recordWarning) recordWarning(`Build warning: ${warning}`, phase, `${packageName} Build`);
+    });
+
+    // ---> ADD DEBUG LOG BEFORE RETURN <-----
+    const finalBuildResult = {
       success: true,
       packageName,
       warnings: viteWarnings, 
       totalSize: viteTotalSize,  // Explicit assignment of parsed size
       fileCount: viteFileCount,  // Explicit assignment of file count
-      duration: result.duration
+      duration: result.duration // Duration from command runner
     };
+    logger.debug(`[buildPackageWithWorkflowTracking] Returning for ${packageName}: ${JSON.stringify(finalBuildResult)}`);
+    // ---> END DEBUG LOG <-----
+    
+    return finalBuildResult;
   } catch (error) {
     // Handle unexpected errors
+    // ---> ADD DURATION CALCULATION ON ERROR <-----
+    const errorDuration = typeof startTime === 'number' ? (Date.now() - startTime) : 0; 
     if (recordWarning) {
       recordWarning(`Unexpected build error: ${error.message}`, phase, `${packageName} Build`);
     }
-    
-    throw error;
+    // ---> Modify throw to include duration and mark failure <-----
+    // Instead of throwing, return a failure object consistent with success path
+    const failureResult = { 
+        success: false, 
+        error: error.message, 
+        packageName,
+        duration: errorDuration, // Include duration even on error
+        totalSize: 0,
+        fileCount: 0,
+        warnings: []
+    };
+    logger.error(`Build exception for ${packageName}: ${error.message}`);
+    logger.debug(`[buildPackageWithWorkflowTracking] Returning FAILURE for ${packageName}: ${JSON.stringify(failureResult)}`);
+    return failureResult; // Return failure object instead of throwing
   }
 }
 
@@ -456,7 +485,7 @@ export async function buildPackageWithWorkflowIntegration(options = {}) {
         // Add package metrics
         buildMetrics.packages[packageName] = {
           duration: result.duration || 0,
-          size: result.totalSize || 0,
+          totalSize: result.totalSize || 0,
           fileCount: result.fileCount || 0,
           success: result.success
         };
@@ -490,7 +519,7 @@ export async function buildPackageWithWorkflowIntegration(options = {}) {
         // Add package metrics
         buildMetrics.packages[packageName] = {
           duration: result.duration || 0,
-          size: result.totalSize || 0,
+          totalSize: result.totalSize || 0,
           fileCount: result.fileCount || 0,
           success: result.success
         };

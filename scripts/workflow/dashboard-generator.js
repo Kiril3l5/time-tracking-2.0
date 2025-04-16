@@ -82,7 +82,7 @@ export class DashboardGenerator {
     this.generatePreviewChannels = this.generatePreviewChannels.bind(this);
     this.generateIssues = this.generateIssues.bind(this);
     this.generateTimeline = this.generateTimeline.bind(this);
-    this.generateAdvancedChecks = this.generateAdvancedChecks.bind(this);
+    this.generateAdvancedCheckCards = this.generateAdvancedCheckCards.bind(this);
     this.generateWorkflowOptions = this.generateWorkflowOptions.bind(this);
     this.generateChannelCleanup = this.generateChannelCleanup.bind(this);
     this.escapeHtml = this.escapeHtml.bind(this);
@@ -130,7 +130,18 @@ export class DashboardGenerator {
       }
       
       this.workflowState = workflowState;
+      // ---> Add debug logging before normalization <-----
+      logger.debug('--- Data received by DashboardGenerator.initialize ---');
+      logger.debug(`Raw Metrics Keys: ${Object.keys(workflowState.metrics || {}).join(', ')}`);
+      logger.debug(`Raw buildPerformance: ${JSON.stringify(workflowState.metrics?.buildPerformance)}`);
+      logger.debug(`Raw buildMetrics (separate prop): ${JSON.stringify(workflowState.buildMetrics)}`);
+      // ---> End debug log <-----
       this.data = this.normalizeData(workflowState);
+      // ---> Add debug logging after normalization <-----
+      logger.debug('--- Data after DashboardGenerator.normalizeData ---');
+      logger.debug(`Normalized Metrics Keys: ${Object.keys(this.data.metrics || {}).join(', ')}`);
+      logger.debug(`Normalized buildPerformance: ${JSON.stringify(this.data.metrics?.buildPerformance)}`);
+      // ---> End debug log <-----
       this.outputPath = this.options.outputPath || join(__dirname, '../../dashboard.html');
       
       return this.data;
@@ -228,12 +239,16 @@ export class DashboardGenerator {
     const normalizedData = {
       steps: normalizedSteps,
       errors: data.errors || [],
-      warnings: data.warnings || [],
+      warnings: this.processWarnings(data.warnings || []),
       metrics: normalizedMetrics,
       preview: normalizedPreview,
       advancedChecks: normalizedAdvancedChecks,
       buildMetrics: data.buildMetrics || {},
-      options: data.options || {}
+      options: data.options || {},
+      title: data.title || 'Workflow Results',
+      runDate: data.runDate || new Date().toISOString(),
+      status: data.status || 'pending',
+      issues: this.normalizeArray(data.issues),
     };
     
     if (this.verbose) {
@@ -241,6 +256,114 @@ export class DashboardGenerator {
     }
     
     return normalizedData;
+  }
+
+  /**
+   * Process warnings to group similar documentation warnings together
+   * @param {Array} warnings - Array of warning messages
+   * @returns {Array} - Processed warnings with grouped items
+   */
+  processWarnings(warnings) {
+    if (!Array.isArray(warnings) || warnings.length <= 5) {
+      return warnings;
+    }
+
+    // Regular expressions to match common documentation warnings
+    const docPatterns = [
+      { regex: /Missing main heading \(H1\) in file: (.+)/, type: "Missing main heading (H1)" },
+      { regex: /Missing JSDoc comment for: (.+) in file: (.+)/, type: "Missing JSDoc comment" },
+      { regex: /Invalid JSDoc format in file: (.+)/, type: "Invalid JSDoc format" },
+      { regex: /Missing parameter description for: (.+) in file: (.+)/, type: "Missing parameter description" },
+      { regex: /Missing return description in file: (.+)/, type: "Missing return description" },
+      { regex: /Missing documentation for: (.+)/, type: "Missing documentation" }
+    ];
+
+    // Group warnings by pattern
+    const groups = {};
+    const remainingWarnings = [];
+
+    warnings.forEach(warning => {
+      if (typeof warning !== 'string') {
+        remainingWarnings.push(warning);
+        return;
+      }
+
+      let matched = false;
+      for (const pattern of docPatterns) {
+        const match = warning.match(pattern.regex);
+        if (match) {
+          if (!groups[pattern.type]) {
+            groups[pattern.type] = [];
+          }
+          groups[pattern.type].push(warning);
+          matched = true;
+          break;
+        }
+      }
+
+      if (!matched) {
+        remainingWarnings.push(warning);
+      }
+    });
+
+    // Create summary warnings for each group
+    const processedWarnings = [...remainingWarnings];
+
+    Object.entries(groups).forEach(([type, groupWarnings]) => {
+      if (groupWarnings.length === 1) {
+        processedWarnings.push(groupWarnings[0]);
+      } else {
+        // Extract file paths for the first few warnings
+        const maxFilesToShow = 5;
+        const sampleFiles = groupWarnings
+          .slice(0, maxFilesToShow)
+          .map(warning => {
+            const fileMatch = warning.match(/in file: (.+)/) || warning.match(/file: (.+)/);
+            return fileMatch ? fileMatch[1] : warning;
+          });
+
+        const remainingCount = groupWarnings.length - maxFilesToShow;
+        
+        // Create a summary warning
+        const summaryWarning = {
+          summary: `Documentation issue: ${type} in ${groupWarnings.length} files`,
+          details: `<p>Examples:</p><ul>${
+            sampleFiles.map(file => `<li>${this.escapeHtml(file)}</li>`).join('')
+          }${remainingCount > 0 ? `<li>...and ${remainingCount} more files</li>` : ''}</ul>`,
+          count: groupWarnings.length,
+          expanded: false
+        };
+        
+        processedWarnings.push(summaryWarning);
+      }
+    });
+
+    return processedWarnings;
+  }
+
+  /**
+   * Normalize an array property
+   * @param {*} value - Value to normalize
+   * @returns {Array} - Normalized array
+   */
+  normalizeArray(value) {
+    if (!value) return [];
+    return Array.isArray(value) ? value : [value];
+  }
+
+  /**
+   * Escape HTML special characters to prevent XSS
+   * @param {string} text - Text to escape
+   * @returns {string} - Escaped text
+   */
+  escapeHtml(text) {
+    if (!text) return '';
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
   }
 
   /**
@@ -277,11 +400,37 @@ export class DashboardGenerator {
     ${this.generatePreviewChannels()}
     ${this.generateOverallStatus()}
     ${this.generateIssues()}
+    ${this.generateWorkflowAnalytics()}
     ${this.generateTimeline()}
-    ${this.generateAdvancedChecks()}
+    ${this.generateAdvancedCheckCards()}
     ${this.generateWorkflowOptions()}
     ${this.generateChannelCleanup()}
   </div>
+  
+  <script>
+    // Simple script to toggle visibility of depcheck error details
+    function toggleDetails(id) {
+      const detailsElement = document.getElementById(id);
+      if (detailsElement) {
+        detailsElement.style.display = detailsElement.style.display === 'none' ? 'block' : 'none';
+      }
+    }
+    // Add listeners after DOM is loaded
+    document.addEventListener('DOMContentLoaded', () => {
+      const buttons = document.querySelectorAll('.toggle-details-btn');
+      buttons.forEach(button => {
+        button.addEventListener('click', () => {
+          const targetId = button.getAttribute('data-target-id');
+          if (targetId) {
+            toggleDetails(targetId);
+          }
+        });
+      });
+      // Initially hide all details
+      const allDetails = document.querySelectorAll('.depcheck-error-details');
+      allDetails.forEach(el => el.style.display = 'none');
+    });
+  </script>
 </body>
 </html>
       `;
@@ -419,152 +568,127 @@ export class DashboardGenerator {
   }
 
   generateOverallStatus() {
-    const { metrics, steps } = this.data;
-    
-    // If we don't have metrics or steps, show a minimal status
-    if (!metrics || typeof metrics !== 'object' || !Array.isArray(steps)) {
-      return `
-        <section class="overall-status">
-          <h2>Overall Status</h2>
-          <div class="status-grid">
-            <div class="status-item">
-              <h4>Status</h4>
-              <div class="value status-pending">Unknown</div>
-            </div>
-          </div>
-        </section>
-      `;
+    const { metrics } = this.data;
+    if (!metrics || typeof metrics !== 'object') {
+      logger.error('[DashboardGenerator] Metrics data missing in generateOverallStatus');
+      return '<section class="overall-status"><h2>Overall Status</h2><p class="status status-error">Metrics data unavailable</p></section>';
     }
     
-    // Calculate total workflow duration
-    const duration = metrics.duration || metrics.totalDuration || 0;
+    const duration = typeof metrics.duration === 'number' ? metrics.duration : 0;
+    const buildPerfData = metrics.buildPerformance || {}; 
+    logger.debug(`[generateOverallStatus] Reading buildPerfData.totalBuildTime: ${buildPerfData.totalBuildTime}`);
+    const buildPerformanceTime = typeof buildPerfData.totalBuildTime === 'number' ? buildPerfData.totalBuildTime : 0;
+    const deploymentStatus = metrics.deploymentStatus || 'pending';
     
-    // Get test results if available
-    const tests = metrics.testResults || {};
-    const coverage = tests.coverage; // Directly access the parsed coverage value
-    let coverageDisplay = 'N/A';
-
-    // Prioritize showing the numerical coverage value if it's a number (even 0)
-    if (typeof coverage === 'number' && !isNaN(coverage)) {
-        coverageDisplay = `${coverage.toFixed(2)}%`;
-    } else if (tests.passed !== undefined && tests.total !== undefined) {
-        // Fallback to test count ONLY if coverage number isn't available
-        coverageDisplay = `${tests.passed}/${tests.total} tests (Coverage N/A)`;
+    const testResults = metrics.testResults || {};
+    const totalSteps = typeof testResults.total === 'number' ? testResults.total : 0;
+    const passedSteps = typeof testResults.passed === 'number' ? testResults.passed : 0;
+    const coveragePercent = typeof testResults.coverage === 'number' && !isNaN(testResults.coverage) 
+                           ? testResults.coverage 
+                           : null;
+    
+    // Format the test/coverage display
+    let qualityStepsDisplay = '';
+    if (totalSteps > 0) {
+        qualityStepsDisplay = `${passedSteps}/${totalSteps} steps passed`;
+        if (coveragePercent !== null) {
+          qualityStepsDisplay += ` (${coveragePercent.toFixed(1)}% coverage)`;
+        } else {
+           // Add note if coverage failed/missing but steps ran
+           qualityStepsDisplay += ` (Coverage unavailable)`; 
+        }
     } else {
-        coverageDisplay = 'No test data';
+        qualityStepsDisplay = 'Quality steps skipped or data unavailable';
     }
     
-    // Get build performance
-    const buildPerformance = metrics.buildPerformance || {};
-    const buildTime = buildPerformance.totalBuildTime || (
-      // Try to get build time from steps if metrics don't have it
-      steps.find(step => step.name === 'Build Phase')?.duration || 0
-    );
+    const packageMetricsData = metrics.packageMetrics || {};
+    const adminBuild = packageMetricsData.admin || {};
+    const hoursBuild = packageMetricsData.hours || {};
     
-    // Extract deployment status
-    const deployStep = steps.find(step => step.name === 'Deploy Phase');
-    const deployStatus = deployStep
-      ? (deployStep.result?.success === false ? 'failed' : 'success')
-      : 'pending';
-      
-    // Get build metrics - try multiple sources
-    let buildMetricsText = '';
-    
-    // Check for direct file count and size in packageMetrics
-    if (metrics.packageMetrics) {
-      let fileCount = 0;
-      let totalSize = 0;
-      
-      Object.values(metrics.packageMetrics).forEach(pkg => {
-        if (pkg.fileCount) fileCount += pkg.fileCount;
-        if (pkg.totalSize) totalSize += pkg.totalSize;
-      });
-      
-      if (fileCount > 0) {
-        const formattedSize = totalSize >= 1024 * 1024
-          ? `${(totalSize / (1024 * 1024)).toFixed(2)}MB`
-          : totalSize >= 1024
-            ? `${(totalSize / 1024).toFixed(2)}KB`
-            : `${totalSize}B`;
-            
-        buildMetricsText = `${fileCount} files, ${formattedSize}`;
-      }
+    let adminBuildOutput = 'Data unavailable';
+    if (adminBuild.success === true) {
+      const size = adminBuild.formattedSize || this.formatBytes(adminBuild.sizeBytes || 0);
+      const files = typeof adminBuild.fileCount === 'number' ? adminBuild.fileCount : '?';
+      adminBuildOutput = `Success (${this.formatDuration(adminBuild.duration || 0)}) - ${files} files, ${size}`;
+    } else if (adminBuild.success === false) {
+      adminBuildOutput = adminBuild.error ? `Failed: ${this.escapeHtml(adminBuild.error)}` : 'Failed';
     }
     
-    // If that didn't work, look for warnings about build output
-    if (!buildMetricsText) {
-      // Try to find build output warnings
-      const { warnings } = this.data;
-      if (warnings && Array.isArray(warnings)) {
-        const buildOutputWarning = warnings.find(w => 
-          (typeof w.message === 'string' && w.message.includes('Build output:')) ||
-          (typeof w === 'string' && w.includes('Build output:'))
-        );
-        
-        if (buildOutputWarning) {
-          const message = typeof buildOutputWarning === 'string' 
-            ? buildOutputWarning 
-            : buildOutputWarning.message;
-            
-          const match = message.match(/Build output:\s*(\d+)\s*files,\s*([\d.]+[KMG]?B)/i);
-          if (match) {
-            buildMetricsText = `${match[1]} files, ${match[2]}`;
-          }
-        }
-      }
+    let hoursBuildOutput = 'Data unavailable';
+    if (hoursBuild.success === true) {
+      const size = hoursBuild.formattedSize || this.formatBytes(hoursBuild.sizeBytes || 0);
+      const files = typeof hoursBuild.fileCount === 'number' ? hoursBuild.fileCount : '?';
+      hoursBuildOutput = `Success (${this.formatDuration(hoursBuild.duration || 0)}) - ${files} files, ${size}`;
+    } else if (hoursBuild.success === false) {
+      hoursBuildOutput = hoursBuild.error ? `Failed: ${this.escapeHtml(hoursBuild.error)}` : 'Failed';
     }
     
-    // As a last resort, look for any build output warnings
-    if (!buildMetricsText) {
-      const { warnings } = this.data;
-      if (warnings && Array.isArray(warnings)) {
-        for (const w of warnings) {
-          const message = typeof w === 'string' ? w : w.message;
-          if (typeof message === 'string') {
-            const match = message.match(/(\d+)\s*files,\s*([\d.]+[KMG]?B)/i);
-            if (match) {
-              buildMetricsText = `${match[1]} files, ${match[2]}`;
-              break;
-            }
-          }
-        }
-      }
-    }
-    
-    // If we still don't have build metrics, use a default message
-    if (!buildMetricsText) {
-      buildMetricsText = 'No data available';
-    }
-    
+    logger.debug(`[generateOverallStatus] Displaying - Duration: ${duration}, BuildTime: ${buildPerformanceTime}, QualitySteps: ${qualityStepsDisplay}, Deployment: ${deploymentStatus}`);
+
     return `
       <section class="overall-status">
         <h2>Overall Status</h2>
         <div class="status-grid">
           <div class="status-item">
-            <h4>Duration</h4>
-            <div class="value">${this.formatDuration(duration)}</div>
+            <h3>Duration</h3>
+            <p>${this.formatDuration(duration)}</p>
           </div>
           <div class="status-item">
-            <h4>Build Performance</h4>
-            <div class="value">${this.formatDuration(buildTime)}</div>
+            <h3>Build Performance</h3>
+            <p>${this.formatDuration(buildPerformanceTime)}</p>
           </div>
           <div class="status-item">
-            <h4>Test Coverage</h4>
-            <div class="value">${coverageDisplay}</div>
+            <h3>Quality Steps</h3>
+            <p>${qualityStepsDisplay}</p>
           </div>
           <div class="status-item">
-            <h4>Deployment</h4>
-            <div class="value status status-${deployStatus}">${deployStatus}</div>
+            <h3>Deployment</h3>
+            <p class="status status-${deploymentStatus}">${deploymentStatus}</p>
           </div>
-          <div class="status-item build-metrics">
-            <h4>Build Output</h4>
-            <div class="value">
-              ${this.generatePackageBuildMetrics(metrics.packageMetrics)}
+        </div>
+        <div class="build-output">
+          <h3>Build Output</h3>
+          <div class="build-packages">
+            <div class="build-package">
+              <span class="package-name">admin:</span> ${adminBuildOutput}
+            </div>
+            <div class="build-package">
+              <span class="package-name">hours:</span> ${hoursBuildOutput}
             </div>
           </div>
         </div>
+        ${this.generateTestFilesSection(testResults)}
       </section>
     `;
+  }
+
+  generateTestFilesSection(testResults) {
+    if (!testResults || !testResults.testFiles || testResults.testFiles.length === 0) {
+      return '';
+    }
+
+    const testFiles = testResults.testFiles;
+    let html = `
+      <div class="test-files">
+        <h3>Test Files (${testFiles.length})</h3>
+        <ul class="test-files-list">
+    `;
+
+    testFiles.forEach(file => {
+      html += `
+        <li class="test-file">
+          <span class="test-file-name">${this.escapeHtml(file.file)}</span>
+          <span class="test-file-count">${file.count} tests</span>
+        </li>
+      `;
+    });
+
+    html += `
+        </ul>
+      </div>
+    `;
+
+    return html;
   }
 
   generatePackageBuildMetrics(packageMetrics) {
@@ -574,22 +698,51 @@ export class DashboardGenerator {
 
     let html = '<ul class="package-metrics-list">';
     for (const [packageName, metrics] of Object.entries(packageMetrics)) {
+      // Determine status with fallback
       const statusClass = metrics.success ? 'success' : 'error';
-      // Ensure duration is treated as a number before formatting
+      
+      // Handle duration with proper fallback
       const durationMs = typeof metrics.duration === 'number' ? metrics.duration : 0;
       const duration = durationMs > 0 ? this.formatDuration(durationMs) : 'N/A';
-      // Use the pre-formatted size or indicate N/A
-      const details = metrics.formattedSize && typeof metrics.fileCount === 'number' 
-                      ? `${metrics.fileCount} files, ${metrics.formattedSize}` 
-                      : 'Details N/A'; 
+      
+      // Handle file count with proper fallback
+      const fileCount = typeof metrics.fileCount === 'number' ? metrics.fileCount : 0;
+      
+      // Handle size with multiple fallbacks
+      let sizeBytes = 0;
+      
+      // Try multiple properties to get size in a consistent order of precedence
+      if (typeof metrics.totalSize === 'number' && metrics.totalSize > 0) {
+        sizeBytes = metrics.totalSize;
+      } else if (typeof metrics.sizeBytes === 'number' && metrics.sizeBytes > 0) {
+        sizeBytes = metrics.sizeBytes;
+      } else if (typeof metrics.size === 'number' && metrics.size > 0) {
+        sizeBytes = metrics.size;
+      }
+      
+      // Format the size for display with fallback
+      let formattedSize = 'N/A';
+      
+      // Use pre-formatted size if available, otherwise format from bytes
+      if (metrics.formattedSize && metrics.formattedSize !== 'N/A') {
+        formattedSize = metrics.formattedSize;
+      } else if (sizeBytes > 0) {
+        formattedSize = this.formatFileSize(sizeBytes);
+      }
+      
+      // Final details string that combines file count and size
+      const details = `${fileCount} files, ${formattedSize}`;
+      
       html += `
         <li>
           <strong>${this.escapeHtml(packageName)}:</strong> 
           <span class="status status-${statusClass}">${metrics.success ? 'Success' : 'Failed'}</span> 
           (${duration}) - ${details}
           ${metrics.error ? `<p class="error-detail">Error: ${this.escapeHtml(metrics.error)}</p>` : ''}
-          ${/* Display specific build warnings if needed */ ''}
-          ${/* metrics.warnings && metrics.warnings.length > 0 ? `<ul class="build-warnings">${metrics.warnings.map(w => `<li>${this.escapeHtml(w)}</li>`).join('')}</ul>` : '' */ ''}
+          ${metrics.warnings && metrics.warnings.length > 0 ? 
+            `<ul class="build-warnings">${metrics.warnings.map(w => 
+              `<li>${this.escapeHtml(typeof w === 'string' ? w : (w.message || ''))}</li>`
+            ).join('')}</ul>` : ''}
         </li>
       `;
     }
@@ -597,365 +750,358 @@ export class DashboardGenerator {
     return html;
   }
 
+  // Helper method to format file sizes
+  formatFileSize(bytes) {
+    if (bytes === 0 || isNaN(bytes)) return '0 B';
+    
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    
+    // Keep to 2 decimal places max and remove trailing zeros
+    return (bytes / Math.pow(1024, i)).toFixed(2).replace(/\.0+$/, '') + ' ' + units[i];
+  }
+
   generateIssues() {
     const { errors, warnings } = this.data;
     
-    if ((!errors || errors.length === 0) && (!warnings || warnings.length === 0)) {
+    // Define patterns for generic summary messages to filter out
+    const genericSummaryPatterns = [
+      /^Quality checks had warnings or errors$/i, // Matches the exact phrase, case-insensitive
+      /^Validation Phase failed/i,
+      /^Build Phase failed/i,
+      /^Workflow failed:/i // Added to filter the main workflow failure message
+      // Add more generic phase/step summary patterns if needed
+    ];
+
+    // Filter errors - Ensure we only display specific, actionable errors
+    const filteredErrors = (errors || []).filter(error => {
+      // Ensure error has a message to check
+      const message = typeof error === 'string' ? error : 
+                      (error && typeof error.message === 'string' ? error.message : 
+                      (error && typeof error.text === 'string' ? error.text : ''));
+      // Keep if message exists and doesn't match generic patterns
+      return message && !genericSummaryPatterns.some(pattern => pattern.test(message));
+    });
+
+    // Filter warnings - Display only specific warnings, not summaries or info messages
+    const processedWarnings = this.processWarnings(warnings || []);
+    const filteredWarnings = processedWarnings.filter(warning => {
+      // Get the message content
+      const message = typeof warning === 'string' ? warning : 
+                      (warning && typeof warning.message === 'string' ? warning.message : 
+                      (warning && typeof warning.summary === 'string' ? warning.summary : ''));
+                      
+      // Determine severity (default to 'warning')
+      const severity = typeof warning === 'object' && warning.severity ? warning.severity : 'warning';
+
+      // Check if it's a generic summary step
+      const isGenericStepSummary = warning.step && genericSummaryPatterns.some(pattern => pattern.test(warning.step));
+      
+      // Keep if message exists, is not generic, and severity is not 'info'
+      return message && !isGenericStepSummary && severity !== 'info' && 
+             !genericSummaryPatterns.some(pattern => pattern.test(message));
+    });
+
+    const totalIssues = filteredErrors.length + filteredWarnings.length;
+
+    if (totalIssues === 0) {
       return `
         <section class="issues">
           <h2>Issues & Warnings</h2>
-          <p class="status status-success">No issues or warnings found</p>
+          <p class="status status-success">No specific issues or warnings found.</p>
         </section>
       `;
     }
-    
-    return `
+
+    let html = `
       <section class="issues">
-        <h2>Issues & Warnings</h2>
-        ${errors && errors.length > 0 ? `
-          <div class="errors-section">
-            <h3>Errors</h3>
-            <ul class="issues-list">
-              ${errors.map(error => `<li>${typeof error === 'string' ? this.escapeHtml(error) : 
-                this.escapeHtml(error.message || error.text || JSON.stringify(error))}</li>`).join('')}
-            </ul>
-          </div>
-        ` : ''}
-        
-        ${warnings && warnings.length > 0 ? `
-          <div class="warnings-section">
-            <h3>Warnings</h3>
-            <ul class="warnings-list">
-              ${warnings.map(warning => {
-                // Handle different warning formats
-                if (typeof warning === 'string') {
-                  return `<li>${this.escapeHtml(warning)}</li>`;
-                }
-                
-                // Extract the most meaningful content from warning objects
-                let message = '';
-                if (warning.message) {
-                  message = warning.message;
-                } else if (warning.text) {
-                  message = warning.text;
-                } else if (warning.details) {
-                  message = typeof warning.details === 'string' ? warning.details : JSON.stringify(warning.details);
-                } else {
-                  message = JSON.stringify(warning);
-                }
-                
-                // Add contextual info if available
-                const context = [];
-                if (warning.step) context.push(`Step: ${warning.step}`);
-                if (warning.phase) context.push(`Phase: ${warning.phase}`);
-                if (warning.file) context.push(`File: ${warning.file}`);
-                
-                const contextStr = context.length > 0 ? ` <span class="warning-context">(${context.join(', ')})</span>` : '';
-                
-                return `<li>${this.escapeHtml(message)}${contextStr}</li>`;
-              }).join('')}
-            </ul>
-          </div>
-        ` : ''}
-      </section>
+        <h2>Issues & Warnings (${totalIssues})</h2>
     `;
+
+    if (filteredErrors.length > 0) {
+      html += `
+        <div class="issue-group errors">
+          <h3>Errors (${filteredErrors.length})</h3>
+          <ul>
+      `;
+      filteredErrors.forEach(error => {
+        const message = typeof error === 'string' ? error : (error.message || error.text || JSON.stringify(error));
+        const context = error.phase ? `(${error.phase}${error.step ? ` - ${error.step}` : ''})` : '';
+        html += `<li>
+                   <span class="severity severity-error">ERROR</span>
+                   <span class="message">${this.escapeHtml(message)}</span>
+                   ${context ? `<span class="context">${this.escapeHtml(context)}</span>` : ''}
+                 </li>`;
+      });
+      html += '</ul></div>';
+    }
+
+    if (filteredWarnings.length > 0) {
+      html += `
+        <div class="issue-group warnings">
+          <h3>Warnings (${filteredWarnings.length})</h3>
+          <ul>
+      `;
+      filteredWarnings.forEach(warning => {
+        const message = typeof warning === 'string' ? warning : (warning.message || warning.summary || JSON.stringify(warning));
+        const context = warning.phase ? `(${warning.phase}${warning.step ? ` - ${warning.step}` : ''})` : '';
+        // Check if it's a grouped warning with details
+        if (typeof warning === 'object' && warning.summary && warning.details) {
+          html += `<details class="grouped-warning">
+                     <summary>
+                       <span class="severity severity-warning">WARNING</span>
+                       <span class="message">${this.escapeHtml(warning.summary)}</span>
+                       ${context ? `<span class="context">${this.escapeHtml(context)}</span>` : ''}
+                     </summary>
+                     <div class="details-content">${warning.details}</div> 
+                   </details>`; // Raw HTML for details
+        } else {
+          html += `<li>
+                     <span class="severity severity-warning">WARNING</span>
+                     <span class="message">${this.escapeHtml(message)}</span>
+                     ${context ? `<span class="context">${this.escapeHtml(context)}</span>` : ''}
+                   </li>`;
+        }
+      });
+      html += '</ul></div>';
+    }
+
+    html += '</section>';
+    return html;
   }
 
+  /**
+   * Generates the main workflow timeline HTML (phases and steps)
+   * @returns {string} HTML for the workflow timeline
+   */
   generateTimeline() {
-    const { steps } = this.data;
-    if (!steps || !Array.isArray(steps) || steps.length === 0) {
+    const { steps } = this.data; // Get the full steps array
+    
+    // Ensure steps is an array
+    if (!Array.isArray(steps) || steps.length === 0) {
+      logger.warn('No steps data available for timeline generation.');
+      return ''; 
+    }
+    
+    // Define phase order for grouping
+    const phaseOrder = ['Setup', 'Validation', 'Build', 'Deploy', 'Results', 'Maintenance', 'Cleanup'];
+    const stepsByPhase = {};
+    phaseOrder.forEach(p => stepsByPhase[p] = []); // Initialize empty arrays for known phases
+    stepsByPhase['Unknown'] = []; // For steps without a phase
+
+    // Group steps by phase
+    steps.forEach(step => {
+      // Normalize status just in case
+      step.status = step.status || 'pending'; 
+      const phase = step.phase && phaseOrder.includes(step.phase) ? step.phase : 'Unknown';
+      // IMPORTANT: Do NOT filter out the main Phase steps here
+      stepsByPhase[phase].push(step);
+    });
+
+    let html = '<section class="timeline"><h2>Workflow Details</h2>';
+    
+    // Generate HTML for each phase in the defined order
+    phaseOrder.forEach(phaseName => {
+      if (stepsByPhase[phaseName] && stepsByPhase[phaseName].length > 0) {
+        // Find the main phase summary step to display its overall duration
+        const mainPhaseStep = stepsByPhase[phaseName].find(s => s.name === `${phaseName} Phase`);
+        const phaseDurationStr = mainPhaseStep?.duration > 0 ? ` | Phase Duration: ${this.formatDuration(mainPhaseStep.duration)}` : '';
+        
+        html += `<div class="timeline-phase-group">
+                   <h3 class="phase-title">${phaseName} Phase${phaseDurationStr}</h3>
+                   <ul class="timeline-list">`;
+                   
+        // Iterate through steps *within* this phase
+        stepsByPhase[phaseName].forEach((step) => {
+          // Skip rendering the main phase step itself within the list, we used its info in the title
+          if (step.name === `${phaseName} Phase`) return;
+          
+          const status = step.status.toLowerCase(); // Ensure lowercase for CSS
+          const durationMs = step.duration || 0;
+          // Display small durations clearly, handle N/A or Skipped
+          const duration = status === 'skipped' ? 'Skipped' : 
+                           durationMs > 50 ? this.formatDuration(durationMs) : 
+                           durationMs > 0 ? `${durationMs}ms` : 'N/A'; 
+          
+          html += `
+            <li class="timeline-item status-${status}">
+              <div class="timeline-marker"></div>
+              <div class="timeline-content">
+                <h4>${this.escapeHtml(step.name)}</h4>
+                <!-- Show step status and duration -->
+                <p>Status: <span class="status status-${status}">${status}</span> | Duration: ${duration}</p>
+                ${step.error ? `<p class="error">Error: ${this.escapeHtml(typeof step.error === 'string' ? step.error : JSON.stringify(step.error))}</p>` : ''}
+                ${step.details ? `<p class="details">${this.escapeHtml(typeof step.details === 'string' ? step.details : JSON.stringify(step.details))}</p>` : ''} 
+              </div>
+            </li>
+          `;
+        });
+        html += '</ul></div>'; // Close timeline-list and phase-group
+      }
+    });
+    
+    // Add any steps that couldn't be grouped by a known phase (should be minimal now)
+    if (stepsByPhase['Unknown'] && stepsByPhase['Unknown'].length > 0) {
+        html += `<div class="timeline-phase-group">
+                   <h3 class="phase-title">Other Steps</h3>
+                   <ul class="timeline-list">`;
+        stepsByPhase['Unknown'].forEach((step) => {
+           const status = step.status.toLowerCase();
+           const durationMs = step.duration || 0;
+           const duration = status === 'skipped' ? 'Skipped' : durationMs > 50 ? this.formatDuration(durationMs) : durationMs > 0 ? `${durationMs}ms` : 'N/A';
+           html += `
+            <li class="timeline-item status-${status}">
+              <div class="timeline-marker"></div>
+              <div class="timeline-content">
+                <h4>${this.escapeHtml(step.name)}</h4>
+                <p>Status: <span class="status status-${status}">${status}</span> | Duration: ${duration}</p>
+                ${step.error ? `<p class="error">Error: ${this.escapeHtml(typeof step.error === 'string' ? step.error : JSON.stringify(step.error))}</p>` : ''}
+              </div>
+            </li>
+          `;
+        });
+        html += '</ul></div>';
+    }
+
+    html += '</section>';
+    return html;
+  }
+
+  generateAdvancedCheckCards() {
+    const { advancedChecks } = this.data;
+    
+    if (!advancedChecks || Object.keys(advancedChecks).length === 0) {
       return `
-        <section class="timeline-section">
-          <h2>Workflow Timeline</h2>
-          <div class="timeline error">
-            <p class="status status-error">Error</p>
-            <p>Timeline data is not available or invalid.</p>
-          </div>
+        <section class="advanced-checks-cards">
+          <h2>Advanced Checks</h2>
+          <p class="info">No advanced checks were configured for this workflow.</p>
         </section>
       `;
     }
-
-    // First check if we have all the required phases
-    const phases = {
-      'Setup': false,
-      'Validation': false,
-      'Build': false,
-      'Deploy': false, 
-      'Results': false,
-      'Cleanup': false
-    };
     
-    // Check which phases we have
-    steps.forEach(step => {
-      if (step.phase) {
-        phases[step.phase] = true;
-      } else if (step.name && step.name.includes('Phase')) {
-        const phaseName = step.name.split(' ')[0];
-        if (phases[phaseName] !== undefined) {
-          phases[phaseName] = true;
-        }
-      }
-    });
+    let html = `
+      <section class="advanced-checks-cards">
+        <h2>Advanced Checks</h2>
+        <div class="cards-container">
+    `;
     
-    // Ensure the steps include all phases and important steps
-    let enhancedSteps = [...steps];
-    
-    // Check if we have 'Channel Cleanup' - fix missing channel cleanup information
-    const hasChannelCleanup = steps.some(step => step.name === 'Channel Cleanup');
-    
-    // If Channel Cleanup step is missing or has duration 0, check for actual metrics data
-    if (!hasChannelCleanup || steps.find(step => step.name === 'Channel Cleanup')?.duration === 0) {
-      const { metrics } = this.data;
+    // Sort checks by status: error first, then warning, then rest
+    const sortedChecks = Object.entries(advancedChecks).sort((a, b) => {
+      const statusA = a[1].status;
+      const statusB = b[1].status;
       
-      // If we have channel cleanup metrics data but missing an accurate step
-      if (metrics && metrics.channelCleanup) {
-        // Remove any existing Channel Cleanup step if it's present but incomplete
-        enhancedSteps = enhancedSteps.filter(step => step.name !== 'Channel Cleanup');
-        
-        // Calculate a more accurate status based on actual results
-        const deleteCount = metrics.channelCleanup.channelsDeleted || 
-          (metrics.channelCleanup.sites || []).reduce((sum, site) => sum + (site.deleted || 0), 0);
-        
-        // Add an enhanced Channel Cleanup step with accurate information
-        enhancedSteps.push({
-          name: 'Channel Cleanup',
-          phase: 'Results',
-          status: deleteCount > 0 ? 'success' : 'info',
-          duration: 5000, // Use a reasonable default time
-          error: null,
-          details: deleteCount > 0 ? 
-            `${deleteCount} channels were deleted, ${metrics.channelCleanup.channelsKept || 0} channels were kept.` : 
-            'No channels needed to be deleted.',
-          timestamp: new Date().toISOString() // Use current time as fallback
-        });
-      }
-    }
-    
-    // Check for missing or incomplete workflow validation results
-    const workflowValidationStep = steps.find(step => step.name === 'workflowValidation');
-    if (workflowValidationStep && workflowValidationStep.status === 'error' && !workflowValidationStep.details) {
-      // Look for more details in advanced checks
-      const { advancedChecks } = this.data;
-      if (advancedChecks && advancedChecks.workflowValidation) {
-        const validation = advancedChecks.workflowValidation;
-        
-        // Find the index of the existing step
-        const stepIndex = enhancedSteps.findIndex(step => step.name === 'workflowValidation');
-        
-        // Replace with enhanced step if we found it
-        if (stepIndex !== -1) {
-          // Extract useful details from the validation data
-          let details = 'Workflow validation failed. ';
-          
-          if (validation.data && validation.data.issues) {
-            details += validation.data.issues.map(issue => issue.message || issue).join('; ');
-          } else if (validation.message) {
-            details += validation.message;
-          }
-          
-          // Update the step with better details
-          enhancedSteps[stepIndex] = {
-            ...workflowValidationStep,
-            details: details
-          };
-        }
-      }
-    }
-    
-    // Improve ALL steps with missing or unclear information
-    enhancedSteps = enhancedSteps.map(step => {
-      // Skip steps with good details already
-      if (step.details || step.error) {
-        return step;
-      }
+      if (statusA === 'error' && statusB !== 'error') return -1;
+      if (statusA !== 'error' && statusB === 'error') return 1;
+      if (statusA === 'warning' && statusB !== 'warning' && statusB !== 'error') return -1;
+      if (statusA !== 'warning' && statusA !== 'error' && statusB === 'warning') return 1;
       
-      // Add helpful context to common steps
-      switch(step.name) {
-        case 'Results Phase':
-          return {
-            ...step,
-            details: 'Generated dashboard, cleaned up channels, and performed end-of-workflow tasks.'
-          };
-        case 'Package Analysis':
-          return {
-            ...step,
-            details: 'Analyzed package dependencies and verified project structure.'
-          };
-        case 'Deploy Phase':
-          if (step.status === 'success') {
-            return {
-              ...step,
-              details: 'Successfully deployed preview channels to Firebase hosting.'
-            };
-          }
-          break;
-        case 'Build Phase':
-          if (step.status === 'success') {
-            return {
-              ...step,
-              details: 'Successfully built packages for deployment.'
-            };
-          }
-          break;
-        case 'Validation Phase':
-          if (step.status === 'success') {
-            return {
-              ...step, 
-              details: 'Successfully validated code quality, types, and documentation.'
-            };
-          }
-          break;
-      }
-      
-      return step;
-    });
-    
-    // Sort steps by timestamp if available, then by phase order if present
-    const phaseOrder = ['Setup', 'Validation', 'Build', 'Deploy', 'Results', 'Cleanup'];
-    
-    enhancedSteps.sort((a, b) => {
-      // First try to sort by timestamp
-      if (a.timestamp && b.timestamp) {
-        return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
-      }
-      
-      // If no timestamp, try to sort by phase
-      if (a.phase && b.phase) {
-        const phaseA = phaseOrder.indexOf(a.phase);
-        const phaseB = phaseOrder.indexOf(b.phase);
-        if (phaseA !== -1 && phaseB !== -1) {
-          return phaseA - phaseB;
-        }
-      }
-      
-      // If all else fails, keep original order
       return 0;
     });
-
-    return `
-      <section class="timeline-section">
-        <h2>Workflow Timeline</h2>
-        <div class="timeline">
-          ${enhancedSteps.map(step => `
-            <div class="timeline-item ${step.status.toLowerCase()}">
-              <div class="timeline-content">
-                <h3>${this.escapeHtml(step.name)}</h3>
-                <p class="status status-${step.status.toLowerCase()}">${step.status}</p>
-                <p>Duration: ${this.formatDuration(step.duration || 0)}${step.zeroNote ? ' <span class="duration-note">(lightweight process)</span>' : ''}</p>
-                ${step.phase ? `<p class="phase-tag">${step.phase} Phase</p>` : ''}
-                ${step.error ? `<p class="error">${
-                  typeof step.error === 'string' ? this.escapeHtml(step.error) :
-                  this.escapeHtml(step.error.message || step.error.text || JSON.stringify(step.error))
-                }</p>` : ''}
-                ${step.details ? `<p class="details">${
-                  typeof step.details === 'string' ? this.escapeHtml(step.details) :
-                  this.escapeHtml(JSON.stringify(step.details))
-                }</p>` : ''}
-              </div>
-            </div>
-          `).join('')}
+    
+    sortedChecks.forEach(([name, check]) => {
+      const status = check.status || 'pending';
+      const duration = this.formatDuration(check.duration || 0);
+      
+      // Map status to CSS class name
+      const statusClass = status === 'success' ? 'success' : 
+                        status === 'error' ? 'error' : 
+                        status === 'warning' ? 'warning' : 
+                        status === 'timeout' ? 'timeout' : 'pending';
+      
+      // Format check name
+      const displayName = name
+        .replace(/([A-Z])/g, ' $1') // Add space before capital letters
+        .replace(/^./, str => str.toUpperCase()); // Capitalize first letter
+        
+      // Determine icon based on status
+      let icon = '';
+      if (status === 'success') icon = '<svg class="icon success-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /></svg>';
+      else if (status === 'error') icon = '<svg class="icon error-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" /></svg>';
+      else if (status === 'warning') icon = '<svg class="icon warning-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M8.257 3.099a.75.75 0 011.486 0L10.8 7.152a.75.75 0 01-.743.998H6.943a.75.75 0 01-.743-.998l1.057-4.053zm0 5.151a.75.75 0 011.486 0v3.5a.75.75 0 01-1.486 0v-3.5zM10 18a8 8 0 100-16 8 8 0 000 16zM9.25 14.25a.75.75 0 101.5 0 .75.75 0 00-1.5 0z" clip-rule="evenodd" /></svg>';
+      else icon = '<svg class="icon pending-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clip-rule="evenodd" /></svg>';
+      
+      html += `
+        <div class="check-card status-${statusClass}">
+          <div class="card-header">
+            ${icon}
+            <h3 class="card-title">${this.escapeHtml(displayName)}</h3>
+          </div>
+          <div class="card-body">
+            <p>Status: <span class="status status-${status}">${status}</span></p>
+            <p>Duration: ${duration}</p>
+            ${check.error ? `<p class="error">Error: ${this.escapeHtml(check.error)}</p>` : ''}
+            ${check.message ? `<p class="message">${this.escapeHtml(check.message)}</p>` : ''}
+            
+            <!-- Specific details section (collapsible if needed) -->
+            ${this.generateCheckDetails(name, check)} 
+          </div>
         </div>
-      </section>
-    `;
+      `;
+    });
+
+    html += '</div></section>'; // Close cards-container and section
+    return html;
   }
 
-  generateAdvancedChecks() {
-    const { advancedChecks } = this.data;
-    if (!advancedChecks || typeof advancedChecks !== 'object') {
-      return `
-        <section class="advanced-checks">
-          <h2>Advanced Checks</h2>
-          <div class="advanced-checks-grid error">
-            <p class="status status-error">Error</p>
-            <p>Advanced check data is not available or invalid.</p>
-          </div>
-        </section>
-      `;
+  generateCheckDetails(name, check) {
+    let detailsHtml = '';
+    
+    // Example: Add specific details for Dead Code check
+    if (name === 'deadCode' && check.data) {
+      if (check.data.unusedDependencies && check.data.unusedDependencies.length > 0) {
+        detailsHtml += `<details class="check-details-collapsible">
+                         <summary>Unused Dependencies (${check.data.unusedDependencies.length})</summary>
+                         <ul class="check-details-list">`;
+        check.data.unusedDependencies.forEach(pkg => {
+          detailsHtml += `<li>
+                            <strong>${this.escapeHtml(pkg.packagePath)}</strong>
+                            <ul class="nested-list">`;
+          if (pkg.unusedDependencies && pkg.unusedDependencies.length > 0) {
+            pkg.unusedDependencies.forEach(dep => {
+              detailsHtml += `<li>${this.escapeHtml(dep.name)} (${dep.type})</li>`;
+            });
+          } else {
+            detailsHtml += '<li>No specific dependencies listed</li>';
+          }
+          detailsHtml += `</ul></li>`;
+        });
+        detailsHtml += `</ul></details>`;
+      }
+      // Add other dead code details (exports, errors) similarly
+      if (check.data.depcheckErrors && check.data.depcheckErrors.length > 0) {
+         detailsHtml += `<details class="check-details-collapsible error">
+                         <summary>Depcheck Errors (${check.data.depcheckErrors.length})</summary>
+                         <ul class="check-details-list">`;
+         check.data.depcheckErrors.forEach((e, index) => {
+             detailsHtml += `<li><strong>${this.escapeHtml(e.packagePath)}:</strong> ${this.escapeHtml(e.error)}</li>`;
+         });
+         detailsHtml += `</ul></details>`;
+      }
+    }
+    // Add logic for other check types (typescript, lint, docs, etc.)
+    else if ((name === 'typescript' || name === 'lint') && check.data && check.data.issues && check.data.issues.length > 0) {
+         detailsHtml += `<details class="check-details-collapsible">
+                         <summary>Issues (${check.data.issues.length})</summary>
+                         <ul class="check-details-list">`;
+         check.data.issues.slice(0, 10).forEach(issue => { // Show first 10
+            detailsHtml += `<li>${this.escapeHtml(typeof issue === 'string' ? issue : JSON.stringify(issue))}</li>`;
+         });
+         if (check.data.issues.length > 10) detailsHtml += `<li>...and ${check.data.issues.length - 10} more</li>`;
+         detailsHtml += `</ul></details>`;
+    }
+    else if (name === 'docsFreshness' && check.data && check.data.staleDocuments && check.data.staleDocuments.length > 0) {
+         detailsHtml += `<details class="check-details-collapsible">
+                         <summary>Stale Documents (${check.data.staleDocuments.length})</summary>
+                         <ul class="check-details-list">`;
+         check.data.staleDocuments.slice(0, 5).forEach(doc => {
+             detailsHtml += `<li>${this.escapeHtml(doc.file)} (Reason: ${doc.reason})</li>`;
+         });
+          if (check.data.staleDocuments.length > 5) detailsHtml += `<li>...and ${check.data.staleDocuments.length - 5} more</li>`;
+         detailsHtml += `</ul></details>`;
     }
 
-    const checks = Object.entries(advancedChecks);
-    if (checks.length === 0) {
-      return `
-        <section class="advanced-checks">
-          <h2>Advanced Checks</h2>
-          <p class="status status-pending">No advanced checks performed</p>
-        </section>
-      `;
-    }
-
-    return `
-      <section class="advanced-checks">
-        <h2>Advanced Checks</h2>
-        <div class="advanced-checks-grid">
-          ${checks.map(([name, check]) => {
-            // Special handling for health check
-            if (name === 'health' && check && check.data && check.data.issues && check.data.issues.length > 0) {
-              const issues = check.data.issues;
-              const statusClass = 'warning';
-              const statusText = 'Warning';
-              
-              return `
-                <div class="check-card">
-                  <h3>Health</h3>
-                  <p class="status status-${statusClass}">${statusText}</p>
-                  <div class="check-issues">
-                    <h4>Issues</h4>
-                    <ul>
-                      ${issues.map(issue => `<li>${this.escapeHtml(issue)}</li>`).join('')}
-                    </ul>
-                  </div>
-                </div>
-              `;
-            }
-            
-            // Handle all other checks normally
-            // Extract the most useful error information
-            let errorDetails = '';
-            if (check.status === 'error' && check.data) {
-              if (check.data.errors && Array.isArray(check.data.errors) && check.data.errors.length > 0) {
-                errorDetails = check.data.errors.map(err => 
-                  typeof err === 'string' ? err : (err.message || err.text || JSON.stringify(err))
-                ).join('; ');
-              } else if (check.data.issues && Array.isArray(check.data.issues) && check.data.issues.length > 0) {
-                errorDetails = check.data.issues.map(issue => 
-                  typeof issue === 'string' ? issue : (issue.message || issue.text || JSON.stringify(issue))
-                ).join('; ');
-              } else if (check.data.error) {
-                errorDetails = typeof check.data.error === 'string' ? check.data.error : JSON.stringify(check.data.error);
-              }
-            }
-            
-            // Get a better user-friendly name
-            const displayName = name
-              .replace(/([A-Z])/g, ' $1') // Add spaces before capital letters
-              .replace(/^./, str => str.toUpperCase()); // Capitalize first letter
-            
-            return `
-              <div class="check-card">
-                <h3>${this.escapeHtml(displayName)}</h3>
-                <p class="status status-${check.status.toLowerCase()}">${check.status}</p>
-                ${errorDetails ? `<p class="error-details">${this.escapeHtml(errorDetails)}</p>` : ''}
-                ${check.details ? `<p>${
-                  typeof check.details === 'string' ? this.escapeHtml(check.details) :
-                  this.escapeHtml(JSON.stringify(check.details, null, 2))
-                }</p>` : ''}
-                ${check.issues && check.issues.length > 0 ? `
-                  <div class="check-issues">
-                    <h4>Issues</h4>
-                    <ul>
-                      ${check.issues.map(issue => `<li>${
-                        typeof issue === 'string' ? this.escapeHtml(issue) :
-                        this.escapeHtml(issue.message || issue.text || JSON.stringify(issue))
-                      }</li>`).join('')}
-                    </ul>
-                  </div>
-                ` : ''}
-              </div>
-            `;
-          }).join('')}
-        </div>
-      </section>
-    `;
+    // Only return details if there's something to show
+    return detailsHtml ? `<div class="check-card-details-section">${detailsHtml}</div>` : '';
   }
 
   generateWorkflowOptions() {
@@ -1231,20 +1377,179 @@ export class DashboardGenerator {
     }
   }
 
-  escapeHtml(unsafe) {
-    // Handle non-string values
-    if (unsafe === null || unsafe === undefined) {
+  /**
+   * Generates workflow analytics section
+   * @returns {string} HTML for workflow analytics
+   */
+  generateWorkflowAnalytics() {
+    const { metrics } = this.data;
+    
+    // ---> Add guard clause for missing metrics <-----
+    if (!metrics || typeof metrics !== 'object') {
+      logger.error('[DashboardGenerator] Metrics data missing in generateWorkflowAnalytics');
+      return '<section class="workflow-analytics"><h2>Workflow Analytics</h2><p class="status status-error">Analytics data unavailable</p></section>';
+    }
+    
+    // Extract key metrics safely
+    const totalDuration = typeof metrics.duration === 'number' ? metrics.duration : 0;
+    const phaseDurations = metrics.phaseDurations || {};
+    const buildMetrics = metrics.buildPerformance || {}; 
+    
+    // ---> Add logging for values being used <-----
+    logger.debug(`[generateWorkflowAnalytics] Using - totalDuration: ${totalDuration}, phaseDurations keys: ${Object.keys(phaseDurations).length}, buildMetrics keys: ${Object.keys(buildMetrics).length}`);
+    logger.debug(`[generateWorkflowAnalytics] buildMetrics content: ${JSON.stringify(buildMetrics)}`);
+
+    // Only show analytics if we have meaningful data
+    if (totalDuration === 0 && Object.keys(phaseDurations).length === 0) {
+      logger.warn('[generateWorkflowAnalytics] Insufficient data (totalDuration or phaseDurations missing) to generate analytics section.');
       return '';
     }
     
-    // Convert to string if not already a string
-    const safeStr = typeof unsafe !== 'string' ? String(unsafe) : unsafe;
+    // Generate performance visualization
+    let html = `
+      <section class="workflow-analytics">
+        <h2>Workflow Analytics</h2>
+        <div class="analytics-container">
+          <div class="metrics-overview">
+            <div class="metric-card">
+              <div class="metric-title">Total Duration</div>
+              <div class="metric-value">${this.formatDuration(totalDuration)}</div>
+            </div>
+    `;
     
-    return safeStr
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
+    // Add phase breakdown if available
+    if (Object.keys(phaseDurations).length > 0) {
+      // Sort phases by duration (descending)
+      const sortedPhases = Object.entries(phaseDurations)
+        .filter(([_, duration]) => duration > 0)
+        .sort((a, b) => b[1] - a[1]);
+        
+      if (sortedPhases.length > 0) {
+        html += `<div class="phase-breakdown">
+                   <h3>Phase Breakdown</h3>
+                   <div class="phases-container">`;
+        
+        // Calculate percentage for visualization
+        sortedPhases.forEach(([phase, duration]) => {
+          const percentage = totalDuration > 0 ? Math.round((duration / totalDuration) * 100) : 0;
+          const phaseName = phase
+            .replace(/([A-Z])/g, ' $1') // Add space before capital letters
+            .replace(/^./, str => str.toUpperCase()); // Capitalize first letter
+          
+          html += `<div class="phase-item">
+                     <div class="phase-label">${this.escapeHtml(phaseName)}</div>
+                     <div class="phase-bar-container">
+                       <div class="phase-bar" style="width: ${percentage}%"></div>
+                       <span class="phase-percentage">${percentage}%</span>
+                     </div>
+                     <div class="phase-duration">${this.formatDuration(duration)}</div>
+                   </div>`;
+        });
+        
+        html += `</div></div>`;
+      }
+    }
+    
+    // Add build performance if available
+    if (buildMetrics && typeof buildMetrics.totalBuildTime === 'number') {
+      html += `<div class="build-performance">
+                 <h3>Build Performance</h3>
+                 <div class="performance-grid">`;
+      
+      // Display Total Build Time
+      html += `<div class="performance-item">
+                 <span class="performance-label">Total Build Time</span>
+                 <span class="performance-value">${this.formatDuration(buildMetrics.totalBuildTime)}</span>
+               </div>`;
+      
+      // Display Total Files if valid number
+      if (typeof buildMetrics.totalFileCount === 'number' && buildMetrics.totalFileCount >= 0) {
+        html += `<div class="performance-item">
+                   <span class="performance-label">Total Files</span>
+                   <span class="performance-value">${buildMetrics.totalFileCount}</span>
+                 </div>`;
+      }
+      
+      // Display Total Size (formatted or calculated) if valid
+      if (buildMetrics.formattedTotalSize) {
+         html += `<div class="performance-item">
+                   <span class="performance-label">Total Size</span>
+                   <span class="performance-value">${this.escapeHtml(buildMetrics.formattedTotalSize)}</span>
+                 </div>`;
+      } else if (typeof buildMetrics.totalSize === 'number' && buildMetrics.totalSize >= 0) {
+         html += `<div class="performance-item">
+                   <span class="performance-label">Total Size</span>
+                   <span class="performance-value">${this.formatBytes(buildMetrics.totalSize)}</span>
+                 </div>`;
+      }
+      
+      // Display Avg Pkg Build if valid number
+      if (typeof buildMetrics.averageBuildTime === 'number' && buildMetrics.averageBuildTime > 0) {
+        html += `<div class="performance-item">
+                   <span class="performance-label">Avg. Pkg Build</span>
+                   <span class="performance-value">${this.formatDuration(buildMetrics.averageBuildTime)}</span>
+                 </div>`;
+      }
+      
+      html += `</div></div>`;
+    } else {
+        // Log why the build performance section is skipped
+        logger.debug(`[generateWorkflowAnalytics] Skipping build performance render. buildMetrics empty or totalBuildTime invalid. Keys: ${Object.keys(buildMetrics).join(', ')}`);
+    }
+    
+    // Performance optimization tips based on metrics
+    html += `<div class="performance-tips">
+               <h3>Performance Insights</h3>
+               <ul class="tips-list">`;
+    
+    // Add dynamic tips based on the actual metrics
+    if (totalDuration > 5 * 60 * 1000) { // Workflow takes over 5 minutes
+      html += `<li>
+                 <strong>Long workflow duration (${this.formatDuration(totalDuration)})</strong>
+                 <p>Consider splitting into multiple workflows or optimizing slow steps.</p>
+               </li>`;
+    }
+    
+    if (phaseDurations.build && phaseDurations.build > 0.4 * totalDuration) { // Build takes >40% of time
+      html += `<li>
+                 <strong>Build phase dominates workflow time (${Math.round((phaseDurations.build / totalDuration) * 100)}%)</strong>
+                 <p>Consider optimizing bundling configuration or implementing incremental builds.</p>
+               </li>`;
+    }
+    
+    if (phaseDurations.test && phaseDurations.test > 0.3 * totalDuration) { // Tests take >30% of time
+      html += `<li>
+                 <strong>Tests take significant time (${Math.round((phaseDurations.test / totalDuration) * 100)}%)</strong>
+                 <p>Consider running tests in parallel or implementing test sharding.</p>
+               </li>`;
+    }
+    
+    // Check if any tips were added, otherwise show a default message
+    if (html.endsWith('<ul class="tips-list">')) { // Check if no <li> was added
+      html += '<li>No specific performance insights detected for this run.</li>';
+    }
+    
+    html += `</ul></div>
+           </div></div>
+         </section>`;
+    
+    return html;
+  }
+
+  /**
+   * Formats bytes to a human-readable format
+   * 
+   * @param {number} bytes - Number of bytes to format
+   * @param {number} [decimals=2] - Number of decimal places to display
+   * @returns {string} Formatted size (e.g., "1.23 MB")
+   */
+  formatBytes(bytes) {
+    if (!bytes || isNaN(bytes) || bytes === 0) return '0 Bytes';
+    
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 }
