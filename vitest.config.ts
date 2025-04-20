@@ -35,15 +35,20 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
     globals: true,
-    include: ['packages/*/src/**/*.test.{ts,tsx}'],
+    include: [
+      'packages/*/src/**/*.test.{ts,tsx}',
+      'packages/*/src/**/*.spec.{ts,tsx}',
+      'scripts/**/*.test.{ts,js}',
+      'scripts/**/*.spec.{ts,js}'
+    ],
     css: false, // Ignore CSS imports during testing
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+      reporter: ['text', 'json-summary'],
       reportsDirectory: './coverage',
       include: [
-        'packages/*/src/**/*.{ts,tsx,js,jsx}', // Include all src files in packages
-        'scripts/**/*.{ts,js}' // Optionally include scripts if they have tests
+        'packages/*/src/**/*.{ts,tsx,js,jsx}',
+        'scripts/**/*.{ts,js}'
       ],
       exclude: [
         // Exclude test files themselves
@@ -63,21 +68,35 @@ export default defineConfig({
         '**/*.stories.{ts,tsx}',
         // Add any other specific files/directories to exclude
         'packages/common/src/stories/**',
-        'packages/common/src/firebase/index.ts', // Often just exports
+        'packages/common/src/firebase/index.ts',
         'packages/common/src/hooks/index.ts',
         'packages/common/src/store/index.ts',
         'packages/common/src/types/index.ts',
         'packages/common/src/components/ui/icons/index.tsx',
         'packages/common/src/components/forms/index.ts'
-      ]
+      ],
+      all: true, // Include all files, even those not tested
+      branches: 80,
+      functions: 80,
+      lines: 80,
+      statements: 80,
+      skipFull: false, // Don't skip files with 100% coverage
+      watermarks: {
+        lines: [80, 95],
+        functions: [80, 95],
+        branches: [80, 95],
+        statements: [80, 95]
+      }
     },
     deps: {
-      // Fix for the n.endsWith issue - use string arrays instead of RegExp
       optimizer: {
         web: {
           include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime']
         }
       }
+    },
+    outputFile: {
+      json: './temp/vitest-results.json'
     }
   },
   resolve: {
@@ -87,7 +106,6 @@ export default defineConfig({
       '@hours': path.resolve(__dirname, 'packages/hours/src'),
       'react/jsx-runtime': path.resolve(__dirname, 'node_modules/react/jsx-runtime.js'),
       'react/jsx-dev-runtime': path.resolve(__dirname, 'node_modules/react/jsx-dev-runtime.js'),
-      // Add additional React aliases for better resolution
       'react': path.resolve(__dirname, 'node_modules/react'),
       'react-dom': path.resolve(__dirname, 'node_modules/react-dom')
     }

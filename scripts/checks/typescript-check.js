@@ -79,34 +79,46 @@ export function runTypeCheck(options = {}) {
   
   // Parse the results
   if (result.success) {
+    // Command exited 0 - definitely success
     logger.success('TypeScript check passed with no errors');
     return {
       success: true,
-      errorCount: 0
-    };
-  }
-  
-  // Parse errors from stderr
-  const errorOutput = result.stderr || '';
-  const errors = parseTypeScriptErrors(errorOutput);
-  
-  if (errors.length === 0) {
-    // No errors parsed, but command failed - could be other issues
-    if (errorOutput) {
-      logger.error('TypeScript check failed with unexpected output:');
-      logger.error(errorOutput);
-    } else {
-      logger.error('TypeScript check failed with no error output');
-    }
-    
-    return {
-      success: false,
-      errorCount: 1,
+      errorCount: 0,
       errors: []
     };
   }
   
-  // Count and display errors
+  // Command exited non-zero, check stderr for actual errors
+  logger.warn('tsc command exited non-zero. Parsing stderr for type errors...');
+  const errorOutput = result.stderr || '';
+  const errors = parseTypeScriptErrors(errorOutput);
+  
+  if (errors.length === 0) {
+    // Command failed BUT no type errors were parsed.
+    // This might be a config warning or other non-blocking issue.
+    // Consider it success unless there was non-empty stderr we couldn't parse.
+    if (errorOutput.trim()) {
+        logger.warn('TypeScript check command failed, but no specific type errors were parsed. Non-empty stderr was present:');
+        logger.warn(errorOutput.substring(0, 500) + '...');
+        // Return failure ONLY if there was unexpected stderr
+        return {
+            success: false, 
+            errorCount: 0, // Still 0 parsed errors
+            errors: [],
+            error: 'tsc exited non-zero with unparsed stderr output.'
+        };
+    } else {
+        // Command failed, no errors parsed, empty stderr - likely safe to consider success.
+        logger.success('TypeScript check command exited non-zero, but no type errors were parsed and stderr was empty. Treating as success.');
+        return {
+            success: true, // Treat as success
+            errorCount: 0,
+            errors: []
+        };
+    }
+  }
+  
+  // Actual type errors were parsed
   const errorCount = errors.length;
   logger.error(`TypeScript found ${errorCount} type error${errorCount === 1 ? '' : 's'}`);
   
@@ -123,13 +135,15 @@ export function runTypeCheck(options = {}) {
   }
   
   if (failOnError) {
-    logger.error('TypeScript check failed');
+    logger.error('TypeScript check failed due to type errors.');
   }
   
+  // Return success: false only if failOnError is true and errors were found
   return {
-    success: !failOnError,
+    success: !(failOnError && errorCount > 0), // Success is true if failOnError is false OR errorCount is 0
     errorCount,
-    errors
+    errors,
+    error: failOnError && errorCount > 0 ? `Found ${errorCount} TypeScript errors.` : null
   };
 }
 

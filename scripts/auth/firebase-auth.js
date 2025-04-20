@@ -40,7 +40,6 @@
 
 import { logger } from '../core/logger.js';
 import { commandRunner } from '../core/command-runner.js';
-import { execSync } from 'child_process';
 import { spawn } from 'child_process';
 
 /* global process */
@@ -109,44 +108,85 @@ export async function checkFirebaseAuth() {
   }
   
   try {
-    // Start by checking the current auth state with login:list
-    const loginListResult = commandRunner.runCommand('firebase login:list', {
-      stdio: 'pipe',
-      ignoreError: true
-    });
-    
-    // Check if login:list was successful and shows a user is logged in
-    const isLoggedIn = loginListResult.success && 
-                      !loginListResult.output.includes('No users signed in');
-                      
-    // Extract email if available
+    // Start by checking the current auth state with login:list --json
     let email = 'Unknown';
-    if (isLoggedIn) {
-      // Improved email regex pattern to better capture email address
-      const emailMatch = loginListResult.output.match(/User: ([^\s\n]+)/);
-      if (emailMatch && emailMatch[1]) {
-        email = emailMatch[1];
-      } else {
-        // Try an alternative pattern that might be in different Firebase CLI versions
-        const altEmailMatch = loginListResult.output.match(/Email: ([^\s\n]+)/);
-        if (altEmailMatch && altEmailMatch[1]) {
-          email = altEmailMatch[1];
-        }
-      }
+    let isAuthenticated = false;
+    let rawLoginOutput = ''; // Variable to store raw output for debugging
+
+    try {
+      const loginListResult = commandRunner.runCommand('firebase login:list --json', {
+        stdio: 'pipe',
+        ignoreError: true // Ignore error initially, we'll check output
+      });
       
-      // Add debugging to help diagnose the issue
-      logger.debug(`Firebase auth output: ${loginListResult.output.substring(0, 200)}...`);
-      logger.debug(`Extracted email: ${email}`);
+      rawLoginOutput = loginListResult.output; // Store raw output
+
+      if (loginListResult.success && loginListResult.output) {
+        const loginData = JSON.parse(loginListResult.output);
+        
+        if (loginData.status === 'success' && loginData.result && loginData.result.length > 0) {
+          // Assuming the first user is the active one
+          email = loginData.result[0].user; 
+          isAuthenticated = true;
+          logger.debug(`Successfully parsed user from JSON: ${email}`);
+        } else if (loginData.status === 'success' && loginData.result && loginData.result.length === 0) {
+           logger.info('Firebase login:list --json reported no users signed in.');
+           isAuthenticated = false;
+        } else {
+            logger.warn('Firebase login:list --json executed but status was not success or no users found.');
+            isAuthenticated = false;
+        }
+      } else {
+        logger.warn('Failed to execute or parse firebase login:list --json.');
+        isAuthenticated = false;
+        // Attempt legacy text parsing as a fallback if JSON fails? (Optional - keep simple for now)
+        // logger.debug('Attempting legacy text parsing for Firebase auth...');
+        // const emailMatch = rawLoginOutput.match(/User: ([^\s\n]+)/); // Example legacy fallback
+        // if (emailMatch && emailMatch[1]) { email = emailMatch[1]; isAuthenticated = true; }
+      }
+    } catch (parseError) {
+        logger.error(`Failed to parse JSON output from 'firebase login:list --json'. Error: ${parseError.message}`);
+        logger.debug(`Raw output: ${rawLoginOutput}`);
+        isAuthenticated = false;
+    }
+
+    // If initial check failed, directly proceed to reauth or error
+    if (!isAuthenticated) {
+         logger.warn('Initial Firebase authentication check failed or user not logged in.');
+         // Directly try reauth or report error? For now, let the projects:list check handle the reauth trigger
+         // (Alternatively, could trigger reauth immediately here)
     }
     
     // Try a command that requires valid auth to verify token is still valid
+    // This also acts as a check even if login:list parsing failed for some reason
+    logger.info('Verifying token validity with projects:list...');
     const projectsResult = commandRunner.runCommand('firebase projects:list', {
       stdio: 'pipe',
       ignoreError: true
     });
     
-    // If projects:list succeeded, we're good to go
+    // If projects:list succeeded, we're definitely good
     if (projectsResult.success) {
+      // If email wasn't found via JSON, try to get it again now we know auth works
+      if (isAuthenticated && email === 'Unknown') { 
+         logger.warn('Auth verified via projects:list, but email parsing failed earlier. Attempting email retrieval again.');
+         // Re-run JSON or text parse here if desired, or just return 'Unknown'
+      } else if (!isAuthenticated) {
+          // This means login:list failed BUT projects:list worked. Odd state.
+          // Attempt to get email again.
+          logger.warn('login:list indicated no auth, but projects:list succeeded. Attempting email retrieval.');
+           try {
+              const loginListResult = commandRunner.runCommand('firebase login:list --json', { stdio: 'pipe', ignoreError: true });
+              if (loginListResult.success && loginListResult.output) {
+                  const loginData = JSON.parse(loginListResult.output);
+                  if (loginData.status === 'success' && loginData.result && loginData.result.length > 0) {
+                      email = loginData.result[0].user;
+                      logger.info(`Retrieved email after successful projects:list: ${email}`);
+                  }
+              }
+           } catch (e) { logger.warn('Failed to retrieve email even after successful projects:list.'); }
+      }
+      
       logger.success(`Firebase authenticated as: ${email}`);
       return {
         authenticated: true,
@@ -154,13 +194,12 @@ export async function checkFirebaseAuth() {
       };
     }
     
-    // If we get here, the token might be expired - try to use a direct process spawn
-    logger.warn('Firebase token may be expired or invalid');
+    // If we get here, projects:list failed, likely needing reauthentication
+    logger.warn('Firebase token may be expired or invalid (projects:list failed).');
     logger.info('Initiating Firebase reauthentication via direct process...');
     
-    // This is the critical part - we need to stop the workflow and let the user complete auth
-    // Run firebase login directly and wait for completion
-    return new Promise((resolve, reject) => {
+    // Reauthentication logic using spawn (remains the same)
+    return new Promise((resolve, _reject) => {
       try {
         const proc = spawn('firebase', ['login', '--reauth'], {
           stdio: 'inherit',
@@ -178,27 +217,23 @@ export async function checkFirebaseAuth() {
             });
             
             if (projectCheckResult.success) {
-              // Get user email
-              const emailCheckResult = commandRunner.runCommand('firebase login:list', {
-                stdio: 'pipe',
-                ignoreError: true
+              // Get user email using JSON method after successful re-auth
+              let reauthEmail = 'Unknown';
+              try {
+                 const emailCheckResult = commandRunner.runCommand('firebase login:list --json', { stdio: 'pipe', ignoreError: true });
+                 if (emailCheckResult.success && emailCheckResult.output) {
+                   const loginData = JSON.parse(emailCheckResult.output);
+                   if (loginData.status === 'success' && loginData.result && loginData.result.length > 0) {
+                     reauthEmail = loginData.result[0].user;
+                   }
+                 }
+              } catch (e) { logger.warn('Failed to parse email via JSON after re-auth.'); }
+
+              resolve({
+                authenticated: true,
+                email: reauthEmail
               });
-              
-              if (emailCheckResult.success) {
-                const output = emailCheckResult.output;
-                const emailMatch = output.match(/User: ([^\s]+)/);
-                const email = emailMatch ? emailMatch[1] : 'Unknown';
-                
-                resolve({
-                  authenticated: true,
-                  email
-                });
-              } else {
-                resolve({
-                  authenticated: true,
-                  email: 'Unknown'
-                });
-              }
+
             } else {
               // Even after reauth, projects:list failed
               logger.error('Firebase reauthentication completed but still unable to access projects');

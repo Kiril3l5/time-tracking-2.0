@@ -17,7 +17,7 @@ import { logger } from '../core/logger.js';
 import { generateWorkflowDashboard } from '../workflow/dashboard-integration.js';
 import { parseArgs } from 'node:util';
 import { execSync } from 'child_process';
-import convertReports from './html-to-json.js';
+import { convertReports } from './html-to-json.js';
 
 // Temp directory for report files
 const TEMP_DIR = path.join(process.cwd(), 'temp');

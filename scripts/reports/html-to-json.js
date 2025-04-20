@@ -292,6 +292,4 @@ if (process.argv[1] === import.meta.url) {
         logger.error('Failed to convert some reports');
       }
     });
-}
-
-export default convertReports; 
+} 

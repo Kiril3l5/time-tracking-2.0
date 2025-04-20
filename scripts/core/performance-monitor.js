@@ -299,6 +299,4 @@ export class PerformanceMonitor {
 }
 
 // Create and export a singleton instance
-export const performanceMonitor = new PerformanceMonitor();
-
-export default performanceMonitor; 
+export const performanceMonitor = new PerformanceMonitor(); 

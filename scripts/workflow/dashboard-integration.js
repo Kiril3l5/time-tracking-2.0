@@ -16,6 +16,7 @@
 import { DashboardGenerator } from './dashboard-generator.js';
 import { logger } from '../core/logger.js';
 import open from 'open';
+import process from 'process';
 
 /**
  * Generates a dashboard from workflow state
@@ -53,6 +54,29 @@ import open from 'open';
  */
 export async function generateWorkflowDashboard(workflow, options = {}) {
   try {
+    // ---> ADD LOGGING OF RAW INPUT <-----
+    logger.debug('--- Raw Data Received by generateWorkflowDashboard ---');
+    if (workflow && workflow.workflowSteps instanceof Map) {
+        logger.debug(`Raw Steps Map (${workflow.workflowSteps.size}):`);
+        // Log step details carefully, avoid overly verbose objects if possible
+        workflow.workflowSteps.forEach((step, name) => {
+            logger.debug(`  - Step [${name}]: success=${step?.success}, error=${step?.error}`);
+        });
+    } else {
+        logger.warn('Raw workflow.workflowSteps is not a Map or is missing.');
+    }
+    if (workflow && Array.isArray(workflow.workflowWarnings)) {
+        logger.debug(`Raw Warnings Array (${workflow.workflowWarnings.length}):`);
+        // Log relevant warning fields
+        workflow.workflowWarnings.forEach((warning, index) => {
+             logger.debug(`  - Warning [${index}]: msg="${warning?.message?.substring(0,100)}...", severity=${warning?.severity}, phase=${warning?.phase}, step=${warning?.step}`);
+        });
+    } else {
+        logger.warn('Raw workflow.workflowWarnings is not an Array or is missing.');
+    }
+    logger.debug('----------------------------------------------------');
+    // ---> END LOGGING <-----
+
     // Add debug logs for metrics values
     logger.info(`DEBUG: Raw workflow metrics before dashboard generation:`);
     logger.info(`  - Duration: ${workflow.metrics?.duration || 'undefined'} ms`);
@@ -113,6 +137,18 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
       }
     };
     
+    // ---> ADD LOGGING AFTER Map to Array Conversion <-----
+    logger.debug('--- Raw Steps Array AFTER Map Conversion ---');
+    if (Array.isArray(workflowState.steps)) {
+        workflowState.steps.forEach((step, index) => {
+            logger.debug(`  - Step Index [${index}]: name=${step?.name}, success=${step?.success}, error=${step?.error}`);
+        });
+    } else {
+        logger.warn('workflowState.steps is not an array after conversion!');
+    }
+    logger.debug('--------------------------------------------');
+    // ---> END LOGGING <-----
+    
     // Properly extract and normalize package metrics
     if (workflow.metrics?.packageMetrics && typeof workflow.metrics.packageMetrics === 'object') {
       Object.keys(workflow.metrics.packageMetrics).forEach(pkgName => {
@@ -152,33 +188,41 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
     
     // Process steps to extract proper status
     workflowState.steps = workflowState.steps.map(step => {
+      // *** PRIORITIZE the actual success flag ***
+      if (step.success === true) {
+        return { ...step, status: 'success' };
+      }
+      if (step.success === false) {
+        // Use 'error' for failure, 'warning' might be ambiguous here
+        return { ...step, status: 'error' }; 
+      }
+
+      // --- Fallback logic (less reliable, keep as last resort) ---
       // Check if step has a name that indicates success in the log
       const stepName = step.name || '';
-      const stepStatus = step.status || '';
+      const stepStatus = step.status || ''; // Might already have a status?
       const stepLog = step.log || '';
       const stepResult = step.result || {};
-      
-      // If step has explicit success in result, always use that first
+
+      // If step has explicit success in result (redundant check, but safe)
       if (stepResult.success === true) {
         return { ...step, status: 'success' };
       }
       
-      // If step has explicit failure in result, always use that first
+      // If step has explicit failure in result (redundant check, but safe)
       if (stepResult.success === false) {
         return { ...step, status: 'error' };
       }
       
-      // If step has a checkmark in the log or contains "complete" or "success", mark as success
+      // Check keywords only if success flag is missing/undefined
       if (stepName.includes('✓') || stepName.includes('complete') || 
           stepName.includes('success') || stepStatus.includes('success') ||
           stepLog.includes('✓') || stepLog.includes('complete') || 
           stepLog.includes('success') || 
-          stepName.includes('Phase') || // All phases are completed
-          step.duration > 0) { // Any step with a duration has completed
+          stepName.includes('Phase')) { 
         return { ...step, status: 'success' };
       }
       
-      // If step has an error, mark as error
       if (stepName.includes('✗') || stepName.includes('error') || 
           stepName.includes('failed') || stepStatus.includes('error') ||
           stepLog.includes('✗') || stepLog.includes('error') || 
@@ -186,14 +230,14 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
         return { ...step, status: 'error' };
       }
       
-      // If step has a warning, mark as warning
       if (stepName.includes('⚠') || stepName.includes('warning') || 
           stepStatus.includes('warning') ||
           stepLog.includes('⚠') || stepLog.includes('warning')) {
         return { ...step, status: 'warning' };
       }
       
-      // Default to pending if no status indicators found
+      // Default to pending if success flag missing and no keywords found
+      logger.warn(`Step "${stepName || 'Unknown'}" has undefined success status and no clear keywords. Defaulting to pending.`);
       return { ...step, status: 'pending' };
     });
     
@@ -230,10 +274,10 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
     logger.debug(`Advanced Checks Keys: ${Object.keys(workflowState.advancedChecks || {}).join(', ')}`);
     // ---> End debug log <-----
     
-    // Initialize dashboard generator
+    // Initialize dashboard generator with outputPath option if provided
     const generator = new DashboardGenerator({
-      verbose: workflowState.options.verbose || false,
-      outputPath: options.outputPath
+      verbose: options.verbose || workflow.options?.verbose || false,
+      outputPath: options.outputPath || null
     });
     
     // Initialize with workflow state
@@ -246,23 +290,31 @@ export async function generateWorkflowDashboard(workflow, options = {}) {
       throw new Error(`Failed to generate dashboard: ${result.error?.message || 'Unknown error'}`);
     }
     
-    // Open in browser if not in CI and not explicitly disabled
-    const isCI = options.isCI || false;
-    const shouldOpen = !isCI && !options.noOpen;
+    // Save the dashboard path to the workflow state
+    if (workflow.metrics) {
+      workflow.metrics.dashboardPath = generator.outputPath;
+    }
+    workflowState.metrics.dashboardPath = generator.outputPath;
     
-    if (shouldOpen && result.path) {
+    // Open the dashboard in the browser if not in CI and not disabled
+    const isCI = options.isCI || workflow.options?.isCI || process.env.CI === 'true' || false;
+    const shouldOpen = !isCI && !(options.noOpen || workflow.options?.noOpen);
+    
+    if (shouldOpen && generator.outputPath) {
       try {
         const openResult = await generator.openInBrowser();
-        if (!openResult.success) {
-          logger.warn('Failed to open dashboard in browser:', openResult.error?.message || 'Unknown error');
+        if (!openResult || !openResult.success) {
+          logger.warn(`Failed to open dashboard in browser: ${openResult?.error?.message || 'Unknown error'}`);
         }
-      } catch (error) {
-        logger.warn('Failed to open dashboard in browser:', error.message);
-        // Don't fail the whole process if browser opening fails
+      } catch (openError) {
+        logger.warn(`Failed to open dashboard in browser: ${openError.message}`);
       }
     }
     
-    return result;
+    return { 
+      success: true, 
+      path: generator.outputPath 
+    };
   } catch (error) {
     logger.error('Failed to generate dashboard:', error);
     return { 

@@ -18,7 +18,7 @@ const isAuthenticated = () => {
 };
 
 // Auth redirect component
-const RequireAuth = ({ children }: { children: React.ReactElement }) => {
+const RequireAuth = ({ children }: { children: React.ReactNode }) => {
   if (!isAuthenticated()) {
     // Redirect to login if not authenticated
     return <Navigate to="/login" replace />;

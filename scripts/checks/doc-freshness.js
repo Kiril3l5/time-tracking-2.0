@@ -1,16 +1,12 @@
 /**
- * Documentation Freshness Checker
+ * Documentation Freshness & Link Checker (Git-based)
  * 
- * Validates and monitors the freshness of project documentation.
- * This tool scans markdown files to verify link validity, check file
- * modification dates, and identify potentially outdated content.
+ * Validates documentation based on Git changes and link validity.
  *
  * Features:
- * - Validates internal and external links in documentation files
- * - Checks for broken references to files, functions, or code examples
- * - Identifies documentation that hasn't been updated recently
- * - Compares code changes with associated documentation updates
- * - Generates warnings for potentially outdated information
+ * - Validates internal relative links in changed documentation files
+ * - Identifies source code changes and suggests related docs for review
+ * - Uses git diff for relevance and performance
  * 
  * @module checks/doc-freshness
  */
@@ -20,41 +16,24 @@ import path from 'path';
 import * as glob from 'glob';
 import { logger } from '../core/logger.js';
 import { commandRunner } from '../core/command-runner.js';
-import { progressTracker } from '../core/progress-tracker.js';
 import { ErrorAggregator, ValidationError } from '../core/error-handler.js';
 import { isCI, getEnvironmentType } from '../core/environment.js';
-import { fileURLToPath } from 'url';
+import { getCurrentBranch } from '../workflow/branch-manager.js'; // Import function to get current branch
+import { fileURLToPath } from 'url'; // Added missing import
 
-/* global process, URL */
+/* global process */
 
-// Direct Promise-based glob function that doesn't use promisify
-const globPromise = (pattern, options) => {
-  return new Promise((resolve, reject) => {
-    glob.glob(pattern, options, (err, matches) => {
-      if (err) reject(err);
-      else resolve(matches);
-    });
-  });
-};
-
-// Configuration constants
-const MAX_DOC_AGE_DAYS = 90; // Docs older than this will trigger a warning
-const CRITICAL_DOCS = [
-  'README.md',
-  'CONTRIBUTING.md',
-  'docs/documentation-guide.md',
-  'docs/preview-deployment-guide.md'
-];
-const CODE_DOC_PAIRS = [
-  { code: 'scripts/firebase/deployment.js', docs: ['docs/preview-deployment-guide.md'] },
-  { code: 'scripts/firebase/url-extractor.js', docs: ['docs/preview-deployment-guide.md'] },
-  { code: 'scripts/build/build-runner.js', docs: ['docs/build-process.md'] },
-  { code: 'scripts/core/error-handler.js', docs: ['docs/error-handling.md'] }
-];
+// --- Configuration --- 
+// Define source file extensions
+const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'];
+// Define documentation file extensions/patterns
+const DOC_PATTERNS = ['**/*.md']; // Keep it simple for now
+// Define base branch for comparison (usually main or master)
+const BASE_BRANCH = 'main'; 
+// --- End Configuration ---
 
 /**
  * Check if a file exists
- * 
  * @async
  * @param {string} filePath - Path to check
  * @returns {Promise<boolean>} Whether the file exists
@@ -69,71 +48,70 @@ async function fileExists(filePath) {
 }
 
 /**
- * Get file modification date 
- * 
+ * Get files changed between the current branch and the base branch.
  * @async
- * @param {string} filePath - Path to the file
- * @returns {Promise<Date|null>} Modification date or null if file doesn't exist
+ * @returns {Promise<string[]>} List of changed file paths relative to repo root.
  */
-async function getFileModDate(filePath) {
-  try {
-    const stats = await fs.stat(filePath);
-    return stats.mtime;
-  } catch {
-    return null;
-  }
-}
+async function getChangedFiles() {
+    const currentBranch = getCurrentBranch();
+    if (!currentBranch) {
+        logger.warn('Could not determine current branch for git diff.');
+        return [];
+    }
 
-/**
- * Calculate days since file was modified
- * 
- * @param {Date} modDate - Modification date
- * @returns {number} Days since modification
- */
-function daysSinceModified(modDate) {
-  const now = new Date();
-  const diffMs = now - modDate;
-  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    // Ensure the base branch remote tracking reference is up-to-date locally
+    logger.info(`Fetching base branch ${BASE_BRANCH} from origin...`);
+    const fetchCmd = `git fetch origin ${BASE_BRANCH}`;
+    const fetchResult = await commandRunner.runCommandAsync(fetchCmd, { stdio: 'pipe', ignoreError: true });
+    if (!fetchResult.success) {
+        logger.warn(`Failed to fetch ${BASE_BRANCH} from origin. Diff might be inaccurate. Error: ${fetchResult.error || 'Unknown fetch error'}`);
+    }
+
+    // Use merge-base to find common ancestor using the remote tracking ref
+    const mergeBaseCmd = `git merge-base origin/${BASE_BRANCH} HEAD`;
+    const mergeBaseResult = await commandRunner.runCommandAsync(mergeBaseCmd, { stdio: 'pipe', ignoreError: true });
+    
+    if (!mergeBaseResult.success || !mergeBaseResult.output) {
+        logger.warn(`Could not find merge base between origin/${BASE_BRANCH} and HEAD. Falling back to direct diff against origin/${BASE_BRANCH}.`);
+        const diffCmdFallback = `git diff --name-only origin/${BASE_BRANCH}...HEAD`;
+        const diffResultFallback = await commandRunner.runCommandAsync(diffCmdFallback, { stdio: 'pipe', ignoreError: true });
+        if (!diffResultFallback.success || !diffResultFallback.output) {
+            logger.error(`Failed to get changed files using git diff origin/${BASE_BRANCH}...HEAD.`);
+            return [];
+        }
+        return diffResultFallback.output.split('\n').filter(Boolean);
+    } else {
+        const mergeBaseCommit = mergeBaseResult.output.trim();
+        const diffCmd = `git diff --name-only ${mergeBaseCommit}...HEAD`;
+        const diffResult = await commandRunner.runCommandAsync(diffCmd, { stdio: 'pipe', ignoreError: true });
+        if (!diffResult.success || !diffResult.output) {
+            logger.error(`Failed to get changed files using git diff ${mergeBaseCommit}...HEAD.`);
+            return [];
+        }
+        return diffResult.output.split('\n').filter(Boolean);
+    }
 }
 
 /**
  * Extract links from markdown content
- * 
  * @param {string} content - Markdown content
  * @returns {Array<{text: string, url: string, line: number}>} Extracted links
  */
 function extractLinks(content) {
   const links = [];
   const lines = content.split('\n');
-  
-  // Match both [text](url) and [text]: url formats
   const markdownLinkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
   const referenceStyleLinkRegex = /\[([^\]]+)\]:\s*(.+)/g;
   
   lines.forEach((line, idx) => {
     let match;
-    // Find inline links
     while ((match = markdownLinkRegex.exec(line)) !== null) {
-      links.push({
-        text: match[1],
-        url: match[2],
-        line: idx + 1
-      });
+      links.push({ text: match[1], url: match[2], line: idx + 1 });
     }
-    
-    // Reset regex state
     markdownLinkRegex.lastIndex = 0;
-    
-    // Find reference style links
     while ((match = referenceStyleLinkRegex.exec(line)) !== null) {
-      links.push({
-        text: match[1],
-        url: match[2].trim(),
-        line: idx + 1
-      });
+      links.push({ text: match[1], url: match[2].trim(), line: idx + 1 });
     }
-    
-    // Reset regex state
     referenceStyleLinkRegex.lastIndex = 0;
   });
   
@@ -141,8 +119,7 @@ function extractLinks(content) {
 }
 
 /**
- * Check if links in markdown content are valid
- * 
+ * Check if relative links in markdown content are valid
  * @async
  * @param {string} filePath - Path to the markdown file
  * @param {string} content - Markdown content
@@ -155,29 +132,31 @@ async function validateLinks(filePath, content, errorTracker) {
   const broken = [];
   
   for (const link of links) {
-    // Skip anchor links within the same document and external URLs
-    if (link.url.startsWith('#') || 
-        link.url.startsWith('http:') || 
-        link.url.startsWith('https:')) {
+    // Only check relative file links
+    if (link.url.startsWith('#') || link.url.startsWith('http:') || link.url.startsWith('https:') || path.isAbsolute(link.url)) {
       continue;
     }
     
-    // Handle relative links
-    const linkPath = path.resolve(baseDir, link.url);
-    const exists = await fileExists(linkPath);
+    // Resolve the relative path
+    const targetPath = path.resolve(baseDir, link.url);
+    
+    // Check if the target file/directory exists
+    const exists = await fileExists(targetPath);
     
     if (!exists) {
-      broken.push({
+      const brokenLinkInfo = {
         text: link.text,
         url: link.url,
-        line: link.line
-      });
+        line: link.line,
+        resolvedPath: targetPath // Add resolved path for debugging
+      };
+      broken.push(brokenLinkInfo);
       
       errorTracker.addWarning(new ValidationError(
-        `Broken link in ${filePath}:${link.line} - [${link.text}](${link.url})`,
+        `Broken link in ${filePath}:${link.line}: Link '[${link.text}](${link.url})' points to non-existent path '${targetPath}'`,
         'doc-links',
         null,
-        `Update or remove the broken link to "${link.url}"`
+        `Verify the relative path '${link.url}' or create the target file/directory.`
       ));
     }
   }
@@ -190,364 +169,146 @@ async function validateLinks(filePath, content, errorTracker) {
 }
 
 /**
- * Check if documentation is outdated based on last modification date
- * 
- * @async
- * @param {string} filePath - Path to document
- * @param {ErrorAggregator} errorTracker - Error tracker for reporting issues
- * @returns {Promise<{outdated: boolean, daysSinceUpdate: number}>} Freshness check result
- */
-async function checkDocFreshness(filePath, errorTracker) {
-  const modDate = await getFileModDate(filePath);
-  
-  if (!modDate) {
-    return { outdated: true, daysSinceUpdate: Infinity };
-  }
-  
-  const daysSinceUpdate = daysSinceModified(modDate);
-  const isCritical = CRITICAL_DOCS.includes(filePath);
-  const maxAgeDays = isCritical ? MAX_DOC_AGE_DAYS / 2 : MAX_DOC_AGE_DAYS;
-  
-  // Check if document is outdated
-  if (daysSinceUpdate > maxAgeDays) {
-    const severity = isCritical ? 'warning' : 'info';
-    
-    errorTracker.addWarning(new ValidationError(
-      `Documentation ${filePath} may be outdated (${daysSinceUpdate} days since last update)`,
-      'doc-freshness',
-      null,
-      'Review and update the document to reflect current functionality'
-    ));
-    
-    return { outdated: true, daysSinceUpdate };
-  }
-  
-  return { outdated: false, daysSinceUpdate };
-}
-
-/**
- * Check if code has been updated more recently than its documentation
- * 
- * @async
- * @param {Array<{code: string, docs: string[]}>} pairs - Code/doc file pairs
- * @param {ErrorAggregator} errorTracker - Error tracker for reporting issues
- * @returns {Promise<Array<{outdated: boolean, code: string, docs: string[], daysDiff: number}>>} Check results
- */
-async function checkCodeDocSynchronization(pairs, errorTracker) {
-  const results = [];
-  
-  for (const pair of pairs) {
-    const codeModDate = await getFileModDate(pair.code);
-    if (!codeModDate) continue;
-    
-    for (const docPath of pair.docs) {
-      const docModDate = await getFileModDate(docPath);
-      if (!docModDate) {
-        errorTracker.addWarning(new ValidationError(
-          `Missing documentation file ${docPath} for code ${pair.code}`,
-          'doc-sync', 
-          null,
-          `Create the missing documentation file ${docPath}`
-        ));
-        continue;
-      }
-      
-      // Calculate how many days the code is newer than the docs
-      const daysDiff = docModDate < codeModDate ? 
-        Math.floor((codeModDate - docModDate) / (1000 * 60 * 60 * 24)) : 0;
-      
-      // If code is more than 7 days newer than docs, flag as outdated
-      if (daysDiff > 7) {
-        errorTracker.addWarning(new ValidationError(
-          `Documentation ${docPath} may be outdated relative to code changes in ${pair.code} (${daysDiff} days behind)`,
-          'doc-sync',
-          null,
-          'Update documentation to reflect recent code changes'
-        ));
-        
-        results.push({
-          outdated: true,
-          code: pair.code,
-          docs: [docPath],
-          daysDiff
-        });
-      }
-    }
-  }
-  
-  return results;
-}
-
-/**
- * Check the freshness of all documentation files
+ * Check documentation based on Git changes.
+ * Validates links in changed Markdown files.
+ * Flags potentially stale docs if related source code changed but docs didn't.
  * 
  * @async
  * @param {Object} options - Check options
  * @param {boolean} [options.verbose=false] - Enable verbose logging
- * @param {Array<string>} [options.include] - Glob patterns for files to include
- * @param {Array<string>} [options.exclude] - Glob patterns for files to exclude
  * @param {boolean} [options.strictMode=false] - Treat warnings as errors
  * @param {boolean} [options.silent=false] - Suppress all logging
  * @param {ErrorAggregator} [options.errorTracker] - Error tracker for reporting issues
- * @returns {Promise<{success: boolean, issues: number, files: number, staleDocuments: Array}>} Check results
+ * @returns {Promise<{success: boolean, issues: number, checkedFiles: number, staleDocsSuggestions: Array}>} Check results
  */
 export async function checkDocumentation(options = {}) {
   const {
     verbose = false,
-    include = ['**/*.md'],
-    exclude = ['**/node_modules/**'],
     strictMode = false,
     silent = false,
     errorTracker = new ErrorAggregator()
   } = options;
-  
-  // Initialize results with default values to ensure we always return something
+
   let issueCount = 0;
-  let docFiles = [];
-  let staleDocuments = [];
-  
+  let checkedFileCount = 0;
+  let staleDocsSuggestions = [];
+  let changedFiles = [];
+
   try {
-    // Find all markdown files
-    for (const pattern of include) {
-      try {
-        const matches = await globPromise(pattern, { ignore: exclude });
-        docFiles = docFiles.concat(matches);
-      } catch (error) {
-        if (!silent) {
-          logger.error(`Error globbing pattern ${pattern}: ${error.message}`);
-        }
-        errorTracker.addError(new ValidationError(
-          `Failed to glob files with pattern ${pattern}`,
-          'doc-freshness',
-          error,
-          'Check your glob pattern syntax'
-        ));
-        issueCount++;
-      }
+    // 1. Get changed files from Git
+    changedFiles = await getChangedFiles();
+    if (changedFiles.length === 0) {
+        if (!silent) logger.info('No changed files detected relative to base branch. Skipping doc freshness checks.');
+        return { success: true, issues: 0, checkedFiles: 0, staleDocsSuggestions: [] };
     }
-    
+    if (verbose && !silent) logger.info(`Found ${changedFiles.length} changed files relative to ${BASE_BRANCH}.`);
+
+    // 2. Separate changed source files and doc files
+    const changedSourceFiles = changedFiles.filter(f => SOURCE_EXTENSIONS.some(ext => f.endsWith(ext)));
+    const changedDocFiles = changedFiles.filter(f => 
+        DOC_PATTERNS.some(pattern => glob.sync(f, { matchBase: true }).length > 0) && f.endsWith('.md')
+    );
+
     if (verbose && !silent) {
-      logger.info(`Found ${docFiles.length} documentation files to check`);
+        logger.info(`Changed source files: ${changedSourceFiles.length}`);
+        logger.info(`Changed doc files: ${changedDocFiles.length}`);
     }
-    
-    // Check each documentation file
-    for (const filePath of docFiles) {
-      if (verbose && !silent) {
-        logger.info(`Checking ${filePath}`);
-      }
-      
-      try {
-        // Read file content
-        const content = await fs.readFile(filePath, 'utf8');
-        
-        // Validate links
-        const linkResults = await validateLinks(filePath, content, errorTracker);
-        if (!linkResults.valid) {
-          issueCount += linkResults.broken.length;
-          if (!silent) {
-            logger.warn(`Found ${linkResults.broken.length} broken links in ${filePath}`);
-          }
+
+    // 3. Validate links only in *changed* documentation files
+    if (changedDocFiles.length > 0) {
+        if (!silent) logger.info(`Validating links in ${changedDocFiles.length} changed doc file(s)...`);
+        for (const filePath of changedDocFiles) {
+            checkedFileCount++;
+            if (verbose && !silent) logger.info(`- Checking links in ${filePath}`);
+            try {
+                const content = await fs.readFile(filePath, 'utf8');
+                const linkResults = await validateLinks(filePath, content, errorTracker);
+                if (!linkResults.valid) {
+                    issueCount += linkResults.broken.length;
+                    if (!silent) logger.warn(`  Found ${linkResults.broken.length} broken links in ${filePath}`);
+                }
+            } catch (error) {
+                const errorMsg = `Failed to read or validate links in ${filePath}: ${error.message}`;
+                 if (!silent) logger.error(errorMsg);
+                errorTracker.addError(new ValidationError(errorMsg, 'doc-links', error));
+                issueCount++;
+            }
         }
-        
-        // Check document freshness
-        const freshnessResults = await checkDocFreshness(filePath, errorTracker);
-        if (freshnessResults.outdated) {
-          issueCount++;
-          staleDocuments.push({
-            path: filePath,
-            daysSinceUpdate: freshnessResults.daysSinceUpdate
-          });
-          if (!silent) {
-            logger.warn(`Document ${filePath} may be outdated (${freshnessResults.daysSinceUpdate} days old)`);
-          }
-        }
-      } catch (error) {
-        errorTracker.addError(new ValidationError(
-          `Failed to check documentation file ${filePath}`,
-          'doc-freshness',
-          error,
-          'Ensure the file exists and is readable'
-        ));
-        issueCount++;
-      }
+    } else {
+        if (!silent) logger.info('No changed documentation files found to check links.');
     }
-    
-    // Check code-doc synchronization
-    try {
-      const syncResults = await checkCodeDocSynchronization(CODE_DOC_PAIRS, errorTracker);
-      const outdatedDocs = syncResults.filter(result => result.outdated);
-      
-      // Add any docs that are outdated compared to their code files
-      for (const outdated of outdatedDocs) {
-        for (const docPath of outdated.docs) {
-          if (!staleDocuments.some(doc => doc.path === docPath)) {
-            staleDocuments.push({
-              path: docPath,
-              daysSinceUpdate: 0, // Not based on time but on code update
-              codeFile: outdated.code
-            });
-          }
-        }
-      }
-      
-      issueCount += outdatedDocs.length;
-    } catch (error) {
-      if (!silent) {
-        logger.error(`Error checking code-doc synchronization: ${error.message}`);
-      }
-      errorTracker.addError(new ValidationError(
-        `Failed to check code-doc synchronization`,
-        'doc-freshness',
-        error,
-        'Check the CODE_DOC_PAIRS configuration'
-      ));
-      issueCount++;
+
+    // 4. Suggest potentially stale docs based on changed source files
+    // (Simple approach: if source changed but no docs changed, suggest checking all docs)
+    // TODO: Implement more sophisticated mapping between source and docs later if needed
+    if (changedSourceFiles.length > 0 && changedDocFiles.length === 0) {
+        const suggestionMsg = `Source code changed (${changedSourceFiles.length} files) but no documentation files were modified in this branch. Consider reviewing relevant documentation.`;
+        staleDocsSuggestions.push(suggestionMsg);
+        // Record as a low-severity warning
+        errorTracker.addWarning(new ValidationError(suggestionMsg, 'doc-freshness', null, 'Review related documentation', 'info'));
+        // Note: This doesn't increment issueCount unless in strict mode maybe?
+         if (strictMode && !isCI()) { issueCount++; } // Only count as issue in strict local runs
+        if (!silent) logger.warn(suggestionMsg);
+    } else if (changedSourceFiles.length > 0 && changedDocFiles.length > 0) {
+        // Both changed, could suggest checking the *specific* changed docs for relevance
+        const suggestionMsg = `${changedSourceFiles.length} source file(s) and ${changedDocFiles.length} doc file(s) changed. Ensure changed docs reflect code changes.`;
+         staleDocsSuggestions.push(suggestionMsg);
+        errorTracker.addWarning(new ValidationError(suggestionMsg, 'doc-freshness', null, 'Review changed documentation for accuracy', 'info'));
+         if (!silent) logger.info(suggestionMsg);
     }
-    
+
     if (verbose && !silent) {
-      logger.info(`Documentation freshness check completed with ${issueCount} issues`);
+      logger.info(`Documentation freshness check completed.`);
     }
-    
-    if (issueCount > 0 && !silent) {
-      logger.warn(`Found ${issueCount} documentation issues`);
-      errorTracker.logSummary();
-    }
+
   } catch (error) {
-    // Catch any unexpected errors at the top level
-    if (!silent) {
-      logger.error(`Documentation freshness check failed: ${error.message}`);
-    }
-    errorTracker.addError(new ValidationError(
-      `Documentation freshness check failed`,
-      'doc-freshness',
-      error,
-      'Review the error details and fix the underlying issue'
-    ));
+    // Catch any unexpected errors during the Git-based check
+    if (!silent) logger.error(`Git-based documentation check failed: ${error.message}`);
+    errorTracker.addError(new ValidationError(`Git-based documentation check failed`, 'doc-freshness', error));
     issueCount++;
   }
+
+  // Determine final success status
+  // Fail only if there are broken links (issueCount > 0 because of link validation)
+  // or if strict mode is enabled and stale suggestions were made
+  const shouldFail = issueCount > 0; // Broken links are always considered issues
   
-  // In strict mode or in CI environment, fail if there are issues
-  const shouldFail = (strictMode || isCI()) && issueCount > 0;
-  
-  // Always return a valid result object
   return {
     success: !shouldFail,
     issues: issueCount,
-    files: docFiles.length,
-    staleDocuments: staleDocuments
-  };
-}
-
-/**
- * Check a single documentation file for freshness
- * 
- * @async
- * @param {string} filePath - Path to the documentation file
- * @param {Object} options - Check options
- * @param {boolean} [options.verbose=false] - Enable verbose logging
- * @param {boolean} [options.strictMode=false] - Treat warnings as errors
- * @param {ErrorAggregator} [options.errorTracker] - Error tracker for reporting issues
- * @returns {Promise<{success: boolean, issues: number}>} Check results
- */
-export async function checkSingleDocument(filePath, options = {}) {
-  const {
-    verbose = false,
-    strictMode = false,
-    errorTracker = new ErrorAggregator()
-  } = options;
-  
-  if (!(await fileExists(filePath))) {
-    errorTracker.addError(new ValidationError(
-      `Documentation file ${filePath} does not exist`,
-      'doc-freshness',
-      null,
-      'Create the missing documentation file'
-    ));
-    
-    return {
-      success: false,
-      issues: 1
-    };
-  }
-  
-  let issueCount = 0;
-  
-  try {
-    // Read file content
-    const content = await fs.readFile(filePath, 'utf8');
-    
-    // Validate links
-    const linkResults = await validateLinks(filePath, content, errorTracker);
-    if (!linkResults.valid) {
-      issueCount += linkResults.broken.length;
-      logger.warn(`Found ${linkResults.broken.length} broken links in ${filePath}`);
-    }
-    
-    // Check document freshness
-    const freshnessResults = await checkDocFreshness(filePath, errorTracker);
-    if (freshnessResults.outdated) {
-      issueCount++;
-      logger.warn(`Document ${filePath} may be outdated (${freshnessResults.daysSinceUpdate} days old)`);
-    }
-    
-    // Check if this doc is part of a code-doc pair
-    const relatedPairs = CODE_DOC_PAIRS.filter(pair => pair.docs.includes(filePath));
-    if (relatedPairs.length > 0) {
-      const syncResults = await checkCodeDocSynchronization(relatedPairs, errorTracker);
-      const outdatedDocs = syncResults.filter(result => result.outdated);
-      issueCount += outdatedDocs.length;
-    }
-  } catch (error) {
-    errorTracker.addError(new ValidationError(
-      `Failed to check documentation file ${filePath}`,
-      'doc-freshness',
-      error,
-      'Ensure the file exists and is readable'
-    ));
-    issueCount++;
-  }
-  
-  if (verbose) {
-    logger.info(`Documentation check for ${filePath} completed with ${issueCount} issues`);
-  }
-  
-  if (issueCount > 0) {
-    errorTracker.logSummary();
-  }
-  
-  // In strict mode or in CI environment, fail if there are issues
-  const shouldFail = (strictMode || isCI()) && issueCount > 0;
-  
-  return {
-    success: !shouldFail,
-    issues: issueCount
+    checkedFiles: checkedFileCount,
+    staleDocsSuggestions: staleDocsSuggestions
   };
 }
 
 // If run directly from the command line
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url.startsWith('file://') && process.argv[1] === fileURLToPath(import.meta.url)) {
   const errorTracker = new ErrorAggregator();
   
-  // Check if a specific file was provided
-  const targetFile = process.argv[2];
-  
-  try {
-    if (targetFile) {
-      const result = await checkSingleDocument(targetFile, { 
-        verbose: true, 
-        errorTracker 
-      });
-      process.exit(result.success ? 0 : 1);
-    } else {
+  (async () => {
+    try {
       const result = await checkDocumentation({ 
         verbose: true,
-        errorTracker
+        errorTracker,
+        // Allow strict mode via CLI arg?
+        strictMode: process.argv.includes('--strict') 
       });
+      
+      if (result.issues > 0) {
+         errorTracker.logSummary();
+      }
+
+      logger.info(`Doc Check Result: Success=${result.success}, Issues=${result.issues}, Checked Files=${result.checkedFiles}`);
+      if (result.staleDocsSuggestions.length > 0) {
+        logger.info('Stale Doc Suggestions:');
+        result.staleDocsSuggestions.forEach(s => logger.info(`- ${s}`));
+      }
+
       process.exit(result.success ? 0 : 1);
+    } catch (error) {
+      logger.error('Documentation freshness check failed');
+      logger.error(error);
+      process.exit(1);
     }
-  } catch (error) {
-    logger.error('Documentation freshness check failed');
-    logger.error(error);
-    process.exit(1);
-  }
+  })();
 } 

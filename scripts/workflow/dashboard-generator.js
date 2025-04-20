@@ -1,3 +1,4 @@
+/* global console */
 /**
  * Dashboard Generator Module
  * 
@@ -45,6 +46,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import open from 'open';
 import { writeFile } from 'fs/promises';
+import process from 'process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -78,14 +80,23 @@ export class DashboardGenerator {
     
     // Bind methods to ensure 'this' context is preserved
     this.formatDuration = this.formatDuration.bind(this);
-    this.generateOverallStatus = this.generateOverallStatus.bind(this);
-    this.generatePreviewChannels = this.generatePreviewChannels.bind(this);
-    this.generateIssues = this.generateIssues.bind(this);
-    this.generateTimeline = this.generateTimeline.bind(this);
-    this.generateAdvancedCheckCards = this.generateAdvancedCheckCards.bind(this);
-    this.generateWorkflowOptions = this.generateWorkflowOptions.bind(this);
-    this.generateChannelCleanup = this.generateChannelCleanup.bind(this);
+    this.generateOverallStatusSection = this.generateOverallStatusSection.bind(this);
+    this.generatePreviewChannelsSection = this.generatePreviewChannelsSection.bind(this);
+    this.generateIssuesSection = this.generateIssuesSection.bind(this);
+    this.generateTimelineSection = this.generateTimelineSection.bind(this);
+    this.generateAdvancedChecksSection = this.generateAdvancedChecksSection.bind(this);
+    this.generateWorkflowOptionsSection = this.generateWorkflowOptionsSection.bind(this);
+    this.generateChannelCleanupSection = this.generateChannelCleanupSection.bind(this);
+    this.generateWorkflowAnalyticsSection = this.generateWorkflowAnalyticsSection.bind(this);
     this.escapeHtml = this.escapeHtml.bind(this);
+    this.formatFileSize = this.formatFileSize.bind(this);
+    this.generateTestFilesSection = this.generateTestFilesSection.bind(this);
+    this.generatePackageBuildMetrics = this.generatePackageBuildMetrics.bind(this);
+    this.generateCheckDetails = this.generateCheckDetails.bind(this);
+    this.renderStatusItem = this.renderStatusItem.bind(this);
+    this.renderBuildPackage = this.renderBuildPackage.bind(this);
+    this.formatBuildOutput = this.formatBuildOutput.bind(this);
+    this.generatePreviewCard = this.generatePreviewCard.bind(this);
   }
 
   /**
@@ -130,19 +141,21 @@ export class DashboardGenerator {
       }
       
       this.workflowState = workflowState;
-      // ---> Add debug logging before normalization <-----
-      logger.debug('--- Data received by DashboardGenerator.initialize ---');
-      logger.debug(`Raw Metrics Keys: ${Object.keys(workflowState.metrics || {}).join(', ')}`);
-      logger.debug(`Raw buildPerformance: ${JSON.stringify(workflowState.metrics?.buildPerformance)}`);
-      logger.debug(`Raw buildMetrics (separate prop): ${JSON.stringify(workflowState.buildMetrics)}`);
-      // ---> End debug log <-----
       this.data = this.normalizeData(workflowState);
-      // ---> Add debug logging after normalization <-----
-      logger.debug('--- Data after DashboardGenerator.normalizeData ---');
-      logger.debug(`Normalized Metrics Keys: ${Object.keys(this.data.metrics || {}).join(', ')}`);
-      logger.debug(`Normalized buildPerformance: ${JSON.stringify(this.data.metrics?.buildPerformance)}`);
-      // ---> End debug log <-----
-      this.outputPath = this.options.outputPath || join(__dirname, '../../dashboard.html');
+      
+      // Set output path with proper path handling for Windows
+      const defaultPath = join(__dirname, '../../dashboard.html');
+      this.outputPath = this.options.outputPath ? 
+        this.options.outputPath : 
+        defaultPath;
+      
+      // Convert backslashes to forward slashes for consistency
+      this.outputPath = this.outputPath.replace(/\\/g, '/');
+      
+      // Log the output path for debugging
+      if (this.verbose) {
+        logger.info(`Dashboard will be generated at: ${this.outputPath}`);
+      }
       
       return this.data;
     } catch (error) {
@@ -153,6 +166,7 @@ export class DashboardGenerator {
 
   /**
    * Normalizes workflow data to ensure consistent structure
+   * Ensures critical metrics like phaseDurations and check durations are preserved.
    * 
    * @param {Object} data - Raw workflow data
    * @param {Array} [data.steps] - Workflow steps
@@ -171,10 +185,10 @@ export class DashboardGenerator {
     
     logger.info('Normalizing workflow data for dashboard');
     
-    // Normalize steps to ensure they have proper status
+    // Normalize steps
     const normalizedSteps = Array.isArray(data.steps) ? data.steps.map(step => ({
       ...step,
-      status: step.status || 'pending',
+      status: this.normalizeStatus(step.status),
       duration: step.duration || 0
     })) : [];
     
@@ -182,27 +196,24 @@ export class DashboardGenerator {
       logger.info(`Normalized ${normalizedSteps.length} workflow steps`);
     }
     
-    // Normalize metrics
+    // Normalize metrics - **Ensure phaseDurations is copied correctly**
     let normalizedMetrics = {};
     if (data.metrics) {
       normalizedMetrics = {
-        ...data.metrics,
+        ...data.metrics, // Copy existing metrics first
         duration: data.metrics?.duration || 0,
-        phaseDurations: data.metrics?.phaseDurations || {},
+        phaseDurations: { ...(data.metrics?.phaseDurations || {}) }, // Explicitly copy phaseDurations
         buildPerformance: data.metrics?.buildPerformance || {},
         packageMetrics: data.metrics?.packageMetrics || {},
-        testResults: data.metrics?.testResults || {},
-        deploymentStatus: typeof data.metrics?.deploymentStatus === 'object' 
-          ? (data.metrics.deploymentStatus.status || 'pending')
-          : (data.metrics?.deploymentStatus || 'pending'),
+        testResults: data.metrics?.testResults || {}, // Keep as is, handle checks later
+        deploymentStatus: this.normalizeStatus(typeof data.metrics?.deploymentStatus === 'object' 
+          ? (data.metrics.deploymentStatus.status)
+          : (data.metrics?.deploymentStatus)),
         channelCleanup: data.metrics?.channelCleanup || { status: 'pending', cleanedChannels: 0, failedChannels: 0 },
         dashboardPath: data.metrics?.dashboardPath || null
       };
-      
-      if (this.verbose) {
-        logger.info('Normalized metrics:', JSON.stringify(Object.keys(normalizedMetrics)));
-        logger.info('Deployment status:', normalizedMetrics.deploymentStatus);
-      }
+      logger.debug('Normalized metrics.phaseDurations:', JSON.stringify(normalizedMetrics.phaseDurations));
+      logger.debug('Normalized metrics.testResults:', JSON.stringify(normalizedMetrics.testResults));
     } else {
       if (this.verbose) {
         logger.warn('No metrics data to normalize');
@@ -213,29 +224,59 @@ export class DashboardGenerator {
     const normalizedPreview = data.preview ? {
       admin: {
         url: data.preview.admin?.url || '',
-        status: data.preview.admin?.status || 'pending'
+        status: this.normalizeStatus(data.preview.admin?.status)
       },
       hours: {
         url: data.preview.hours?.url || '',
-        status: data.preview.hours?.status || 'pending'
+        status: this.normalizeStatus(data.preview.hours?.status)
       }
     } : null;
     
-    // Normalize advanced checks
+    // Normalize advanced checks - **Ensure duration is preserved**
     const normalizedAdvancedChecks = {};
     if (data.advancedChecks) {
       Object.entries(data.advancedChecks).forEach(([name, check]) => {
-        normalizedAdvancedChecks[name] = {
-          ...check,
-          status: check.status || 'pending'
-        };
+        if (check && typeof check === 'object') { // Ensure check is an object
+            normalizedAdvancedChecks[name] = {
+              ...check, // Spread original check data
+              status: this.normalizeStatus(check.status),
+              duration: check.duration || check.metrics?.duration || 0 // Capture duration if available
+            };
+        } else {
+             logger.warn(`Invalid advanced check data for '${name}':`, check);
+             normalizedAdvancedChecks[name] = { status: 'error', error: 'Invalid check data format' };
+        }
       });
-      
-      if (this.verbose) {
-        logger.info(`Normalized ${Object.keys(normalizedAdvancedChecks).length} advanced checks`);
-      }
+      logger.debug('Normalized advancedChecks:', JSON.stringify(normalizedAdvancedChecks));
     }
     
+    // Determine overall status - Consider errors, warnings, AND incoming status
+    // *** FIX: Re-fixing finalStatus logic ***
+    let finalStatus = 'success'; // Default to success
+    const incomingStatus = this.normalizeStatus(data.status); // Normalize incoming status
+
+    // Check for errors first
+    if (data.errors && data.errors.length > 0) {
+        finalStatus = 'failed';
+    } 
+    // If no errors, check if incoming status was failed
+    else if (incomingStatus === 'failed') { 
+        finalStatus = 'failed';
+    } 
+    // If no errors and not failed, check for warnings
+    else if (data.warnings && data.warnings.length > 0) {
+        finalStatus = 'warning';
+    } 
+    // If also no warnings, check if incoming status was warning
+    else if (incomingStatus === 'warning') {
+        finalStatus = 'warning';
+    } 
+    // If none of the above, use the incoming status (could be success, pending, skipped)
+    else {
+        finalStatus = incomingStatus; 
+    }
+    // *** END FIX ***
+
     const normalizedData = {
       steps: normalizedSteps,
       errors: data.errors || [],
@@ -243,19 +284,32 @@ export class DashboardGenerator {
       metrics: normalizedMetrics,
       preview: normalizedPreview,
       advancedChecks: normalizedAdvancedChecks,
-      buildMetrics: data.buildMetrics || {},
       options: data.options || {},
       title: data.title || 'Workflow Results',
       runDate: data.runDate || new Date().toISOString(),
-      status: data.status || 'pending',
+      status: finalStatus, // Use the reliably determined final status
       issues: this.normalizeArray(data.issues),
     };
     
     if (this.verbose) {
-      logger.info('Data normalization complete');
+      logger.info('Data normalization complete. Final status:', normalizedData.status);
     }
     
     return normalizedData;
+  }
+
+  /**
+   * Helper to normalize status strings to known values
+   * @param {string | undefined | null} status 
+   * @returns {string} - Normalized status (success, failed, error, warning, pending, skipped)
+   */
+  normalizeStatus(status) {
+    const lowerStatus = String(status || 'pending').toLowerCase();
+    if ([ 'success', 'passed', 'ok', 'true', true ].includes(lowerStatus)) return 'success';
+    if ([ 'failed', 'failure', 'error', 'false', false ].includes(lowerStatus)) return 'failed'; // Treat error as failed
+    if ([ 'warning', 'warn' ].includes(lowerStatus)) return 'warning';
+    if ([ 'skipped', 'skip' ].includes(lowerStatus)) return 'skipped';
+    return 'pending'; // Default
   }
 
   /**
@@ -267,8 +321,6 @@ export class DashboardGenerator {
     if (!Array.isArray(warnings) || warnings.length <= 5) {
       return warnings;
     }
-
-    // Regular expressions to match common documentation warnings
     const docPatterns = [
       { regex: /Missing main heading \(H1\) in file: (.+)/, type: "Missing main heading (H1)" },
       { regex: /Missing JSDoc comment for: (.+) in file: (.+)/, type: "Missing JSDoc comment" },
@@ -277,67 +329,53 @@ export class DashboardGenerator {
       { regex: /Missing return description in file: (.+)/, type: "Missing return description" },
       { regex: /Missing documentation for: (.+)/, type: "Missing documentation" }
     ];
-
-    // Group warnings by pattern
     const groups = {};
     const remainingWarnings = [];
-
     warnings.forEach(warning => {
-      if (typeof warning !== 'string') {
-        remainingWarnings.push(warning);
-        return;
+      let message = '';
+      let details = null;
+      if (typeof warning === 'string') {
+        message = warning;
+      } else if (warning && typeof warning === 'object') {
+        message = warning.message || warning.summary || JSON.stringify(warning);
+        details = warning.details;
       }
+      if (!message) { remainingWarnings.push(warning); return; }
 
       let matched = false;
       for (const pattern of docPatterns) {
-        const match = warning.match(pattern.regex);
+        const match = message.match(pattern.regex);
         if (match) {
-          if (!groups[pattern.type]) {
-            groups[pattern.type] = [];
-          }
-          groups[pattern.type].push(warning);
+          if (!groups[pattern.type]) { groups[pattern.type] = []; }
+          groups[pattern.type].push({ message, details });
           matched = true;
           break;
         }
       }
-
-      if (!matched) {
-        remainingWarnings.push(warning);
-      }
+      if (!matched) { remainingWarnings.push({ message, details }); }
     });
-
-    // Create summary warnings for each group
     const processedWarnings = [...remainingWarnings];
-
     Object.entries(groups).forEach(([type, groupWarnings]) => {
       if (groupWarnings.length === 1) {
         processedWarnings.push(groupWarnings[0]);
       } else {
-        // Extract file paths for the first few warnings
         const maxFilesToShow = 5;
-        const sampleFiles = groupWarnings
-          .slice(0, maxFilesToShow)
-          .map(warning => {
-            const fileMatch = warning.match(/in file: (.+)/) || warning.match(/file: (.+)/);
-            return fileMatch ? fileMatch[1] : warning;
-          });
-
+        const sampleFiles = groupWarnings.slice(0, maxFilesToShow).map(w => {
+          const fileMatch = w.message.match(/in file: (.+)/) || w.message.match(/file: (.+)/);
+          return fileMatch ? fileMatch[1] : w.message;
+        });
         const remainingCount = groupWarnings.length - maxFilesToShow;
-        
-        // Create a summary warning
         const summaryWarning = {
           summary: `Documentation issue: ${type} in ${groupWarnings.length} files`,
           details: `<p>Examples:</p><ul>${
             sampleFiles.map(file => `<li>${this.escapeHtml(file)}</li>`).join('')
           }${remainingCount > 0 ? `<li>...and ${remainingCount} more files</li>` : ''}</ul>`,
           count: groupWarnings.length,
-          expanded: false
+          type: 'grouped' // Mark as grouped
         };
-        
         processedWarnings.push(summaryWarning);
       }
     });
-
     return processedWarnings;
   }
 
@@ -367,1189 +405,809 @@ export class DashboardGenerator {
   }
 
   /**
-   * Generates the dashboard HTML
-   * 
-   * @returns {Promise<Object>} Result of dashboard generation
-   * @returns {boolean} result.success - Whether generation was successful
-   * @returns {string} [result.path] - Path to the generated dashboard
-   * @returns {Error} [result.error] - Error if generation failed
-   * @throws {Error} If dashboard is not initialized
+   * Generates the HTML for the overall status widget
+   * @returns {string} - HTML string
    */
-  async generate() {
-    try {
-      if (!this.data) {
-        throw new Error('Dashboard not initialized. Call initialize() first.');
+  generateOverallStatusSection() {
+    logger.debug('Generating overall status section');
+    const metrics = this.data.metrics || {}; 
+    const testResults = metrics.testResults || {};
+    logger.debug('Overall Status - Test Results Data:', JSON.stringify(testResults));
+
+    const overallDuration = this.formatDuration(metrics.duration || 0);
+    const deploymentStatus = this.normalizeStatus(metrics.deploymentStatus); // Normalize status
+    const deploymentSuccess = deploymentStatus === 'success';
+    
+    // --- Corrected Test Results Logic --- 
+    let testStatus = 'pending';
+    let testSummary = 'No test data';
+    if (testResults && typeof testResults === 'object' && Object.keys(testResults).length > 0) {
+        // Use normalized status for comparison
+        testStatus = this.normalizeStatus(testResults.status || testResults.testStepsSuccess);
+        
+        if (Object.hasOwn(testResults, 'unitTestsPassed') && typeof testResults.unitTestsPassed === 'number' &&
+            Object.hasOwn(testResults, 'unitTestsTotal') && typeof testResults.unitTestsTotal === 'number' && testResults.unitTestsTotal > 0) {
+            // Use the specific unit test counts if available
+            testSummary = `${testStatus === 'success' ? 'Tests Passed' : 'Tests Failed'} (${testResults.unitTestsPassed}/${testResults.unitTestsTotal})`;
+        } else if (testStatus !== 'pending') {
+             // Fallback to just showing the status if counts are missing but status exists
+            testSummary = `Status: ${testStatus}`;
+        }
+        // If status is pending and counts missing, it remains 'No test data'
+    } else {
+        logger.warn('Test results object was empty or invalid in generateOverallStatusSection.');
+    }
+    // --- END Corrected Test Results Logic --- 
+
+    // --- Corrected Build Time Logic --- 
+    const buildPhaseDurationMs = metrics.phaseDurations?.build || 0;
+    const buildTimeDisplay = buildPhaseDurationMs > 0 ? this.formatDuration(buildPhaseDurationMs) : 'N/A';
+    logger.debug(`Build Phase Duration from metrics.phaseDurations.build: ${buildPhaseDurationMs}ms, Display: ${buildTimeDisplay}`);
+    // --- END Corrected Build Time Logic --- 
+
+    const packageMetrics = metrics.packageMetrics || {};
+    const buildOutputHtml = this.formatBuildOutput(packageMetrics);
+    const testFilesHtml = this.generateTestFilesSection(testResults);
+
+    return `
+      <section class="widget overall-status">
+        <h2>Overall Status</h2>
+        <div class="status-grid">
+          ${this.renderStatusItem('Duration', overallDuration)}
+          ${this.renderStatusItem('Build Time', buildTimeDisplay)} 
+          ${this.renderStatusItem('Test Results', testSummary, `status-${testStatus}`)}
+          ${this.renderStatusItem('Deployment', deploymentStatus, `status-${deploymentSuccess ? 'success' : deploymentStatus}`)}
+          </div>
+        ${buildOutputHtml}
+        ${testFilesHtml}
+      </section>
+    `;
+  }
+
+  /**
+   * Renders a single status item for the overall status grid
+   * @param {string} title - The title for the status item
+   * @param {string} value - The value to display
+   * @param {string} [statusClass=''] - Optional CSS class for status styling
+   * @returns {string} - HTML string
+   */
+  renderStatusItem(title, value, statusClass = '') {
+    // Ensure statusClass is prefixed correctly
+    const finalStatusClass = statusClass.startsWith('status-') ? statusClass : `status-${statusClass}`;
+    return `
+      <div class="status-item">
+        <h3>${this.escapeHtml(title)}</h3>
+        <p class="${statusClass ? `status ${finalStatusClass}` : ''}">${this.escapeHtml(value)}</p>
+      </div>`;
+  }
+
+  /**
+   * Renders a single build package item
+   * @param {string} name - Package name
+   * @param {Object} info - Package build info (duration, size, fileCount, status)
+   * @returns {string} - HTML string
+   */
+  renderBuildPackage(name, info) {
+    const duration = info?.duration ? this.formatDuration(info.duration) : 'N/A';
+    const size = info?.totalSize ? this.formatFileSize(info.totalSize) : 'N/A';
+    const fileCount = info?.fileCount || 0;
+    
+    // --- Corrected Package Status Logic --- 
+    let status = 'success'; // Default to success
+    if (info?.error) {
+      status = 'failed'; // Use 'failed' if error exists
+    } else if (info && Object.hasOwn(info, 'status')) {
+        // Use normalized status from info if provided
+        status = this.normalizeStatus(info.status);
+    } else if (info && Object.hasOwn(info, 'success')) {
+        // Fallback to using boolean success flag if status missing
+        status = info.success ? 'success' : 'failed';
+    }
+    const statusText = status; // Use the determined status for display text
+    // --- END Corrected Package Status Logic --- 
+
+    return `
+      <div class="build-package">
+        <span class="package-name">${this.escapeHtml(name)}:</span>
+        <span class="package-details">${this.escapeHtml(statusText)} (${duration}) - ${fileCount} files, ${size}</span>
+        <span class="status status-${status}">${this.escapeHtml(statusText)}</span> 
+      </div>`;
+  }
+
+  /**
+   * Formats the build output section based on package metrics
+   * @param {Object} packageMetrics - Object with package names as keys and metrics as values
+   * @returns {string} - HTML string for build output, or empty string if no metrics
+   */
+  formatBuildOutput(packageMetrics) {
+    if (!packageMetrics || Object.keys(packageMetrics).length === 0) {
+      return '<div class="build-output"><h3>Build Output</h3><p>No build output data available.</p></div>';
+    }
+
+    const packageEntries = Object.entries(packageMetrics);
+
+    if (packageEntries.length === 0) {
+      return '<div class="build-output"><h3>Build Output</h3><p>No build output data available.</p></div>';
+    }
+
+    // --- Corrected 'undefined' entry Filter --- 
+    const packageHtml = packageEntries
+      .filter(([name, info]) => 
+          typeof name === 'string' && 
+          name && 
+          name !== 'undefined' && // Explicitly filter out 'undefined' key
+          typeof info === 'object' && 
+          info !== null
+       )
+      .map(([name, info]) => this.renderBuildPackage(name, info))
+      .join('');
+    // --- END Corrected 'undefined' entry Filter --- 
+    
+    if (!packageHtml) {
+        return '<div class="build-output"><h3>Build Output</h3><p>No valid build output data to display.</p></div>';
+    }
+
+    return `
+      <div class="build-output">
+        <h3>Build Output</h3>
+        <div class="build-packages">
+          ${packageHtml}
+        </div>
+      </div>`;
+  }
+
+  generatePreviewChannelsSection() {
+    const { preview } = this.data;
+    if (!preview) return '';
+    return `
+      <section class="widget preview-channels">
+        <h2>Preview Channels</h2>
+        <div class="preview-grid">
+          ${this.generatePreviewCard('Admin', preview.admin)}
+          ${this.generatePreviewCard('Hours', preview.hours)}
+        </div>
+      </section>
+    `;
+  }
+
+  generatePreviewCard(name, data) {
+    if (!data) return '';
+    const status = this.normalizeStatus(data.status);
+    const statusClass = `status-${status}`;
+    return `
+      <div class="preview-card">
+        <h3>${this.escapeHtml(name)}</h3>
+        <p>Status: <span class="status ${statusClass}">${status}</span></p>
+        ${data.url ? `<a href="${this.escapeHtml(data.url)}" class="preview-link" target="_blank">${this.escapeHtml(data.url)}</a>` : ''}
+        ${data.timestamp ? `<p class="timestamp">Last updated: ${new Date(data.timestamp).toLocaleString()}</p>` : ''}
+      </div>
+    `;
+  }
+
+  /**
+   * Generates the HTML for the Issues section (Errors and Warnings)
+   * @returns {string} - HTML string
+   */
+  generateIssuesSection() {
+    logger.debug('Generating issues section');
+    const { errors, warnings } = this.data;
+    const issuesHtml = this.generateIssues(errors, warnings);
+    return `
+      <section class="widget issues">
+        <h2>Issues</h2>
+        ${issuesHtml || '<p class="no-issues">No issues reported.</p>'}
+      </section>`;
+  }
+
+  generateIssues(errors, warnings) {
+    const hasErrors = errors && errors.length > 0;
+    const hasWarnings = warnings && warnings.length > 0;
+    if (!hasErrors && !hasWarnings) {
+      return '<div class="status-success">✅ No errors or warnings reported</div>';
+    }
+    let html = '';
+    if (hasErrors) {
+      const errorCount = errors.length;
+      html += `
+        <div class="issue-group errors">
+          <h3>❌ Errors (${errorCount})</h3>
+          <ul>`;
+      errors.forEach(error => {
+        const message = this.escapeHtml(error.message || 'Unknown error');
+        const context = error.context ? this.escapeHtml(error.context) : 'General';
+        const guidance = this.getActionableGuidance(error.message);
+        html += `
+          <li>
+            <span class="icon">❌</span>
+            <div class="message-container">
+              <span class="message">${message}</span>
+              ${guidance ? `<div class="actionable-guidance"><div class="guidance">${guidance}</div></div>` : ''}
+            </div>
+            <span class="context">${context}</span>
+          </li>`;
+      });
+      html += `
+          </ul>
+        </div>`;
+    }
+    if (hasWarnings) {
+      const warningCount = warnings.length;
+      html += `
+        <div class="issue-group warnings">
+          <h3>⚠️ Warnings (${warningCount})</h3>
+          <ul>`;
+      warnings.forEach(warning => {
+        // Handle both string and object warnings (potentially grouped)
+        let message = '';
+        let details = null;
+        let context = 'General';
+        if (typeof warning === 'string') {
+          message = this.escapeHtml(warning);
+        } else if (warning && typeof warning === 'object') {
+          message = this.escapeHtml(warning.summary || warning.message || 'Unknown warning');
+          details = warning.details; // Keep details HTML (already escaped if needed)
+          context = warning.context ? this.escapeHtml(warning.context) : context;
+        }
+        if (!message) return; // Skip empty warnings
+        const guidance = this.getActionableGuidance(message);
+        // Use <details>/<summary> for grouped warnings
+        if (warning.type === 'grouped' && details) {
+           html += `
+             <li>
+               <details class="check-details-collapsible warning">
+                 <summary>
+                   <span class="icon">⚠️</span> 
+                   <span class="message">${message}</span>
+                   <span class="context">${context}</span>
+                 </summary>
+                 <div class="details-content">${details}</div>
+                 ${guidance ? `<div class="actionable-guidance"><div class="guidance">${guidance}</div></div>` : ''}
+               </details>
+             </li>`;
+        } else {
+          html += `
+            <li>
+              <span class="icon">⚠️</span>
+              <div class="message-container">
+                <span class="message">${message}</span>
+                ${details ? `<div class="details-content">${details}</div>` : ''}
+                ${guidance ? `<div class="actionable-guidance"><div class="guidance">${guidance}</div></div>` : ''}
+              </div>
+              <span class="context">${context}</span>
+            </li>`;
+        }
+      });
+      html += `
+          </ul>
+        </div>`;
+    }
+    return html;
+  }
+  
+  /**
+   * Provides actionable guidance for common errors and warnings
+   * @param {string} message - The error or warning message
+   * @returns {string|null} - HTML with actionable guidance or null if no guidance is available
+   */
+  getActionableGuidance(message) {
+    if (!message) return null;
+    if (message.includes('Vitest results JSON file not found')) {
+      return `<div class="guidance"><h4>How to fix:</h4><ol><li>Ensure the 'temp' directory exists relative to where tests are run.</li><li>Check Vitest configuration (e.g., <code>vitest.config.js</code>) for the <code>outputFile</code> option in the reporter settings.</li><li>Verify the test command in <code>package.json</code> includes the JSON reporter flag (e.g., <code>--reporter=json</code>).</li></ol><p><strong>Note:</strong> Tests might have passed, but results couldn't be parsed.</p></div>`;
+    }
+    if (message.includes('Coverage file not found')) {
+      return `<div class="guidance"><h4>How to fix:</h4><ol><li>Verify that test coverage is enabled in your test runner configuration (e.g., Vitest config).</li><li>Ensure the coverage reporter is set to generate a format the workflow expects (e.g., JSON summary).</li><li>Check the configured <code>reportsDirectory</code> or output path for coverage files.</li><li>Confirm tests actually ran and produced coverage data.</li></ol></div>`;
+    }
+    if (message.includes('outdated dependencies')) {
+      return `<div class="guidance"><h4>How to fix:</h4><p>Run <code>pnpm outdated</code> to see which packages need updating, then update using <code>pnpm update &lt;package-name&gt;</code> or interactively with <code>pnpm update --interactive</code>.</p></div>`;
+    }
+    return null;
+  }
+  
+  generateTimelineSection() {
+    return this.generateTimeline();
+  }
+  
+  generateTimeline() {
+    const { steps } = this.data;
+    if (!steps || steps.length === 0) return '';
+    const phases = {};
+    steps.forEach(step => {
+      const phase = step.phase || 'Other';
+      if (!phases[phase]) { phases[phase] = []; }
+      phases[phase].push(step);
+    });
+    let html = `<section class="widget timeline"><h2>Workflow Timeline</h2>`;
+    Object.entries(phases).forEach(([phase, phaseSteps]) => {
+      const phaseSuccess = phaseSteps.every(step => this.normalizeStatus(step.status) === 'success' || this.normalizeStatus(step.status) === 'warning'); // Allow warnings in successful phase
+      const phaseStatus = phaseSteps.some(step => this.normalizeStatus(step.status) === 'failed') ? 'failed' : (phaseSteps.some(step => this.normalizeStatus(step.status) === 'warning') ? 'warning' : 'success');
+      const phaseClass = `status-${phaseStatus}`;
+      html += `<div class="timeline-phase-group ${phaseClass}"><h3 class="phase-title">${this.escapeHtml(phase)}</h3><ul>`;
+      phaseSteps.forEach(step => {
+        const status = this.normalizeStatus(step.status);
+        const statusClass = `status-${status}`;
+        const duration = step.duration ? this.formatDuration(step.duration) : '';
+        const errorDisplay = (status === 'failed' || status === 'error') && step.error ? `<p class="error-message">${this.escapeHtml(step.error)}</p>` : '';
+        html += `
+          <li class="${statusClass}">
+              <div class="timeline-marker"></div>
+                <h4>${this.escapeHtml(step.name)}</h4>
+            <p>Status: <span class="status ${statusClass}">${status}</span></p>
+            ${duration ? `<p>Duration: ${duration}</p>` : ''}
+            ${errorDisplay} 
+            </li>
+          `;
+      });
+      html += `</ul></div>`;
+    });
+    html += `</section>`;
+    return html;
+  }
+  
+  /**
+   * Generates the HTML section for displaying Advanced Check results.
+   * Creates a widget container and populates it with cards generated by generateAdvancedCheckCards.
+   * 
+   * @returns {string} HTML string for the advanced checks section, or empty string if no checks ran.
+   */
+  generateAdvancedChecksSection() {
+    // *** FIX: Re-applying the full section structure wrap ***
+    const cardsHtml = this.generateAdvancedCheckCards();
+    // Ensure we only render the section if there are cards
+    if (!cardsHtml || !cardsHtml.trim()) { 
+      return ''; // Return empty if no cards were generated
+    }
+    return `
+      <section class="widget advanced-checks-cards">
+        <h2>Advanced Checks</h2>
+        ${cardsHtml}
+      </section>
+    `;
+    // *** END FIX ***
+  }
+
+  /**
+   * Generates the HTML for the advanced check cards
+   * @returns {string} HTML string
+   */
+  generateAdvancedCheckCards() {
+    const checks = this.data.advancedChecks || {};
+    logger.debug('Advanced Checks Data (in generateAdvancedCheckCards):', JSON.stringify(checks));
+
+    if (Object.keys(checks).length === 0) {
+      return '<p>No advanced checks were performed.</p>';
+    }
+
+    const cards = Object.entries(checks).map(([name, check]) => {
+      // Ensure check is an object before proceeding
+      if (!check || typeof check !== 'object') {
+          logger.warn(`Skipping invalid advanced check data for '${name}':`, check);
+          return ''; // Skip rendering this card
       }
 
-      const html = `
+      const status = this.normalizeStatus(check.status);
+      
+      // --- Corrected Duration Logic --- 
+      const durationMs = (typeof check.duration === 'number' && check.duration >= 0) ? check.duration : null;
+      const duration = durationMs !== null ? this.formatDuration(durationMs) : 'N/A';
+      if (durationMs === null && Object.hasOwn(check, 'duration')) {
+         logger.warn(`Invalid duration value for check '${name}': ${check.duration}`);
+      }
+      // --- END Corrected Duration Logic --- 
+
+      const icon = status === 'success' ? '✅' : (status === 'failed' ? '❌' : (status === 'warning' ? '⚠️' : '⏳'));
+      const statusClass = `status-${status}`;
+      const title = check.title || name; 
+
+      let bodyContent = '';
+      const message = this.escapeHtml(check.message || '');
+      const error = this.escapeHtml(check.error || '');
+      
+      if (status === 'failed') {
+        bodyContent = `<p class="error">${error || message || 'An unknown error occurred.'}</p>`;
+      } else if (status === 'warning') {
+        bodyContent = `<p class="message">${message || 'Check completed with warnings.'}</p>`;
+         const detailsHtml = this.generateCheckDetails(name, check);
+        if (detailsHtml) { bodyContent += detailsHtml; }
+      } else if (status === 'success') {
+         bodyContent = `<p class="message">${message || 'Check completed successfully.'}</p>`;
+         const detailsHtml = this.generateCheckDetails(name, check);
+          if (detailsHtml) { bodyContent += detailsHtml; }
+      } else { // pending or skipped
+        bodyContent = `<p class="message">${message || 'Check pending or skipped.'}</p>`;
+      }
+
+      return `
+        <div class="check-card ${statusClass}">
+          <div class="card-header">
+            <span class="icon ${statusClass}-icon">${icon}</span>
+            <h3 class="card-title">${this.escapeHtml(title)}</h3>
+             <span class="status ${statusClass}" style="margin-left: auto;">${this.escapeHtml(status)}</span>
+          </div>
+          <div class="card-body">
+            <p>Duration: ${duration}</p>
+            ${bodyContent}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Handle case where all checks were invalid
+    if (!cards.trim()) {
+        return '<p>No valid advanced checks data to display.</p>';
+    }
+
+    return `<div class="cards-container">${cards}</div>`;
+  }
+  
+  generateWorkflowOptionsSection() {
+    const { options } = this.data;
+    if (!options || Object.keys(options).length === 0) { return ''; }
+    const activeOptions = Object.entries(options).filter(([key, value]) => {
+        return value && !key.startsWith('_') && key !== 'outputPath' && key !== 'isCI' && value !== false && value !== 'false' && value !== 0;
+    });
+    if (activeOptions.length === 0) {
+      return `<section class="widget workflow-options"><h2>Workflow Options</h2><p>Running with default options</p></section>`;
+    }
+    const optionRows = activeOptions.map(([key, value]) => {
+      const displayKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+      let displayValue = '';
+      if (typeof value === 'boolean') { displayValue = value ? 'Yes' : 'No'; }
+      else if (typeof value === 'object') { displayValue = JSON.stringify(value); }
+      else { displayValue = `${value}`; }
+      return `<div class="option-row"><strong>${displayKey}:</strong> ${this.escapeHtml(displayValue)}</div>`;
+    }).join('');
+    return `<section class="widget workflow-options"><h2>Active Workflow Options</h2><div class="options-table">${optionRows}</div></section>`;
+  }
+  
+  generateChannelCleanupSection() {
+    const { metrics } = this.data;
+    if (!metrics?.channelCleanup) return '';
+    const cleanup = metrics.channelCleanup;
+    const status = this.normalizeStatus(cleanup.status);
+    const statusClass = `status-${status}`;
+    return `
+      <section class="widget channel-cleanup"><h2>Channel Cleanup</h2><div class="cleanup-status"><p>Status: <span class="status ${statusClass}">${status}</span></p><div class="cleanup-metrics"><div class="metric-item"><span class="metric-label">Cleaned</span><span class="metric-value">${cleanup.cleanedChannels || 0}</span></div><div class="metric-item"><span class="metric-label">Failed</span><span class="metric-value ${cleanup.failedChannels > 0 ? 'error-value' : ''}">${cleanup.failedChannels || 0}</span></div>${cleanup.skippedChannels ? `<div class="metric-item"><span class="metric-label">Skipped</span><span class="metric-value">${cleanup.skippedChannels}</span></div>` : ''}<div class="metric-item"><span class="metric-label">Kept</span><span class="metric-value">${cleanup.channelsKept || 0}</span></div></div></div>${cleanup.details ? `<div class="cleanup-details"><h3>Details</h3><pre>${this.escapeHtml(cleanup.details)}</pre></div>` : ''}</section>
+      `;
+  }
+  
+  generateWorkflowAnalyticsSection() {
+    const { metrics } = this.data;
+    const validMetrics = metrics && typeof metrics === 'object';
+    if (!validMetrics || !metrics.phaseDurations) { return ''; }
+    const phaseDurations = metrics.phaseDurations || {};
+    const significantPhases = Object.entries(phaseDurations).filter(([_, duration]) => duration > 0).sort(([_, a], [__, b]) => b - a);
+    if (significantPhases.length === 0) { return ''; }
+    const totalPhaseDuration = significantPhases.reduce((sum, [_, duration]) => sum + duration, 0);
+    const phasesToShow = significantPhases.slice(0, 5);
+    const phaseItems = phasesToShow.map(([name, duration]) => {
+      const percentage = totalPhaseDuration > 0 ? Math.round((duration / totalPhaseDuration) * 100) : 0;
+      const formattedName = name.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).replace('Phase', '');
+      return `<div class="breakdown-item${percentage > 25 ? ' highlight' : ''}"><span class="label">${formattedName}</span><div class="progress-bar"><div class="progress" style="width: ${percentage}%"></div></div><span class="value">${this.formatDuration(duration)} (${percentage}%)</span></div>`;
+    }).join('');
+    return `
+      <section class="widget workflow-analytics"><h2>Workflow Analytics</h2><div class="analytics-content"><div class="analytics-item"><h3>Workflow Phase Breakdown</h3><div class="analytics-breakdown">${phaseItems}</div></div></div></section>`;
+  }
+
+  generateTestFilesSection(testResults) {
+    if (!testResults || !Array.isArray(testResults.testFiles) || testResults.testFiles.length === 0) {
+      return '';
+    }
+    const filesHtml = testResults.testFiles.map(fileInfo => {
+      const fileName = fileInfo.file || 'Unknown File';
+      const testCount = fileInfo.count || 0;
+      return `<li class="test-file"><span>${this.escapeHtml(fileName)}</span><span class="test-file-count">(${testCount} tests)</span></li>`;
+    }).join('');
+    return `
+      <div class="test-files">
+        <h3>Test Files Executed</h3>
+        <ul class="test-files-list">
+          ${filesHtml}
+        </ul>
+      </div>
+    `;
+  }
+
+  generatePackageBuildMetrics(packageMetrics) { /* Placeholder - integrated into formatBuildOutput */ return ''; }
+
+  formatFileSize(bytes) {
+    if (bytes === undefined || bytes === null || isNaN(bytes)) { return '0 B'; }
+    if (bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(2).replace(/\.0+$/, '') + ' ' + units[i];
+  }
+
+  formatDuration(ms) {
+    if (ms === undefined || ms === null || isNaN(ms)) { return '0s'; }
+    if (ms < 1000) { return `${ms}ms`; }
+    else if (ms < 60000) { return `${(ms / 1000).toFixed(1)}s`; }
+    else { const minutes = Math.floor(ms / 60000); const seconds = ((ms % 60000) / 1000).toFixed(1); return `${minutes}m ${seconds}s`; }
+  }
+
+  async openInBrowser() {
+    try {
+      if (!this.outputPath) { logger.error('No output path set for dashboard'); return { success: false, error: new Error('No output path set for dashboard') }; }
+      let normalizedPath = this.outputPath.replace(/\\/g, '/');
+      let fileUrl;
+      if (process.platform === 'win32') { normalizedPath = normalizedPath.replace(/^\/+/, ''); fileUrl = `file:///${normalizedPath}`; }
+      else { fileUrl = `file://${normalizedPath}`; }
+      if (this.verbose) { logger.debug(`Original path: ${this.outputPath}`); logger.debug(`Normalized path: ${normalizedPath}`); logger.debug(`File URL: ${fileUrl}`); }
+      await open(fileUrl);
+      logger.info('Dashboard opened in browser successfully');
+      return { success: true };
+    } catch (error) {
+      logger.error('Failed to open dashboard in browser:', error);
+      return { success: false, error: error instanceof Error ? error : new Error(String(error)) };
+    }
+  }
+
+  generateCheckDetails(name, check) {
+    if (!check || !check.details || check.details.length === 0) return '';
+    const listItems = check.details.map(item => `<li>${this.escapeHtml(item)}</li>`).join('');
+    return `<details class="check-details-collapsible"><summary>Details</summary><ul class="check-details-list">${listItems}</ul></details>`;
+  }
+
+  /**
+   * Generates the complete CSS rules for styling the dashboard within <style> tags.
+   * Includes base styles, layout, widget styles, status indicators, and specific component styles.
+   * 
+   * @returns {string} A string containing all CSS rules enclosed in <style> tags.
+   */
+  generateCSS() {
+    const baseCss = `
+    <style>
+      :root {
+        --color-success: #10b981; --color-success-bg: #f0fdf4; --color-success-text: #065f46; --color-success-border: #a7f3d0;
+        --color-error: #ef4444;   --color-error-bg: #fef2f2;   --color-error-text: #991b1b;   --color-error-border: #fca5a5;
+        --color-warning: #f59e0b; --color-warning-bg: #fffbeb; --color-warning-text: #92400e; --color-warning-border: #fde68a;
+        --color-info: #3b82f6;    --color-info-bg: #eff6ff;    --color-info-text: #1e40af;    --color-info-border: #bfdbfe;
+        --color-pending: #6b7280; --color-pending-bg: #f3f4f6; --color-pending-text: #374151; --color-pending-border: #d1d5db;
+        --color-skipped: var(--color-pending); --color-skipped-bg: var(--color-pending-bg); --color-skipped-text: var(--color-pending-text); --color-skipped-border: var(--color-pending-border);
+        --border-color: #e5e7eb;
+        --text-color: #1f2937;
+        --text-secondary: #6b7280;
+        --bg-color: #f9fafb;
+        --bg-widget: #ffffff;
+        --bg-card: #f9fafb; /* Slightly off-white for cards within widgets */
+        --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+        --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+        --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+        --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        --border-radius-sm: 4px;
+        --border-radius: 6px;
+        --border-radius-md: 8px;
+      }
+      body { font-family: var(--font-sans); margin: 0; background-color: var(--bg-color); color: var(--text-color); line-height: 1.6; }
+      .dashboard-container { max-width: 1400px; margin: 20px auto; padding: 0 20px; }
+      
+      /* Header */
+      .header { padding: 25px 30px; margin-bottom: 25px; border-radius: var(--border-radius-md); color: white; box-shadow: var(--shadow); background-color: #374151; }
+      .header-content { max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;}
+      .header h1 { margin: 0; font-size: 2em; line-height: 1.2; }
+      .header .timestamp { font-size: 0.9em; opacity: 0.9; margin: 0; text-align: right; }
+      .status-banner { width: 100%; order: 3; padding: 12px 20px; margin-top: 15px; border-radius: var(--border-radius); font-size: 1.2em; font-weight: 600; text-align: center; border: 1px solid rgba(0,0,0,0.1); }
+      .status-bg-success { background: linear-gradient(135deg, #2dd4bf 0%, #10b981 100%); }
+      .status-bg-failed, .status-bg-error { background: linear-gradient(135deg, #f87171 0%, #ef4444 100%); } /* Treat failed same as error visually */
+      .status-text-success, .status-text-failed, .status-text-error { color: #fff; background-color: rgba(0,0,0,0.1); border-color: rgba(255,255,255,0.3); }
+      
+      /* Layout Grid */
+      .main-content { display: grid; grid-template-columns: repeat(2, 1fr); gap: 25px; max-width: 1200px; margin: 0 auto; }
+      .grid-col-1 { grid-column: span 1; }
+      .grid-col-2 { grid-column: span 1; }
+      .grid-col-full { grid-column: 1 / -1; }
+      @media (max-width: 900px) { .grid-col-1, .grid-col-2 { grid-column: span 2; } }
+
+      /* General Widget Styling */
+      .widget { background-color: var(--bg-widget); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 25px; margin-bottom: 25px; box-shadow: var(--shadow); }
+      .widget h2 { font-size: 1.6em; color: var(--text-color); margin-top: 0; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; }
+      .widget h3 { font-size: 1.15em; color: #374151; margin-top: 20px; margin-bottom: 12px; font-weight: 600; }
+      
+      /* Status Indicators */
+      .status { display: inline-block; padding: 3px 10px; border-radius: 14px; font-size: 0.8em; font-weight: 600; line-height: 1.4; text-transform: uppercase; border: 1px solid transparent; }
+      .status-success { background-color: var(--color-success-bg); color: var(--color-success-text); border-color: var(--color-success-border); }
+      .status-failed, .status-error { background-color: var(--color-error-bg); color: var(--color-error-text); border-color: var(--color-error-border); }
+      .status-warning { background-color: var(--color-warning-bg); color: var(--color-warning-text); border-color: var(--color-warning-border); }
+      .status-info    { background-color: var(--color-info-bg);    color: var(--color-info-text);    border-color: var(--color-info-border); }
+      .status-pending, .status-skipped { background-color: var(--color-pending-bg); color: var(--color-pending-text); border-color: var(--color-pending-border); }
+      .status-timeout { background-color: #ffedd5; color: #9a3412; border-color: #fed7aa; }
+
+      /* Specific Widget Styles */
+      .preview-channels .preview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-top: 15px; }
+      .preview-card { background-color: var(--bg-card); border: 1px solid var(--border-color); padding: 15px; border-radius: var(--border-radius); box-shadow: var(--shadow-sm); }
+      .preview-card h3 { margin-top: 0; margin-bottom: 10px; }
+      .preview-link { display: block; word-wrap: break-word; margin: 8px 0; color: #2563eb; text-decoration: none; font-size: 0.9em; }
+      .preview-link:hover { text-decoration: underline; }
+      .preview-card .timestamp { font-size: 0.8em; color: var(--text-secondary); margin-top: 10px; }
+      
+      .overall-status .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 15px; margin-bottom: 20px; }
+      .overall-status .status-item { background-color: var(--bg-card); padding: 15px; border-radius: var(--border-radius); border: 1px solid var(--border-color); text-align: center; }
+      .overall-status .status-item h3 { margin: 0 0 8px 0; font-size: 0.9em; color: var(--text-secondary); font-weight: 500; text-transform: uppercase; }
+      .overall-status .status-item p { margin: 0; font-size: 1.25em; font-weight: 600; line-height: 1.3;}
+      .overall-status .status-item p.status { font-size: 1em; font-weight: bold; }
+      .overall-status .build-output h3 { margin-top: 25px; font-size: 1.1em; }
+      .overall-status .build-packages { display: flex; flex-direction: column; gap: 8px; }
+      .overall-status .build-package { background-color: var(--bg-card); padding: 12px; border-radius: var(--border-radius-sm); font-size: 0.95em; border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 5px; }
+      .overall-status .package-name { font-weight: 600; margin-right: 10px; }
+      .overall-status .status { margin-left: auto; }
+      .overall-status .test-files { margin-top: 20px; }
+      .overall-status .test-files h3 { font-size: 1.1em; margin-bottom: 10px; }
+      .overall-status .test-files-list { list-style: none; padding: 10px; margin: 0; font-size: 0.9em; max-height: 180px; overflow-y: auto; background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); }
+      .overall-status .test-file { display: flex; justify-content: space-between; padding: 4px 5px; }
+      .overall-status .test-file:not(:last-child) { border-bottom: 1px dashed #e5e7eb; }
+      .overall-status .test-file-count { color: var(--text-secondary); font-size: 0.9em; }
+
+      .issues h2 { display: flex; align-items: center; gap: 10px; }
+      .issues .issue-group { margin-top: 15px; border: 1px solid var(--border-color); border-radius: var(--border-radius); overflow: hidden; }
+      .issues .issue-group h3 { background-color: #f3f4f6; padding: 12px 15px; margin: 0; font-size: 1.1em; font-weight: 600; border-bottom: 1px solid var(--border-color); }
+      .issues .issue-group.errors, .issues .issue-group.failed { border-color: var(--color-error); } /* Style errors/failed groups */
+      .issues .issue-group.errors h3, .issues .issue-group.failed h3 { background-color: var(--color-error-bg); color: var(--color-error-text); border-color: var(--color-error); }
+      .issues .issue-group.warnings { border-color: var(--color-warning); }
+      .issues .issue-group.warnings h3 { background-color: var(--color-warning-bg); color: var(--color-warning-text); border-color: var(--color-warning); }
+      .issues ul { list-style: none; margin: 0; padding: 0; }
+      .issues li { padding: 12px 15px; border-bottom: 1px solid var(--border-color); display: flex; flex-wrap: wrap; align-items: start; gap: 10px; background-color: var(--bg-widget); }
+      .issues li:last-child { border-bottom: none; }
+      .issues .icon { font-size: 1.2em; line-height: 1.6; margin-top: 2px; }
+      .issues .severity { font-weight: 700; font-size: 0.7em; padding: 2px 5px; border-radius: var(--border-radius-sm); text-transform: uppercase; white-space: nowrap; background-color: var(--color-pending-bg); }
+      .issues .message-container { flex-grow: 1; line-height: 1.6; }
+      .issues .message { display: block; margin-bottom: 6px; }
+      .issues .context { font-size: 0.8em; color: var(--text-secondary); white-space: nowrap; margin-left: 10px; background-color: #e5e7eb; padding: 2px 6px; border-radius: 3px; align-self: center; }
+      .issues .info { color: var(--text-secondary); padding: 15px; }
+      .issues .status-success { padding: 15px; text-align: center; font-weight: 500; color: var(--color-success-text); background-color: var(--color-success-bg); }
+      .issues .actionable-guidance { background-color: var(--color-info-bg); border: 1px solid var(--color-info-border); border-radius: var(--border-radius-sm); padding: 10px 15px; margin-top: 8px; font-size: 0.9em; width: 100%; }
+      .issues .guidance h4 { margin: 0 0 6px 0; color: var(--color-info-text); }
+      .issues .guidance code { background-color: #e5e7eb; padding: 2px 4px; border-radius: 3px; font-size: 0.9em; }
+      .issues .guidance ol, .issues .guidance ul { list-style-position: inside; padding-left: 0; margin: 8px 0; }
+      .issues .guidance li { display: list-item; padding: 3px 0; border-bottom: none; }
+      .issues .guidance p { margin: 6px 0; }
+      .issues .guidance strong { color: var(--color-info-text); }
+      .issues .no-issues { padding: 15px; text-align: center; }
+      .issues details > summary { cursor: pointer; font-weight: normal; margin: 0; color: inherit; list-style: none; display: flex; align-items: start; gap: 10px; width: 100%;}
+      .issues details > summary::before { content: '▶'; margin-right: 5px; font-size: 0.8em; display: inline-block; transition: transform 0.2s; margin-top: 4px; }
+      .issues details[open] > summary::before { transform: rotate(90deg); }
+      .issues details[open] > summary { margin-bottom: 8px; }
+      .issues .details-content { padding: 10px; background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius-sm); margin-top: 5px; margin-left: 25px; /* Indent details */ }
+      .issues .check-details-collapsible.warning summary { color: var(--color-warning-text); }
+      .issues .check-details-collapsible.warning .details-content { border-color: var(--color-warning-border); background-color: var(--color-warning-bg); }
+      .issues .check-details-collapsible.error summary { color: var(--color-error-text); }
+      .issues .check-details-collapsible.error .details-content { border-color: var(--color-error-border); background-color: var(--color-error-bg); }
+
+      .timeline ul { list-style: none; padding-left: 20px; margin-top: 15px; border-left: 3px solid var(--border-color); }
+      .timeline li { position: relative; padding: 12px 0 12px 35px; margin-bottom: 8px; }
+      .timeline li:last-child { padding-bottom: 0; }
+      .timeline .timeline-marker { position: absolute; left: -11px; top: 16px; width: 18px; height: 18px; border-radius: 50%; background-color: var(--color-pending); border: 4px solid var(--bg-widget); }
+      .timeline .status-success .timeline-marker { background-color: var(--color-success); }
+      .timeline .status-failed .timeline-marker, .timeline .status-error .timeline-marker { background-color: var(--color-error); }
+      .timeline .status-warning .timeline-marker { background-color: var(--color-warning); }
+      .timeline h4 { margin: 0 0 6px 0; font-size: 1.1em; font-weight: 600; }
+      .timeline p { margin: 4px 0; font-size: 0.95em; color: var(--text-secondary); }
+      .timeline p .status { font-weight: bold; }
+      .timeline p.error-message { color: var(--color-error-text); background-color: var(--color-error-bg); border: 1px solid var(--color-error-border); padding: 6px 10px; border-radius: var(--border-radius-sm); margin-top: 8px; font-style: normal; font-size: 0.9em; word-break: break-word; }
+      .timeline .timeline-phase-group { margin-bottom: 25px; border-left: none; padding-left: 0; }
+      .timeline .phase-title { margin-top: 0; margin-bottom: 15px; color: #1f2937; font-size: 1.3em; border-bottom: 2px solid var(--border-color); padding-bottom: 8px; }
+      .timeline .timeline-phase-group.status-failed .phase-title, .timeline .timeline-phase-group.status-error .phase-title { border-bottom-color: var(--color-error); }
+      .timeline .timeline-phase-group.status-success .phase-title { border-bottom-color: var(--color-success); }
+      .timeline .timeline-phase-group.status-warning .phase-title { border-bottom-color: var(--color-warning); }
+      
+      /* --- Re-Applying Advanced Checks CSS --- */
+      .advanced-checks-cards .cards-container { 
+          display: grid; 
+          grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
+          gap: 20px; 
+      }
+      .advanced-checks-cards .check-card {\n        border: 1px solid var(--border-color) !important; /* *** FIX: Add !important to force border *** */\n        border-radius: var(--border-radius);\n        background-color: var(--bg-card); /* Use card background for consistency */\n        display: flex;\n        flex-direction: column;\n        box-shadow: var(--shadow-sm);\n        transition: box-shadow 0.2s ease;\n        position: relative;\n        overflow: hidden;\n      }\n      .advanced-checks-cards .check-card::before {\n          content: ''; \n          position: absolute; \n          top: 0; \n          left: 0; \n          bottom: 0; \n          width: 5px; \n          background-color: var(--border-color); \n          transition: background-color 0.2s ease; \n      }\n      .advanced-checks-cards .status-success::before { background-color: var(--color-success); }\n      .advanced-checks-cards .status-error::before, .advanced-checks-cards .status-failed::before { background-color: var(--color-error); }\n      .advanced-checks-cards .status-warning::before { background-color: var(--color-warning); }\n      
+      .advanced-checks-cards .card-header {\n          display: flex; \n          align-items: center; \n          gap: 10px; \n          padding: 15px; \n          border-bottom: 1px solid var(--border-color); \n          background-color: var(--bg-card); \n      }\n      .advanced-checks-cards .card-header .icon { width: 20px; height: 20px; }\n      .advanced-checks-cards .card-header .success-icon { color: var(--color-success); }\n      .advanced-checks-cards .card-header .error-icon { color: var(--color-error); }\n      .advanced-checks-cards .card-header .warning-icon { color: var(--color-warning); }\n      .advanced-checks-cards .card-header .pending-icon { color: var(--color-pending); }\n
+
+      .advanced-checks-cards .card-title { margin: 0; font-size: 1.15em; font-weight: 600; }\n      .advanced-checks-cards .card-body { padding: 15px; font-size: 0.95em; flex-grow: 1; }\n      .advanced-checks-cards .card-body p { margin: 0 0 8px 0; }\n      .advanced-checks-cards .card-body p:last-child { margin-bottom: 0; }\n      .advanced-checks-cards .card-body .error { color: var(--color-error-text); font-weight: 500; background-color: var(--color-error-bg); padding: 8px 10px; border-radius: var(--border-radius-sm); border: 1px solid var(--color-error-border); margin-top: 10px; }\n      .advanced-checks-cards .card-body .message { color: var(--text-secondary); }\n      .advanced-checks-cards .check-details-collapsible summary { font-weight: bold; cursor: pointer; margin-top: 10px; color: var(--color-info-text); list-style: none; }\n      .advanced-checks-cards .check-details-collapsible summary::before { content: '▶'; margin-right: 5px; font-size: 0.8em; display: inline-block; transition: transform 0.2s; }\n      .advanced-checks-cards .check-details-collapsible[open] > summary::before { transform: rotate(90deg); }\n      .advanced-checks-cards .check-details-collapsible[open] > summary { margin-bottom: 5px; }\n      .advanced-checks-cards .check-details-list { list-style: disc; margin-left: 20px; font-size: 0.9em; color: var(--text-secondary); padding: 5px 0; }\n
+
+      .workflow-options { font-size: 0.95em; }\n      .workflow-options .option-row { background-color: var(--color-info-bg); border: 1px solid var(--color-info-border); margin-bottom: 8px; padding: 8px 12px; border-radius: var(--border-radius-sm); }\n      
+      .channel-cleanup .cleanup-status > p:first-child { font-size: 1.1em; font-weight: 600; }\n      .channel-cleanup .cleanup-details { margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color); }\n      .channel-cleanup .cleanup-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 15px; margin-top: 10px; font-size: 0.9em; }\n      .channel-cleanup .metric-item { text-align: center; background-color: var(--bg-card); padding: 10px; border-radius: var(--border-radius-sm); border: 1px solid var(--border-color); }\n      .channel-cleanup .metric-label { display: block; font-size: 0.85em; color: var(--text-secondary); margin-bottom: 4px; }\n      .channel-cleanup .metric-value { font-weight: 600; font-size: 1.15em; }\n      .channel-cleanup .error-value { color: var(--color-error-text); }\n      
+      /* --- FIX: Add Analytics Bar Chart CSS --- */
+      .workflow-analytics .analytics-breakdown { margin-top: 15px; display: flex; flex-direction: column; gap: 10px; }\n      .workflow-analytics .breakdown-item { display: flex; align-items: center; gap: 15px; font-size: 0.95em; }\n      .workflow-analytics .breakdown-item .label { width: 80px; text-align: right; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\n      .workflow-analytics .progress-bar { flex-grow: 1; height: 20px; background-color: #e5e7eb; border-radius: 4px; overflow: hidden; }\n      .workflow-analytics .progress { height: 100%; background-color: var(--color-info); transition: width 0.5s ease-out; }\n      .workflow-analytics .breakdown-item.highlight .progress { background-color: var(--color-warning); }\n      .workflow-analytics .value { width: 80px; text-align: left; font-weight: 500; }\n      /* --- END Analytics Bar Chart CSS --- */
+    </style>
+    `;
+
+    // Combine base and additional CSS (currently empty)
+    return `${baseCss}`;
+  }
+  
+  /**
+   * Generates the script section (now empty)
+   * @returns {string} - Empty string or just script tags
+   */
+  generateScript() {
+    // --- Remove unused script --- 
+    logger.debug('Skipping generation of unused toggleDetails script.');
+    return ''; // Return empty string to remove the script block
+    // --- END Remove unused script ---
+  }
+
+  /**
+   * Generates the complete HTML dashboard
+   * @returns {Promise<{success: boolean, error?: Error}>} - Result object
+   */
+  async generate() {
+    if (!this.data) {
+      logger.error('Dashboard cannot be generated without initialized data.');
+      return { success: false, error: new Error('Dashboard not initialized') }; 
+    }
+    
+    logger.info('Generating HTML dashboard...');
+    const startTime = Date.now();
+    
+    const overallStatusSection = this.generateOverallStatusSection();
+    const previewChannelsSection = this.generatePreviewChannelsSection();
+    const issuesSection = this.generateIssuesSection();
+    const timelineSection = this.generateTimelineSection();
+    const advancedChecksSection = this.generateAdvancedChecksSection();
+    const workflowOptionsSection = this.generateWorkflowOptionsSection();
+    const channelCleanupSection = this.generateChannelCleanupSection();
+    const workflowAnalyticsSection = this.generateWorkflowAnalyticsSection();
+    
+    const css = this.generateCSS();
+    const script = this.generateScript(); // Should be empty now
+    
+    // --- Determine final status based on normalized data --- 
+    const finalStatus = this.normalizeStatus(this.data.status); 
+    logger.debug(`Using final dashboard status from normalized data: ${finalStatus}`);
+
+    const workflowStatusText = finalStatus === 'success' ? 'Workflow Completed Successfully' : 
+                           (finalStatus === 'failed' ? 'Workflow Failed' :
+                           (finalStatus === 'warning' ? 'Workflow Completed with Warnings' : 
+                           'Workflow Completed with Errors')); // Default error/pending
+    
+    const headerClass = `status-bg-${finalStatus}`;
+    const statusBannerClass = `status-text-${finalStatus}`;
+    // --- END Status Determination ---
+
+    const generationTime = new Date().toLocaleString();
+
+    const html = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Workflow Dashboard</title>
-  <link rel="stylesheet" href="dashboard.css">
+  <title>Workflow Dashboard - ${this.escapeHtml(workflowStatusText)}</title> 
+  ${css}
 </head>
 <body>
-  <div class="dashboard">
-    <header class="header">
+  <div class="dashboard-container">
+    <header class="header ${headerClass}">
+      <div class="header-content">
       <h1>Workflow Dashboard</h1>
-      <p class="timestamp">Generated: ${new Date().toLocaleString()}</p>
+        <div class="status-banner ${statusBannerClass}">${this.escapeHtml(workflowStatusText)}</div>
+      </div>
+      <p class="timestamp">Generated: ${generationTime}</p>
     </header>
 
-    ${this.generatePreviewChannels()}
-    ${this.generateOverallStatus()}
-    ${this.generateIssues()}
-    ${this.generateWorkflowAnalytics()}
-    ${this.generateTimeline()}
-    ${this.generateAdvancedCheckCards()}
-    ${this.generateWorkflowOptions()}
-    ${this.generateChannelCleanup()}
+    <main class="main-content">
+      <div class="grid-col-1">
+        ${overallStatusSection}
+        ${issuesSection}
+        ${workflowAnalyticsSection}
+        ${advancedChecksSection}
+      </div>
+      <div class="grid-col-2">
+        ${previewChannelsSection}
+        ${timelineSection}
+        ${workflowOptionsSection}
+        ${channelCleanupSection}
+      </div>
+    </main>
   </div>
-  
-  <script>
-    // Simple script to toggle visibility of depcheck error details
-    function toggleDetails(id) {
-      const detailsElement = document.getElementById(id);
-      if (detailsElement) {
-        detailsElement.style.display = detailsElement.style.display === 'none' ? 'block' : 'none';
-      }
-    }
-    // Add listeners after DOM is loaded
-    document.addEventListener('DOMContentLoaded', () => {
-      const buttons = document.querySelectorAll('.toggle-details-btn');
-      buttons.forEach(button => {
-        button.addEventListener('click', () => {
-          const targetId = button.getAttribute('data-target-id');
-          if (targetId) {
-            toggleDetails(targetId);
-          }
-        });
-      });
-      // Initially hide all details
-      const allDetails = document.querySelectorAll('.depcheck-error-details');
-      allDetails.forEach(el => el.style.display = 'none');
-    });
-  </script>
+  ${script} <!-- This should now be empty -->
 </body>
 </html>
-      `;
-
-      await writeFile(this.outputPath, html, 'utf8');
-      
-      if (this.verbose) {
-        logger.info(`Dashboard generated at: ${this.outputPath}`);
-      }
-      
-      return { success: true, path: this.outputPath };
-    } catch (error) {
-      logger.error('Error generating dashboard:', error);
-      return { success: false, error };
-    }
-  }
-
-  generatePreviewChannels() {
-    const { preview, metrics } = this.data;
-    if (!preview || typeof preview !== 'object') {
-      return `
-        <section class="preview-channels">
-          <h2>Preview Channels</h2>
-          <div class="preview-grid">
-            <div class="preview-card error">
-              <h3>Preview Data Unavailable</h3>
-              <p class="status status-error">Error</p>
-              <p>Preview data is not available or invalid.</p>
-            </div>
-          </div>
-        </section>
-      `;
-    }
-    
-    const adminStatus = preview.admin?.status ? preview.admin.status.toLowerCase() : 'pending';
-    const hoursStatus = preview.hours?.status ? preview.hours.status.toLowerCase() : 'pending';
-    const adminStatusClass = ['success', 'error', 'warning', 'pending'].includes(adminStatus) ? adminStatus : 'pending';
-    const hoursStatusClass = ['success', 'error', 'warning', 'pending'].includes(hoursStatus) ? hoursStatus : 'pending';
-    const adminUrl = preview.admin?.url || '';
-    const hoursUrl = preview.hours?.url || '';
-
-    // Get previous channels from various sources in order of preference
-    let prevAdminUrl = '';
-    let prevHoursUrl = '';
-    let hasPreviousUrls = false;
-    
-    // First check if we have cleanup comparison data (from channel-cleanup.js)
-    if (metrics && metrics.channelCleanup && metrics.channelCleanup.previewComparison) {
-      const comparison = metrics.channelCleanup.previewComparison;
-      // Try to safely get data for admin and hours sites
-      const adminSite = comparison['admin-autonomyhero-2024'];
-      const hoursSite = comparison['hours-autonomyhero-2024'];
-      
-      if (adminSite && adminSite.previous && adminSite.previous.url) {
-        prevAdminUrl = adminSite.previous.url;
-        hasPreviousUrls = true;
-      }
-      
-      if (hoursSite && hoursSite.previous && hoursSite.previous.url) {
-        prevHoursUrl = hoursSite.previous.url;
-        hasPreviousUrls = true;
-      }
-    }
-    // Fallback to legacy data sources if needed
-    else if (metrics && metrics.previousChannels) {
-      prevAdminUrl = metrics.previousChannels.admin || '';
-      prevHoursUrl = metrics.previousChannels.hours || '';
-      hasPreviousUrls = prevAdminUrl || prevHoursUrl;
-    } 
-    else if (metrics && metrics.previousPreview) {
-      prevAdminUrl = metrics.previousPreview.admin?.url || '';
-      prevHoursUrl = metrics.previousPreview.hours?.url || '';
-      hasPreviousUrls = prevAdminUrl || prevHoursUrl;
-    }
-    
-    // Extract more detailed information about previous channels if available
-    let prevAdminTimestamp = '';
-    let prevHoursTimestamp = '';
-    
-    if (metrics && metrics.channelCleanup && metrics.channelCleanup.previewComparison) {
-      const comparison = metrics.channelCleanup.previewComparison;
-      const adminSite = comparison['admin-autonomyhero-2024'];
-      const hoursSite = comparison['hours-autonomyhero-2024'];
-      
-      if (adminSite && adminSite.previous && adminSite.previous.timestamp) {
-        prevAdminTimestamp = new Date(adminSite.previous.timestamp).toLocaleString();
-      }
-      
-      if (hoursSite && hoursSite.previous && hoursSite.previous.timestamp) {
-        prevHoursTimestamp = new Date(hoursSite.previous.timestamp).toLocaleString();
-      }
-    }
-    
-    return `
-      <section class="preview-channels">
-        <h2>Preview Channels</h2>
-        
-        <h3 class="channel-heading">Current Run</h3>
-        <div class="preview-grid">
-          <div class="preview-card">
-            <h3>Admin Preview</h3>
-            <p class="status status-${adminStatusClass}">${adminStatus}</p>
-            ${adminUrl ? `<a href="${adminUrl}" target="_blank" class="preview-link">${adminUrl}</a>` : '<p>No preview URL available</p>'}
-          </div>
-          <div class="preview-card">
-            <h3>Hours Preview</h3>
-            <p class="status status-${hoursStatusClass}">${hoursStatus}</p>
-            ${hoursUrl ? `<a href="${hoursUrl}" target="_blank" class="preview-link">${hoursUrl}</a>` : '<p>No preview URL available</p>'}
-          </div>
-        </div>
-        
-        ${hasPreviousUrls ? `
-          <h3 class="channel-heading">Previous Run</h3>
-          <div class="preview-grid">
-            <div class="preview-card">
-              <h3>Admin Preview</h3>
-              <p class="status status-info">Previous</p>
-              ${prevAdminUrl ? `
-                <a href="${prevAdminUrl}" target="_blank" class="preview-link">${prevAdminUrl}</a>
-                ${prevAdminTimestamp ? `<p class="timestamp">Created: ${prevAdminTimestamp}</p>` : ''}
-              ` : '<p>No previous preview URL available</p>'}
-            </div>
-            <div class="preview-card">
-              <h3>Hours Preview</h3>
-              <p class="status status-info">Previous</p>
-              ${prevHoursUrl ? `
-                <a href="${prevHoursUrl}" target="_blank" class="preview-link">${prevHoursUrl}</a>
-                ${prevHoursTimestamp ? `<p class="timestamp">Created: ${prevHoursTimestamp}</p>` : ''}
-              ` : '<p>No previous preview URL available</p>'}
-            </div>
-          </div>
-        ` : ''}
-      </section>
-    `;
-  }
-
-  generateOverallStatus() {
-    const { metrics } = this.data;
-    if (!metrics || typeof metrics !== 'object') {
-      logger.error('[DashboardGenerator] Metrics data missing in generateOverallStatus');
-      return '<section class="overall-status"><h2>Overall Status</h2><p class="status status-error">Metrics data unavailable</p></section>';
-    }
-    
-    const duration = typeof metrics.duration === 'number' ? metrics.duration : 0;
-    const buildPerfData = metrics.buildPerformance || {}; 
-    logger.debug(`[generateOverallStatus] Reading buildPerfData.totalBuildTime: ${buildPerfData.totalBuildTime}`);
-    const buildPerformanceTime = typeof buildPerfData.totalBuildTime === 'number' ? buildPerfData.totalBuildTime : 0;
-    const deploymentStatus = metrics.deploymentStatus || 'pending';
-    
-    const testResults = metrics.testResults || {};
-    const totalSteps = typeof testResults.total === 'number' ? testResults.total : 0;
-    const passedSteps = typeof testResults.passed === 'number' ? testResults.passed : 0;
-    const coveragePercent = typeof testResults.coverage === 'number' && !isNaN(testResults.coverage) 
-                           ? testResults.coverage 
-                           : null;
-    
-    // Format the test/coverage display
-    let qualityStepsDisplay = '';
-    if (totalSteps > 0) {
-        qualityStepsDisplay = `${passedSteps}/${totalSteps} steps passed`;
-        if (coveragePercent !== null) {
-          qualityStepsDisplay += ` (${coveragePercent.toFixed(1)}% coverage)`;
-        } else {
-           // Add note if coverage failed/missing but steps ran
-           qualityStepsDisplay += ` (Coverage unavailable)`; 
-        }
-    } else {
-        qualityStepsDisplay = 'Quality steps skipped or data unavailable';
-    }
-    
-    const packageMetricsData = metrics.packageMetrics || {};
-    const adminBuild = packageMetricsData.admin || {};
-    const hoursBuild = packageMetricsData.hours || {};
-    
-    let adminBuildOutput = 'Data unavailable';
-    if (adminBuild.success === true) {
-      const size = adminBuild.formattedSize || this.formatBytes(adminBuild.sizeBytes || 0);
-      const files = typeof adminBuild.fileCount === 'number' ? adminBuild.fileCount : '?';
-      adminBuildOutput = `Success (${this.formatDuration(adminBuild.duration || 0)}) - ${files} files, ${size}`;
-    } else if (adminBuild.success === false) {
-      adminBuildOutput = adminBuild.error ? `Failed: ${this.escapeHtml(adminBuild.error)}` : 'Failed';
-    }
-    
-    let hoursBuildOutput = 'Data unavailable';
-    if (hoursBuild.success === true) {
-      const size = hoursBuild.formattedSize || this.formatBytes(hoursBuild.sizeBytes || 0);
-      const files = typeof hoursBuild.fileCount === 'number' ? hoursBuild.fileCount : '?';
-      hoursBuildOutput = `Success (${this.formatDuration(hoursBuild.duration || 0)}) - ${files} files, ${size}`;
-    } else if (hoursBuild.success === false) {
-      hoursBuildOutput = hoursBuild.error ? `Failed: ${this.escapeHtml(hoursBuild.error)}` : 'Failed';
-    }
-    
-    logger.debug(`[generateOverallStatus] Displaying - Duration: ${duration}, BuildTime: ${buildPerformanceTime}, QualitySteps: ${qualityStepsDisplay}, Deployment: ${deploymentStatus}`);
-
-    return `
-      <section class="overall-status">
-        <h2>Overall Status</h2>
-        <div class="status-grid">
-          <div class="status-item">
-            <h3>Duration</h3>
-            <p>${this.formatDuration(duration)}</p>
-          </div>
-          <div class="status-item">
-            <h3>Build Performance</h3>
-            <p>${this.formatDuration(buildPerformanceTime)}</p>
-          </div>
-          <div class="status-item">
-            <h3>Quality Steps</h3>
-            <p>${qualityStepsDisplay}</p>
-          </div>
-          <div class="status-item">
-            <h3>Deployment</h3>
-            <p class="status status-${deploymentStatus}">${deploymentStatus}</p>
-          </div>
-        </div>
-        <div class="build-output">
-          <h3>Build Output</h3>
-          <div class="build-packages">
-            <div class="build-package">
-              <span class="package-name">admin:</span> ${adminBuildOutput}
-            </div>
-            <div class="build-package">
-              <span class="package-name">hours:</span> ${hoursBuildOutput}
-            </div>
-          </div>
-        </div>
-        ${this.generateTestFilesSection(testResults)}
-      </section>
-    `;
-  }
-
-  generateTestFilesSection(testResults) {
-    if (!testResults || !testResults.testFiles || testResults.testFiles.length === 0) {
-      return '';
-    }
-
-    const testFiles = testResults.testFiles;
-    let html = `
-      <div class="test-files">
-        <h3>Test Files (${testFiles.length})</h3>
-        <ul class="test-files-list">
-    `;
-
-    testFiles.forEach(file => {
-      html += `
-        <li class="test-file">
-          <span class="test-file-name">${this.escapeHtml(file.file)}</span>
-          <span class="test-file-count">${file.count} tests</span>
-        </li>
-      `;
-    });
-
-    html += `
-        </ul>
-      </div>
-    `;
-
-    return html;
-  }
-
-  generatePackageBuildMetrics(packageMetrics) {
-    if (!packageMetrics || Object.keys(packageMetrics).length === 0) {
-      return '<p>No package build data available</p>';
-    }
-
-    let html = '<ul class="package-metrics-list">';
-    for (const [packageName, metrics] of Object.entries(packageMetrics)) {
-      // Determine status with fallback
-      const statusClass = metrics.success ? 'success' : 'error';
-      
-      // Handle duration with proper fallback
-      const durationMs = typeof metrics.duration === 'number' ? metrics.duration : 0;
-      const duration = durationMs > 0 ? this.formatDuration(durationMs) : 'N/A';
-      
-      // Handle file count with proper fallback
-      const fileCount = typeof metrics.fileCount === 'number' ? metrics.fileCount : 0;
-      
-      // Handle size with multiple fallbacks
-      let sizeBytes = 0;
-      
-      // Try multiple properties to get size in a consistent order of precedence
-      if (typeof metrics.totalSize === 'number' && metrics.totalSize > 0) {
-        sizeBytes = metrics.totalSize;
-      } else if (typeof metrics.sizeBytes === 'number' && metrics.sizeBytes > 0) {
-        sizeBytes = metrics.sizeBytes;
-      } else if (typeof metrics.size === 'number' && metrics.size > 0) {
-        sizeBytes = metrics.size;
-      }
-      
-      // Format the size for display with fallback
-      let formattedSize = 'N/A';
-      
-      // Use pre-formatted size if available, otherwise format from bytes
-      if (metrics.formattedSize && metrics.formattedSize !== 'N/A') {
-        formattedSize = metrics.formattedSize;
-      } else if (sizeBytes > 0) {
-        formattedSize = this.formatFileSize(sizeBytes);
-      }
-      
-      // Final details string that combines file count and size
-      const details = `${fileCount} files, ${formattedSize}`;
-      
-      html += `
-        <li>
-          <strong>${this.escapeHtml(packageName)}:</strong> 
-          <span class="status status-${statusClass}">${metrics.success ? 'Success' : 'Failed'}</span> 
-          (${duration}) - ${details}
-          ${metrics.error ? `<p class="error-detail">Error: ${this.escapeHtml(metrics.error)}</p>` : ''}
-          ${metrics.warnings && metrics.warnings.length > 0 ? 
-            `<ul class="build-warnings">${metrics.warnings.map(w => 
-              `<li>${this.escapeHtml(typeof w === 'string' ? w : (w.message || ''))}</li>`
-            ).join('')}</ul>` : ''}
-        </li>
-      `;
-    }
-    html += '</ul>';
-    return html;
-  }
-
-  // Helper method to format file sizes
-  formatFileSize(bytes) {
-    if (bytes === 0 || isNaN(bytes)) return '0 B';
-    
-    const units = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    
-    // Keep to 2 decimal places max and remove trailing zeros
-    return (bytes / Math.pow(1024, i)).toFixed(2).replace(/\.0+$/, '') + ' ' + units[i];
-  }
-
-  generateIssues() {
-    const { errors, warnings } = this.data;
-    
-    // Define patterns for generic summary messages to filter out
-    const genericSummaryPatterns = [
-      /^Quality checks had warnings or errors$/i, // Matches the exact phrase, case-insensitive
-      /^Validation Phase failed/i,
-      /^Build Phase failed/i,
-      /^Workflow failed:/i // Added to filter the main workflow failure message
-      // Add more generic phase/step summary patterns if needed
-    ];
-
-    // Filter errors - Ensure we only display specific, actionable errors
-    const filteredErrors = (errors || []).filter(error => {
-      // Ensure error has a message to check
-      const message = typeof error === 'string' ? error : 
-                      (error && typeof error.message === 'string' ? error.message : 
-                      (error && typeof error.text === 'string' ? error.text : ''));
-      // Keep if message exists and doesn't match generic patterns
-      return message && !genericSummaryPatterns.some(pattern => pattern.test(message));
-    });
-
-    // Filter warnings - Display only specific warnings, not summaries or info messages
-    const processedWarnings = this.processWarnings(warnings || []);
-    const filteredWarnings = processedWarnings.filter(warning => {
-      // Get the message content
-      const message = typeof warning === 'string' ? warning : 
-                      (warning && typeof warning.message === 'string' ? warning.message : 
-                      (warning && typeof warning.summary === 'string' ? warning.summary : ''));
-                      
-      // Determine severity (default to 'warning')
-      const severity = typeof warning === 'object' && warning.severity ? warning.severity : 'warning';
-
-      // Check if it's a generic summary step
-      const isGenericStepSummary = warning.step && genericSummaryPatterns.some(pattern => pattern.test(warning.step));
-      
-      // Keep if message exists, is not generic, and severity is not 'info'
-      return message && !isGenericStepSummary && severity !== 'info' && 
-             !genericSummaryPatterns.some(pattern => pattern.test(message));
-    });
-
-    const totalIssues = filteredErrors.length + filteredWarnings.length;
-
-    if (totalIssues === 0) {
-      return `
-        <section class="issues">
-          <h2>Issues & Warnings</h2>
-          <p class="status status-success">No specific issues or warnings found.</p>
-        </section>
-      `;
-    }
-
-    let html = `
-      <section class="issues">
-        <h2>Issues & Warnings (${totalIssues})</h2>
-    `;
-
-    if (filteredErrors.length > 0) {
-      html += `
-        <div class="issue-group errors">
-          <h3>Errors (${filteredErrors.length})</h3>
-          <ul>
-      `;
-      filteredErrors.forEach(error => {
-        const message = typeof error === 'string' ? error : (error.message || error.text || JSON.stringify(error));
-        const context = error.phase ? `(${error.phase}${error.step ? ` - ${error.step}` : ''})` : '';
-        html += `<li>
-                   <span class="severity severity-error">ERROR</span>
-                   <span class="message">${this.escapeHtml(message)}</span>
-                   ${context ? `<span class="context">${this.escapeHtml(context)}</span>` : ''}
-                 </li>`;
-      });
-      html += '</ul></div>';
-    }
-
-    if (filteredWarnings.length > 0) {
-      html += `
-        <div class="issue-group warnings">
-          <h3>Warnings (${filteredWarnings.length})</h3>
-          <ul>
-      `;
-      filteredWarnings.forEach(warning => {
-        const message = typeof warning === 'string' ? warning : (warning.message || warning.summary || JSON.stringify(warning));
-        const context = warning.phase ? `(${warning.phase}${warning.step ? ` - ${warning.step}` : ''})` : '';
-        // Check if it's a grouped warning with details
-        if (typeof warning === 'object' && warning.summary && warning.details) {
-          html += `<details class="grouped-warning">
-                     <summary>
-                       <span class="severity severity-warning">WARNING</span>
-                       <span class="message">${this.escapeHtml(warning.summary)}</span>
-                       ${context ? `<span class="context">${this.escapeHtml(context)}</span>` : ''}
-                     </summary>
-                     <div class="details-content">${warning.details}</div> 
-                   </details>`; // Raw HTML for details
-        } else {
-          html += `<li>
-                     <span class="severity severity-warning">WARNING</span>
-                     <span class="message">${this.escapeHtml(message)}</span>
-                     ${context ? `<span class="context">${this.escapeHtml(context)}</span>` : ''}
-                   </li>`;
-        }
-      });
-      html += '</ul></div>';
-    }
-
-    html += '</section>';
-    return html;
-  }
-
-  /**
-   * Generates the main workflow timeline HTML (phases and steps)
-   * @returns {string} HTML for the workflow timeline
-   */
-  generateTimeline() {
-    const { steps } = this.data; // Get the full steps array
-    
-    // Ensure steps is an array
-    if (!Array.isArray(steps) || steps.length === 0) {
-      logger.warn('No steps data available for timeline generation.');
-      return ''; 
-    }
-    
-    // Define phase order for grouping
-    const phaseOrder = ['Setup', 'Validation', 'Build', 'Deploy', 'Results', 'Maintenance', 'Cleanup'];
-    const stepsByPhase = {};
-    phaseOrder.forEach(p => stepsByPhase[p] = []); // Initialize empty arrays for known phases
-    stepsByPhase['Unknown'] = []; // For steps without a phase
-
-    // Group steps by phase
-    steps.forEach(step => {
-      // Normalize status just in case
-      step.status = step.status || 'pending'; 
-      const phase = step.phase && phaseOrder.includes(step.phase) ? step.phase : 'Unknown';
-      // IMPORTANT: Do NOT filter out the main Phase steps here
-      stepsByPhase[phase].push(step);
-    });
-
-    let html = '<section class="timeline"><h2>Workflow Details</h2>';
-    
-    // Generate HTML for each phase in the defined order
-    phaseOrder.forEach(phaseName => {
-      if (stepsByPhase[phaseName] && stepsByPhase[phaseName].length > 0) {
-        // Find the main phase summary step to display its overall duration
-        const mainPhaseStep = stepsByPhase[phaseName].find(s => s.name === `${phaseName} Phase`);
-        const phaseDurationStr = mainPhaseStep?.duration > 0 ? ` | Phase Duration: ${this.formatDuration(mainPhaseStep.duration)}` : '';
-        
-        html += `<div class="timeline-phase-group">
-                   <h3 class="phase-title">${phaseName} Phase${phaseDurationStr}</h3>
-                   <ul class="timeline-list">`;
-                   
-        // Iterate through steps *within* this phase
-        stepsByPhase[phaseName].forEach((step) => {
-          // Skip rendering the main phase step itself within the list, we used its info in the title
-          if (step.name === `${phaseName} Phase`) return;
-          
-          const status = step.status.toLowerCase(); // Ensure lowercase for CSS
-          const durationMs = step.duration || 0;
-          // Display small durations clearly, handle N/A or Skipped
-          const duration = status === 'skipped' ? 'Skipped' : 
-                           durationMs > 50 ? this.formatDuration(durationMs) : 
-                           durationMs > 0 ? `${durationMs}ms` : 'N/A'; 
-          
-          html += `
-            <li class="timeline-item status-${status}">
-              <div class="timeline-marker"></div>
-              <div class="timeline-content">
-                <h4>${this.escapeHtml(step.name)}</h4>
-                <!-- Show step status and duration -->
-                <p>Status: <span class="status status-${status}">${status}</span> | Duration: ${duration}</p>
-                ${step.error ? `<p class="error">Error: ${this.escapeHtml(typeof step.error === 'string' ? step.error : JSON.stringify(step.error))}</p>` : ''}
-                ${step.details ? `<p class="details">${this.escapeHtml(typeof step.details === 'string' ? step.details : JSON.stringify(step.details))}</p>` : ''} 
-              </div>
-            </li>
-          `;
-        });
-        html += '</ul></div>'; // Close timeline-list and phase-group
-      }
-    });
-    
-    // Add any steps that couldn't be grouped by a known phase (should be minimal now)
-    if (stepsByPhase['Unknown'] && stepsByPhase['Unknown'].length > 0) {
-        html += `<div class="timeline-phase-group">
-                   <h3 class="phase-title">Other Steps</h3>
-                   <ul class="timeline-list">`;
-        stepsByPhase['Unknown'].forEach((step) => {
-           const status = step.status.toLowerCase();
-           const durationMs = step.duration || 0;
-           const duration = status === 'skipped' ? 'Skipped' : durationMs > 50 ? this.formatDuration(durationMs) : durationMs > 0 ? `${durationMs}ms` : 'N/A';
-           html += `
-            <li class="timeline-item status-${status}">
-              <div class="timeline-marker"></div>
-              <div class="timeline-content">
-                <h4>${this.escapeHtml(step.name)}</h4>
-                <p>Status: <span class="status status-${status}">${status}</span> | Duration: ${duration}</p>
-                ${step.error ? `<p class="error">Error: ${this.escapeHtml(typeof step.error === 'string' ? step.error : JSON.stringify(step.error))}</p>` : ''}
-              </div>
-            </li>
-          `;
-        });
-        html += '</ul></div>';
-    }
-
-    html += '</section>';
-    return html;
-  }
-
-  generateAdvancedCheckCards() {
-    const { advancedChecks } = this.data;
-    
-    if (!advancedChecks || Object.keys(advancedChecks).length === 0) {
-      return `
-        <section class="advanced-checks-cards">
-          <h2>Advanced Checks</h2>
-          <p class="info">No advanced checks were configured for this workflow.</p>
-        </section>
-      `;
-    }
-    
-    let html = `
-      <section class="advanced-checks-cards">
-        <h2>Advanced Checks</h2>
-        <div class="cards-container">
     `;
     
-    // Sort checks by status: error first, then warning, then rest
-    const sortedChecks = Object.entries(advancedChecks).sort((a, b) => {
-      const statusA = a[1].status;
-      const statusB = b[1].status;
-      
-      if (statusA === 'error' && statusB !== 'error') return -1;
-      if (statusA !== 'error' && statusB === 'error') return 1;
-      if (statusA === 'warning' && statusB !== 'warning' && statusB !== 'error') return -1;
-      if (statusA !== 'warning' && statusA !== 'error' && statusB === 'warning') return 1;
-      
-      return 0;
-    });
-    
-    sortedChecks.forEach(([name, check]) => {
-      const status = check.status || 'pending';
-      const duration = this.formatDuration(check.duration || 0);
-      
-      // Map status to CSS class name
-      const statusClass = status === 'success' ? 'success' : 
-                        status === 'error' ? 'error' : 
-                        status === 'warning' ? 'warning' : 
-                        status === 'timeout' ? 'timeout' : 'pending';
-      
-      // Format check name
-      const displayName = name
-        .replace(/([A-Z])/g, ' $1') // Add space before capital letters
-        .replace(/^./, str => str.toUpperCase()); // Capitalize first letter
-        
-      // Determine icon based on status
-      let icon = '';
-      if (status === 'success') icon = '<svg class="icon success-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /></svg>';
-      else if (status === 'error') icon = '<svg class="icon error-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" /></svg>';
-      else if (status === 'warning') icon = '<svg class="icon warning-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M8.257 3.099a.75.75 0 011.486 0L10.8 7.152a.75.75 0 01-.743.998H6.943a.75.75 0 01-.743-.998l1.057-4.053zm0 5.151a.75.75 0 011.486 0v3.5a.75.75 0 01-1.486 0v-3.5zM10 18a8 8 0 100-16 8 8 0 000 16zM9.25 14.25a.75.75 0 101.5 0 .75.75 0 00-1.5 0z" clip-rule="evenodd" /></svg>';
-      else icon = '<svg class="icon pending-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clip-rule="evenodd" /></svg>';
-      
-      html += `
-        <div class="check-card status-${statusClass}">
-          <div class="card-header">
-            ${icon}
-            <h3 class="card-title">${this.escapeHtml(displayName)}</h3>
-          </div>
-          <div class="card-body">
-            <p>Status: <span class="status status-${status}">${status}</span></p>
-            <p>Duration: ${duration}</p>
-            ${check.error ? `<p class="error">Error: ${this.escapeHtml(check.error)}</p>` : ''}
-            ${check.message ? `<p class="message">${this.escapeHtml(check.message)}</p>` : ''}
-            
-            <!-- Specific details section (collapsible if needed) -->
-            ${this.generateCheckDetails(name, check)} 
-          </div>
-        </div>
-      `;
-    });
-
-    html += '</div></section>'; // Close cards-container and section
-    return html;
-  }
-
-  generateCheckDetails(name, check) {
-    let detailsHtml = '';
-    
-    // Example: Add specific details for Dead Code check
-    if (name === 'deadCode' && check.data) {
-      if (check.data.unusedDependencies && check.data.unusedDependencies.length > 0) {
-        detailsHtml += `<details class="check-details-collapsible">
-                         <summary>Unused Dependencies (${check.data.unusedDependencies.length})</summary>
-                         <ul class="check-details-list">`;
-        check.data.unusedDependencies.forEach(pkg => {
-          detailsHtml += `<li>
-                            <strong>${this.escapeHtml(pkg.packagePath)}</strong>
-                            <ul class="nested-list">`;
-          if (pkg.unusedDependencies && pkg.unusedDependencies.length > 0) {
-            pkg.unusedDependencies.forEach(dep => {
-              detailsHtml += `<li>${this.escapeHtml(dep.name)} (${dep.type})</li>`;
-            });
-          } else {
-            detailsHtml += '<li>No specific dependencies listed</li>';
-          }
-          detailsHtml += `</ul></li>`;
-        });
-        detailsHtml += `</ul></details>`;
-      }
-      // Add other dead code details (exports, errors) similarly
-      if (check.data.depcheckErrors && check.data.depcheckErrors.length > 0) {
-         detailsHtml += `<details class="check-details-collapsible error">
-                         <summary>Depcheck Errors (${check.data.depcheckErrors.length})</summary>
-                         <ul class="check-details-list">`;
-         check.data.depcheckErrors.forEach((e, index) => {
-             detailsHtml += `<li><strong>${this.escapeHtml(e.packagePath)}:</strong> ${this.escapeHtml(e.error)}</li>`;
-         });
-         detailsHtml += `</ul></details>`;
-      }
-    }
-    // Add logic for other check types (typescript, lint, docs, etc.)
-    else if ((name === 'typescript' || name === 'lint') && check.data && check.data.issues && check.data.issues.length > 0) {
-         detailsHtml += `<details class="check-details-collapsible">
-                         <summary>Issues (${check.data.issues.length})</summary>
-                         <ul class="check-details-list">`;
-         check.data.issues.slice(0, 10).forEach(issue => { // Show first 10
-            detailsHtml += `<li>${this.escapeHtml(typeof issue === 'string' ? issue : JSON.stringify(issue))}</li>`;
-         });
-         if (check.data.issues.length > 10) detailsHtml += `<li>...and ${check.data.issues.length - 10} more</li>`;
-         detailsHtml += `</ul></details>`;
-    }
-    else if (name === 'docsFreshness' && check.data && check.data.staleDocuments && check.data.staleDocuments.length > 0) {
-         detailsHtml += `<details class="check-details-collapsible">
-                         <summary>Stale Documents (${check.data.staleDocuments.length})</summary>
-                         <ul class="check-details-list">`;
-         check.data.staleDocuments.slice(0, 5).forEach(doc => {
-             detailsHtml += `<li>${this.escapeHtml(doc.file)} (Reason: ${doc.reason})</li>`;
-         });
-          if (check.data.staleDocuments.length > 5) detailsHtml += `<li>...and ${check.data.staleDocuments.length - 5} more</li>`;
-         detailsHtml += `</ul></details>`;
-    }
-
-    // Only return details if there's something to show
-    return detailsHtml ? `<div class="check-card-details-section">${detailsHtml}</div>` : '';
-  }
-
-  generateWorkflowOptions() {
-    const { options } = this.data;
-    if (!options || typeof options !== 'object') {
-      return `
-        <section class="workflow-options">
-          <h2>Workflow Options</h2>
-          <div class="options-grid error">
-            <p class="status status-error">Error</p>
-            <p>Options data is not available or invalid.</p>
-          </div>
-        </section>
-      `;
-    }
-
-    // Filter only for options that were explicitly set to true
-    // Most options are "skip" options that default to false
-    const nonDefaultOptions = Object.entries(options).filter(([key, value]) => {
-      // Skip options are only interesting if they're true (meaning something is skipped)
-      if (key.startsWith('skip') && value === true) {
-        return true;
-      }
-      
-      // Non-skip boolean options that are true
-      if (typeof value === 'boolean' && value === true && !key.startsWith('skip')) {
-        return true;
-      }
-      
-      // String/number options that have values
-      if (typeof value === 'string' || typeof value === 'number') {
-        // Exclude some common defaults like outputPath
-        if (key === 'outputPath') return false;
-        return true;
-      }
-      
-      return false;
-    });
-    
-    // If no non-default options were found, show a simplified message
-    if (nonDefaultOptions.length === 0) {
-      return `
-        <section class="workflow-options">
-          <h2>Workflow Options</h2>
-          <p class="default-options">Running with default settings. No additional options were specified.</p>
-        </section>
-      `;
-    }
-    
-    // Format and group the non-default options
-    const optionGroups = {
-      'Modified Options': []
-    };
-    
-    nonDefaultOptions.forEach(([key, value]) => {
-      const displayName = key
-        .replace(/([A-Z])/g, ' $1') // Add space before capital letters
-        .replace(/^./, str => str.toUpperCase()); // Capitalize first letter
-      
-      const displayValue = typeof value === 'boolean' ? 
-        (value ? 'Yes' : 'No') : String(value);
-      
-      optionGroups['Modified Options'].push({ displayName, displayValue });
-    });
-    
-    // Generate the simplified HTML
-    return `
-      <section class="workflow-options">
-        <h2>Workflow Options</h2>
-        <div class="modified-options">
-          <h3>Modified Options</h3>
-          <div class="options-table">
-            ${optionGroups['Modified Options'].map(item => `
-              <div class="option-row">
-                <span class="option-name">${this.escapeHtml(item.displayName)}</span>
-                <span class="option-value">${this.escapeHtml(item.displayValue)}</span>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      </section>
-    `;
-  }
-
-  generateChannelCleanup() {
-    const { metrics, steps } = this.data;
-    
-    // First check if we have metrics or step data
-    const hasMetrics = metrics && typeof metrics === 'object';
-    const cleanupStep = Array.isArray(steps) ? 
-      steps.find(step => step.name === 'Channel Cleanup') : null;
-      
-    // Try to get metrics.channelCleanup
-    const hasCleanupMetrics = hasMetrics && metrics.channelCleanup && 
-      typeof metrics.channelCleanup === 'object';
-    
-    // If we have no data at all about channel cleanup
-    if (!hasMetrics && !cleanupStep) {
-      return `
-        <section class="channel-cleanup">
-          <h2>Channel Cleanup</h2>
-          <div class="cleanup-status">
-            <p class="status status-pending">No cleanup data available</p>
-            <div class="cleanup-details">
-              <p>The channel cleanup process was not executed in this workflow run.</p>
-            </div>
-          </div>
-        </section>
-      `;
-    }
-    
-    // If we have cleanup metrics data
-    if (hasCleanupMetrics) {
-      const cleanup = metrics.channelCleanup;
-      
-      // Handle site breakdown if it exists
-      const hasSiteBreakdown = cleanup.sites && Array.isArray(cleanup.sites) && cleanup.sites.length > 0;
-      const sitesProcessed = cleanup.sitesProcessed || cleanup.sites?.length || 0;
-      
-      // Calculate metrics from site breakdown data if available to ensure accuracy
-      let calculatedDeletedCount = 0;
-      let calculatedKeptCount = 0;
-      let calculatedTotalCount = 0;
-      
-      if (hasSiteBreakdown) {
-        calculatedDeletedCount = cleanup.sites.reduce((sum, site) => sum + (site.deleted || 0), 0);
-        calculatedKeptCount = cleanup.sites.reduce((sum, site) => sum + (site.kept || 0), 0);
-        calculatedTotalCount = cleanup.sites.reduce((sum, site) => sum + (site.found || 0), 0);
-      }
-      
-      // Extract or calculate key metrics - prioritize calculated values
-      const cleanedChannels = calculatedDeletedCount || cleanup.deletedCount || 0;
-      const keptChannels = calculatedKeptCount || cleanup.channelsKept || 0;
-      const totalChannels = calculatedTotalCount || cleanup.totalChannels || 0;
-      const errors = cleanup.errors || cleanup.totalErrors || 0;
-      
-      // Determine status
-      let status = 'success';
-      if (errors > 0) {
-        status = 'error';
-      } else if (cleanedChannels > 0) {
-        status = 'warning'; // Some cleanup occurred
-      }
-      
-      // Generate appropriate status message
-      let statusMessage = "Channel cleanup completed";
-      let explanation = "";
-      
-      if (cleanedChannels === 0 && totalChannels > 0) {
-        statusMessage = "No channels needed cleanup";
-        explanation = `${totalChannels} channels were found, but none needed to be deleted based on retention policy.`;
-      } else if (cleanedChannels > 0) {
-        statusMessage = `${cleanedChannels} channels cleaned up`;
-        explanation = `${cleanedChannels} out of ${totalChannels} channels were deleted, keeping the ${keptChannels} most recent.`;
-      } else if (totalChannels === 0) {
-        statusMessage = "No channels found";
-        explanation = "No channels were found for cleanup during this workflow run.";
-      }
-      
-      return `
-        <section class="channel-cleanup">
-          <h2>Channel Cleanup</h2>
-          <div class="cleanup-status">
-            <p class="status status-${status}">${statusMessage}</p>
-            <div class="cleanup-details">
-              <p><strong>Summary:</strong> ${explanation}</p>
-              <div class="cleanup-metrics">
-                <div class="metric-item">
-                  <div class="metric-label">Sites Processed</div>
-                  <div class="metric-value">${sitesProcessed}</div>
-                </div>
-                <div class="metric-item">
-                  <div class="metric-label">Total Channels</div>
-                  <div class="metric-value">${totalChannels}</div>
-                </div>
-                <div class="metric-item">
-                  <div class="metric-label">Channels Kept</div>
-                  <div class="metric-value">${keptChannels}</div>
-                </div>
-                <div class="metric-item">
-                  <div class="metric-label">Channels Deleted</div>
-                  <div class="metric-value">${cleanedChannels}</div>
-                </div>
-                ${errors > 0 ? `
-                <div class="metric-item">
-                  <div class="metric-label">Errors</div>
-                  <div class="metric-value error-value">${errors}</div>
-                </div>
-                ` : ''}
-              </div>
-              ${cleanup.error ? `<p class="error">${this.escapeHtml(cleanup.error)}</p>` : ''}
-            </div>
-          </div>
-        </section>
-      `;
-    }
-    
-    // Fallback to using just the step data if that's all we have
-    if (cleanupStep) {
-      const status = cleanupStep.status ? cleanupStep.status.toLowerCase() : 'pending';
-      return `
-        <section class="channel-cleanup">
-          <h2>Channel Cleanup</h2>
-          <div class="cleanup-status">
-            <p class="status status-${status}">${status}</p>
-            <div class="cleanup-details">
-              <p><strong>Duration:</strong> ${this.formatDuration(cleanupStep.duration || 0)}</p>
-              ${cleanupStep.error ? `<p class="error">${this.escapeHtml(cleanupStep.error)}</p>` : ''}
-              ${cleanupStep.details ? `<p>${this.escapeHtml(cleanupStep.details)}</p>` : ''}
-            </div>
-          </div>
-        </section>
-      `;
-    }
-    
-    // If we have metrics but no cleanup data, show a basic message
-    return `
-      <section class="channel-cleanup">
-        <h2>Channel Cleanup</h2>
-        <div class="cleanup-status">
-          <p class="status status-pending">Cleanup status unknown</p>
-          <div class="cleanup-details">
-            <p>Channel cleanup process was started but no detailed results were found.</p>
-          </div>
-        </div>
-      </section>
-    `;
-  }
-
-  /**
-   * Formats a duration in milliseconds to a human-readable string
-   * 
-   * @param {number} ms - Duration in milliseconds
-   * @returns {string} Formatted duration (e.g., "1m 30s")
-   */
-  formatDuration(ms) {
-    if (!ms || ms === 0) return '0s';
-    
-    const seconds = Math.floor(ms / 1000);
-    if (seconds < 60) return `${seconds}s`;
-    
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    
-    if (minutes < 60) {
-      return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
-    }
-    
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = minutes % 60;
-    
-    if (remainingMinutes > 0) {
-      return `${hours}h ${remainingMinutes}m`;
-    }
-    
-    return `${hours}h`;
-  }
-
-  /**
-   * Opens the dashboard in the default browser
-   * 
-   * @returns {Promise<Object>} Result of browser opening
-   * @returns {boolean} result.success - Whether browser was opened successfully
-   * @returns {Error} [result.error] - Error if browser opening failed
-   */
-  async openInBrowser() {
     try {
-      await open(this.outputPath);
-      return { success: true };
+      await writeFile(this.outputPath, html);
+      const duration = Date.now() - startTime;
+      logger.success(`Dashboard generated successfully at ${this.outputPath} (took ${duration}ms)`);
+      return { success: true }; 
     } catch (error) {
-      logger.error('Failed to open dashboard in browser:', error);
-      return { success: false, error };
+      logger.error(`Failed to write dashboard file: ${error.message}`);
+      return { success: false, error: error instanceof Error ? error : new Error(String(error)) }; 
     }
-  }
-
-  /**
-   * Generates workflow analytics section
-   * @returns {string} HTML for workflow analytics
-   */
-  generateWorkflowAnalytics() {
-    const { metrics } = this.data;
-    
-    // ---> Add guard clause for missing metrics <-----
-    if (!metrics || typeof metrics !== 'object') {
-      logger.error('[DashboardGenerator] Metrics data missing in generateWorkflowAnalytics');
-      return '<section class="workflow-analytics"><h2>Workflow Analytics</h2><p class="status status-error">Analytics data unavailable</p></section>';
-    }
-    
-    // Extract key metrics safely
-    const totalDuration = typeof metrics.duration === 'number' ? metrics.duration : 0;
-    const phaseDurations = metrics.phaseDurations || {};
-    const buildMetrics = metrics.buildPerformance || {}; 
-    
-    // ---> Add logging for values being used <-----
-    logger.debug(`[generateWorkflowAnalytics] Using - totalDuration: ${totalDuration}, phaseDurations keys: ${Object.keys(phaseDurations).length}, buildMetrics keys: ${Object.keys(buildMetrics).length}`);
-    logger.debug(`[generateWorkflowAnalytics] buildMetrics content: ${JSON.stringify(buildMetrics)}`);
-
-    // Only show analytics if we have meaningful data
-    if (totalDuration === 0 && Object.keys(phaseDurations).length === 0) {
-      logger.warn('[generateWorkflowAnalytics] Insufficient data (totalDuration or phaseDurations missing) to generate analytics section.');
-      return '';
-    }
-    
-    // Generate performance visualization
-    let html = `
-      <section class="workflow-analytics">
-        <h2>Workflow Analytics</h2>
-        <div class="analytics-container">
-          <div class="metrics-overview">
-            <div class="metric-card">
-              <div class="metric-title">Total Duration</div>
-              <div class="metric-value">${this.formatDuration(totalDuration)}</div>
-            </div>
-    `;
-    
-    // Add phase breakdown if available
-    if (Object.keys(phaseDurations).length > 0) {
-      // Sort phases by duration (descending)
-      const sortedPhases = Object.entries(phaseDurations)
-        .filter(([_, duration]) => duration > 0)
-        .sort((a, b) => b[1] - a[1]);
-        
-      if (sortedPhases.length > 0) {
-        html += `<div class="phase-breakdown">
-                   <h3>Phase Breakdown</h3>
-                   <div class="phases-container">`;
-        
-        // Calculate percentage for visualization
-        sortedPhases.forEach(([phase, duration]) => {
-          const percentage = totalDuration > 0 ? Math.round((duration / totalDuration) * 100) : 0;
-          const phaseName = phase
-            .replace(/([A-Z])/g, ' $1') // Add space before capital letters
-            .replace(/^./, str => str.toUpperCase()); // Capitalize first letter
-          
-          html += `<div class="phase-item">
-                     <div class="phase-label">${this.escapeHtml(phaseName)}</div>
-                     <div class="phase-bar-container">
-                       <div class="phase-bar" style="width: ${percentage}%"></div>
-                       <span class="phase-percentage">${percentage}%</span>
-                     </div>
-                     <div class="phase-duration">${this.formatDuration(duration)}</div>
-                   </div>`;
-        });
-        
-        html += `</div></div>`;
-      }
-    }
-    
-    // Add build performance if available
-    if (buildMetrics && typeof buildMetrics.totalBuildTime === 'number') {
-      html += `<div class="build-performance">
-                 <h3>Build Performance</h3>
-                 <div class="performance-grid">`;
-      
-      // Display Total Build Time
-      html += `<div class="performance-item">
-                 <span class="performance-label">Total Build Time</span>
-                 <span class="performance-value">${this.formatDuration(buildMetrics.totalBuildTime)}</span>
-               </div>`;
-      
-      // Display Total Files if valid number
-      if (typeof buildMetrics.totalFileCount === 'number' && buildMetrics.totalFileCount >= 0) {
-        html += `<div class="performance-item">
-                   <span class="performance-label">Total Files</span>
-                   <span class="performance-value">${buildMetrics.totalFileCount}</span>
-                 </div>`;
-      }
-      
-      // Display Total Size (formatted or calculated) if valid
-      if (buildMetrics.formattedTotalSize) {
-         html += `<div class="performance-item">
-                   <span class="performance-label">Total Size</span>
-                   <span class="performance-value">${this.escapeHtml(buildMetrics.formattedTotalSize)}</span>
-                 </div>`;
-      } else if (typeof buildMetrics.totalSize === 'number' && buildMetrics.totalSize >= 0) {
-         html += `<div class="performance-item">
-                   <span class="performance-label">Total Size</span>
-                   <span class="performance-value">${this.formatBytes(buildMetrics.totalSize)}</span>
-                 </div>`;
-      }
-      
-      // Display Avg Pkg Build if valid number
-      if (typeof buildMetrics.averageBuildTime === 'number' && buildMetrics.averageBuildTime > 0) {
-        html += `<div class="performance-item">
-                   <span class="performance-label">Avg. Pkg Build</span>
-                   <span class="performance-value">${this.formatDuration(buildMetrics.averageBuildTime)}</span>
-                 </div>`;
-      }
-      
-      html += `</div></div>`;
-    } else {
-        // Log why the build performance section is skipped
-        logger.debug(`[generateWorkflowAnalytics] Skipping build performance render. buildMetrics empty or totalBuildTime invalid. Keys: ${Object.keys(buildMetrics).join(', ')}`);
-    }
-    
-    // Performance optimization tips based on metrics
-    html += `<div class="performance-tips">
-               <h3>Performance Insights</h3>
-               <ul class="tips-list">`;
-    
-    // Add dynamic tips based on the actual metrics
-    if (totalDuration > 5 * 60 * 1000) { // Workflow takes over 5 minutes
-      html += `<li>
-                 <strong>Long workflow duration (${this.formatDuration(totalDuration)})</strong>
-                 <p>Consider splitting into multiple workflows or optimizing slow steps.</p>
-               </li>`;
-    }
-    
-    if (phaseDurations.build && phaseDurations.build > 0.4 * totalDuration) { // Build takes >40% of time
-      html += `<li>
-                 <strong>Build phase dominates workflow time (${Math.round((phaseDurations.build / totalDuration) * 100)}%)</strong>
-                 <p>Consider optimizing bundling configuration or implementing incremental builds.</p>
-               </li>`;
-    }
-    
-    if (phaseDurations.test && phaseDurations.test > 0.3 * totalDuration) { // Tests take >30% of time
-      html += `<li>
-                 <strong>Tests take significant time (${Math.round((phaseDurations.test / totalDuration) * 100)}%)</strong>
-                 <p>Consider running tests in parallel or implementing test sharding.</p>
-               </li>`;
-    }
-    
-    // Check if any tips were added, otherwise show a default message
-    if (html.endsWith('<ul class="tips-list">')) { // Check if no <li> was added
-      html += '<li>No specific performance insights detected for this run.</li>';
-    }
-    
-    html += `</ul></div>
-           </div></div>
-         </section>`;
-    
-    return html;
-  }
-
-  /**
-   * Formats bytes to a human-readable format
-   * 
-   * @param {number} bytes - Number of bytes to format
-   * @param {number} [decimals=2] - Number of decimal places to display
-   * @returns {string} Formatted size (e.g., "1.23 MB")
-   */
-  formatBytes(bytes) {
-    if (!bytes || isNaN(bytes) || bytes === 0) return '0 Bytes';
-    
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 }

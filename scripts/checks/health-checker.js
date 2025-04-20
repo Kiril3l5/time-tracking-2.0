@@ -44,10 +44,15 @@ const IS_DEVELOPMENT = !process.env.NODE_ENV || process.env.NODE_ENV === 'develo
 /**
  * Run comprehensive health checks
  * @param {Object} options - Check options
+ * @param {Function} [options.recordWarning] - Optional callback to record warnings in the main workflow
  * @returns {Promise<Object>} Check results
  */
 export async function runChecks(options = {}) {
   const startTime = Date.now();
+  const recordWarning = options.recordWarning || ((msg, phase, step, severity) => { 
+    logger.debug(`Health Check Warning (not propagated): ${msg} (${phase}/${step}, ${severity})`); 
+  });
+  
   const results = {
     success: true,
     issues: [],
@@ -82,13 +87,10 @@ export async function runChecks(options = {}) {
       if (securityResults.issues && securityResults.issues.length > 0) {
         results.issues.push(...securityResults.issues);
       } else {
-        // Handle case where securityResults.error is null
         results.issues.push('Security scan failed with an unknown error');
-        logger.debug('Security scan returned unsuccessful but with no specific issues');
       }
     }
     
-    // Always capture security stats, even if check failed
     results.stats.security = {
       vulnerabilities: securityResults.stats || {
         critical: 0,
@@ -99,11 +101,8 @@ export async function runChecks(options = {}) {
       }
     };
 
-    // If security check reported warnings, add them
     if (securityResults.warnings && securityResults.warnings.length > 0) {
-      securityResults.warnings.forEach(warning => {
-        results.warnings.push(warning);
-      });
+        results.warnings.push(...securityResults.warnings);
     }
 
     // 2. Environment Validation
@@ -120,11 +119,8 @@ export async function runChecks(options = {}) {
       invalidConfigs: []
     };
 
-    // Add environment warnings if any
     if (envResults.warnings && envResults.warnings.length > 0) {
-      envResults.warnings.forEach(warning => {
-        results.warnings.push(warning);
-      });
+       results.warnings.push(...envResults.warnings);
     }
 
     // 3. Git Configuration Check
@@ -140,11 +136,8 @@ export async function runChecks(options = {}) {
       issues: []
     };
 
-    // Add git warnings if any
     if (gitResults.warnings && gitResults.warnings.length > 0) {
-      gitResults.warnings.forEach(warning => {
-        results.warnings.push(warning);
-      });
+       results.warnings.push(...gitResults.warnings);
     }
 
     // 4. Module Syntax Validation
@@ -157,19 +150,69 @@ export async function runChecks(options = {}) {
       }
     }
 
-    // Add syntax warnings if any
     if (syntaxResults.warnings && syntaxResults.warnings.length > 0) {
-      syntaxResults.warnings.forEach(warning => {
-        results.warnings.push(warning);
-      });
+       results.warnings.push(...syntaxResults.warnings);
+    }
+
+    // 5. Deprecated/Unpinned Dependency Check
+    try {
+      const pkgPath = path.join(process.cwd(), 'package.json');
+      if (fs.existsSync(pkgPath)) {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        const deprecatedPackages = [
+          'tslint',
+          'moment',
+          'request',
+          'react-addons-*',
+          'node-sass'
+        ];
+        const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+        
+        for (const [name, version] of Object.entries(allDeps)) {
+          // Check deprecated
+          for (const deprecated of deprecatedPackages) {
+            if (deprecated.endsWith('*') && name.startsWith(deprecated.slice(0, -1))) {
+               recordWarning(`Package "${name}" is deprecated. Consider replacing it.`, 'Validation', 'Health Check (Deprecated Deps)', 'warning');
+               break; // Only warn once per package
+            } else if (name === deprecated) {
+               recordWarning(`Package "${name}" is deprecated. Consider replacing it.`, 'Validation', 'Health Check (Deprecated Deps)', 'warning');
+               break; // Only warn once per package
+            }
+          }
+          // Check unpinned
+          if (version === 'latest' || version === '*') {
+            recordWarning(`Package "${name}" uses unpinned version "${version}". Consider pinning for stability.`, 'Validation', 'Health Check (Unpinned Deps)', 'warning');
+          }
+        }
+      }
+    } catch (error) {
+       recordWarning(`Failed to check for deprecated/unpinned dependencies: ${error.message}`, 'Validation', 'Health Check (Dependencies)', 'error');
+    }
+
+    // 6. Essential Configuration File Check
+    try {
+      const configFiles = [
+        { path: '.eslintrc.js', desc: 'ESLint configuration' },
+        { path: '.prettierrc.json', desc: 'Prettier configuration' },
+        { path: 'tsconfig.json', desc: 'TypeScript configuration' },
+        { path: '.gitignore', desc: 'Git ignore file' }
+      ];
+      for (const file of configFiles) {
+        if (!fs.existsSync(path.join(process.cwd(), file.path))) {
+          // Treat missing essential config as a warning, not a failure
+          recordWarning(`Missing ${file.desc} file (${file.path})`, 'Validation', 'Health Check (Config Files)', 'warning');
+        }
+      }
+    } catch (error) {
+      recordWarning(`Failed to check for essential config files: ${error.message}`, 'Validation', 'Health Check (Config Files)', 'error');
     }
 
     // Update success status
     // In development, only fail on critical syntax errors.
     // Otherwise (CI/preview builds), fail if *any* issues were found.
     results.success = IS_DEVELOPMENT ? 
-      syntaxResults.success : // Keep original dev behavior (only fail on syntax)
-      results.issues.length === 0; // In other envs, fail if *any* issue exists
+      syntaxResults.success : 
+      results.issues.length === 0; 
     
     results.duration = Date.now() - startTime;
 
@@ -188,6 +231,8 @@ export async function runChecks(options = {}) {
     logger.debug(`Health check error details: ${error ? error.stack || 'No stack trace' : 'Null error object'}`);
     results.success = false;
     results.duration = Date.now() - startTime;
+    // Optionally record the main catch error as a warning too
+    recordWarning(`Health check failed: ${error?.message || 'Unknown error'}`, 'Validation', 'Health Check', 'error');
     return results;
   }
 }
@@ -195,9 +240,11 @@ export async function runChecks(options = {}) {
 /**
  * Run security vulnerability scan
  * @param {Object} options - Scan options
+ * @param {Function} [options.recordWarning] - Optional callback to record warnings
  * @returns {Promise<Object>} Scan results
  */
 async function runSecurityScan(options = {}) {
+  const recordWarning = options.recordWarning || ((msg, phase, step, severity) => {}); // Get callback
   const results = {
     success: true,
     issues: [],
@@ -229,8 +276,10 @@ async function runSecurityScan(options = {}) {
       logger.debug(`pnpm audit command finished with exit code: ${exitCode}`);
     }
 
-    if (stderr && !stderr.toLowerCase().includes('deprecated')) { // Ignore common deprecation warnings in stderr
-      results.warnings.push(`Audit produced stderr: ${stderr.substring(0, 200)}...`); // Log truncated stderr
+    if (stderr && !stderr.toLowerCase().includes('deprecated')) {
+      const warningMsg = `Audit produced stderr: ${stderr.substring(0, 200)}...`;
+      results.warnings.push(warningMsg);
+      recordWarning(warningMsg, 'Validation', 'Health Check (Security Audit)', 'warning');
     }
 
     // Now, proceed with parsing stdout, even if exitCode was non-zero
@@ -291,16 +340,25 @@ async function runSecurityScan(options = {}) {
       // Add issues for each severity level
       if (vulns.critical > 0) {
         results.success = false;
-        results.issues.push(`Found ${vulns.critical} critical vulnerabilities`);
+        const issueMsg = `Found ${vulns.critical} critical vulnerabilities`;
+        results.issues.push(issueMsg);
+        // Critical vulns are issues, but also record as error-level warning for visibility
+        recordWarning(issueMsg, 'Validation', 'Health Check (Security Audit)', 'error');
       }
       if (vulns.high > 0) {
-        results.warnings.push(`Found ${vulns.high} high severity vulnerabilities`);
+        const warnMsg = `Found ${vulns.high} high severity vulnerabilities`;
+        results.warnings.push(warnMsg);
+        recordWarning(warnMsg, 'Validation', 'Health Check (Security Audit)', 'warning');
       }
       if (vulns.medium > 0) {
-        results.warnings.push(`Found ${vulns.medium} medium severity vulnerabilities`);
+        const warnMsg = `Found ${vulns.medium} medium severity vulnerabilities`;
+        results.warnings.push(warnMsg);
+        recordWarning(warnMsg, 'Validation', 'Health Check (Security Audit)', 'warning');
       }
       if (vulns.low > 0) {
-        results.warnings.push(`Found ${vulns.low} low severity vulnerabilities`);
+        const warnMsg = `Found ${vulns.low} low severity vulnerabilities`;
+        results.warnings.push(warnMsg);
+        recordWarning(warnMsg, 'Validation', 'Health Check (Security Audit)', 'info'); // Low severity as info
       }
     } else if (auditResults.vulnerabilities) {
       // Alternative format for some pnpm versions
@@ -327,20 +385,29 @@ async function runSecurityScan(options = {}) {
       // Add issues based on manually counted severities
       if (critical > 0) {
         results.success = false;
-        results.issues.push(`Found ${critical} critical vulnerabilities`);
+        const issueMsg = `Found ${critical} critical vulnerabilities`;
+        results.issues.push(issueMsg);
+        recordWarning(issueMsg, 'Validation', 'Health Check (Security Audit)', 'error');
       }
       if (high > 0) {
-        results.warnings.push(`Found ${high} high severity vulnerabilities`);
+        const warnMsg = `Found ${high} high severity vulnerabilities`;
+        results.warnings.push(warnMsg);
+        recordWarning(warnMsg, 'Validation', 'Health Check (Security Audit)', 'warning');
       }
       if (medium > 0) {
-        results.warnings.push(`Found ${medium} medium severity vulnerabilities`);
+        const warnMsg = `Found ${medium} medium severity vulnerabilities`;
+        results.warnings.push(warnMsg);
+        recordWarning(warnMsg, 'Validation', 'Health Check (Security Audit)', 'warning');
       }
       if (low > 0) {
-        results.warnings.push(`Found ${low} low severity vulnerabilities`);
+        const warnMsg = `Found ${low} low severity vulnerabilities`;
+        results.warnings.push(warnMsg);
+        recordWarning(warnMsg, 'Validation', 'Health Check (Security Audit)', 'info');
       }
     } else {
-      // No vulnerability data found
-      results.warnings.push(`No vulnerability data found in audit results`);
+      const warnMsg = `No vulnerability data found in audit results`;
+      results.warnings.push(warnMsg);
+      recordWarning(warnMsg, 'Validation', 'Health Check (Security Audit)', 'warning');
       logger.debug(`Unexpected audit result format: ${JSON.stringify(auditResults).substring(0, 200)}...`);
     }
 
@@ -349,8 +416,11 @@ async function runSecurityScan(options = {}) {
         const { stdout: outdated } = await execPromise('pnpm outdated --json');
         if (outdated) {
             const outdatedDeps = JSON.parse(outdated);
-            if (Object.keys(outdatedDeps).length > 0) {
-                results.warnings.push(`Found ${Object.keys(outdatedDeps).length} outdated dependencies`);
+            const count = Object.keys(outdatedDeps).length;
+            if (count > 0) {
+                const warnMsg = `Found ${count} outdated dependencies`;
+                results.warnings.push(warnMsg);
+                recordWarning(warnMsg, 'Validation', 'Health Check (Dependencies)', 'warning');
             }
         }
     } catch (outdatedError) {
@@ -359,15 +429,22 @@ async function runSecurityScan(options = {}) {
          if (outdatedError.stdout) {
             try {
                 const outdatedDeps = JSON.parse(outdatedError.stdout);
-                if (Object.keys(outdatedDeps).length > 0) {
-                    results.warnings.push(`Found ${Object.keys(outdatedDeps).length} outdated dependencies`);
+                const count = Object.keys(outdatedDeps).length;
+                if (count > 0) {
+                    const warnMsg = `Found ${count} outdated dependencies`;
+                    results.warnings.push(warnMsg);
+                    recordWarning(warnMsg, 'Validation', 'Health Check (Dependencies)', 'warning');
                 }
             } catch (parseError) {
-                results.warnings.push(`Failed to parse outdated dependencies: ${parseError.message}`);
+                const warnMsg = `Failed to parse outdated dependencies: ${parseError.message}`;
+                results.warnings.push(warnMsg);
+                recordWarning(warnMsg, 'Validation', 'Health Check (Dependencies)', 'error');
                 logger.debug(`Outdated deps parse error: ${parseError.stack}`);
             }
          } else {
-             results.warnings.push(`Failed to check for outdated dependencies: ${outdatedError.message}`);
+             const warnMsg = `Failed to check for outdated dependencies: ${outdatedError.message}`;
+             results.warnings.push(warnMsg);
+             recordWarning(warnMsg, 'Validation', 'Health Check (Dependencies)', 'error');
              logger.debug(`Outdated check error: ${outdatedError.stack}`);
          }
     }
@@ -378,6 +455,7 @@ async function runSecurityScan(options = {}) {
     results.issues.push(`Security scan failed: ${error.message}`);
     // Log more detailed error information for debugging
     logger.debug(`Security scan error details: ${error.stack || 'No stack trace available'}`);
+    recordWarning(`Security scan failed: ${error.message}`, 'Validation', 'Health Check (Security Audit)', 'error');
     return results;
   }
 }
@@ -388,6 +466,7 @@ async function runSecurityScan(options = {}) {
  * @returns {Promise<Object>} Validation results
  */
 export async function validateEnvironment(options) {
+  const recordWarning = options.recordWarning || ((msg, phase, step, severity) => {});
   const results = {
     success: true,
     issues: [],
@@ -428,7 +507,9 @@ export async function validateEnvironment(options) {
     // Check for .env file
     const envFile = path.join(process.cwd(), '.env');
     if (!fs.existsSync(envFile)) {
-      results.warnings.push('No .env file found');
+      const warnMsg = 'No .env file found';
+      results.warnings.push(warnMsg);
+      recordWarning(warnMsg, 'Validation', 'Health Check (Environment)', 'info'); // Record as info
     }
 
     results.success = results.issues.length === 0;

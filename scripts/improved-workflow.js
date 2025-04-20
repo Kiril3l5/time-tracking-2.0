@@ -7,7 +7,7 @@ import fs from 'fs';
 import { logger } from './core/logger.js';
 import { commandRunner } from './core/command-runner.js';
 import { getCurrentBranch, hasUncommittedChanges, commitChanges } from './workflow/branch-manager.js';
-import { QualityChecker } from './checks/quality-checker.js';
+import { TestCoordinator } from './checks/test-coordinator.js';
 import { PackageCoordinator } from './workflow/package-coordinator.js';
 import { createChannelId, deployPackageWithWorkflowIntegration } from './workflow/deployment-manager.js';
 import * as progressTracker from './core/progress-tracker.js';
@@ -79,8 +79,8 @@ class Workflow {
     // Create package coordinator
     this.packageCoordinator = new PackageCoordinator();
     
-    // Use default quality checker
-    this.qualityChecker = new QualityChecker();
+    // Use the new TestCoordinator
+    this.testCoordinator = new TestCoordinator();
     
     // Initialize steps tracking
     this.workflowSteps = new Map();
@@ -147,11 +147,14 @@ class Workflow {
       
       // Channel cleanup results
       channelCleanup: {
+        status: null,
         success: false,
         sitesProcessed: 0,
         totalChannels: 0,
         channelsKept: 0,
-        channelsDeleted: 0,
+        cleanedChannels: 0,
+        failedChannels: 0,
+        skippedChannels: 0,
         totalErrors: 0,
         sites: []
       }
@@ -195,34 +198,22 @@ class Workflow {
    * @param {string} [error] - Error message if step failed
    */
   recordWorkflowStep(name, phase, success, duration, error = null) {
-    // Validate and fix unrealistically small durations for important steps
-    if (duration < 100) {
-      // For critical workflow phases and steps that should take longer
-      if (['Validation Phase', 'Build Phase', 'Quality Checks', 'Package Analysis', 'Advanced Checks', 'Channel Cleanup'].includes(name)) {
-        this.logger.debug(`Suspicious low duration for ${name}: ${duration}ms, adjusting upward...`);
-        
-        // Set more realistic durations for steps that should take longer
-        if (name === 'Package Analysis') {
-          duration = 500; // Package analysis takes at least 500ms
-        } else if (name === 'Quality Checks') {
-          duration = 20000; // Quality checks take at least 20 seconds
-        } else if (name === 'Advanced Checks') {
-          duration = 15000; // Advanced checks take at least 15 seconds
-        } else if (name === 'Validation Phase') {
-          duration = 45000; // Complete validation phase takes at least 45 seconds
-        } else if (name === 'Build Phase') {
-          duration = 3000; // Build phase takes at least 3 seconds when not skipped
-        } else if (name === 'Channel Cleanup') {
-          duration = 5000; // Channel cleanup takes at least 5 seconds
-        }
-      }
-    }
+    // Log original duration
+    const originalDuration = duration;
     
+    // Adjust minimum duration for potentially too-fast steps, allow 0 for simple checks
+    if (duration < 50 && duration > 0 && 
+        !['Dependency Check', 'Rotate Reports', 'Rotate Command Logs', 'Rotate Metrics Logs'].includes(name)) { 
+      logger.debug(`Adjusting potentially unrealistic non-zero duration for ${name}: ${duration}ms`);
+      duration = 50; // Set a minimum displayable duration
+    }
+    logger.debug(`Recording step ${name} with original duration ${originalDuration}ms, final duration ${duration}ms`);
+
     const step = {
       name,
       phase,
       success,
-      duration,
+      duration, // Use potentially adjusted duration
       error,
       timestamp: new Date().toISOString()
     };
@@ -232,11 +223,12 @@ class Workflow {
     
     // Log errors when steps fail
     if (!success && error) {
-      this.recordWorkflowError(error, phase, name);
+      this.recordWorkflowError(error, phase, name); // Log as an error internally
       
-      // ENHANCEMENT: Also add to the warnings collection to ensure it shows in Issues & Warnings
-      // Only add if it's an actual error, not just a "skipped" message
-      // ---> AND check if it's the generic parent step failure which is handled elsewhere <-----
+      // --- MODIFIED: Prevent adding generic step/phase failures as warnings --- 
+      // We only want specific, actionable warnings reported in the dashboard list.
+      // Generic phase/step failures are visible in the timeline.
+      /* 
       if (error !== 'Skipped' && !error.includes('skipped') && !name?.endsWith(' Phase') && name !== 'Quality Checks') {
         this.recordWarning(
           `${name}: ${error}`,
@@ -245,6 +237,8 @@ class Workflow {
           'error' // Mark as error severity
         );
       }
+      */
+      // --- END MODIFICATION ---
     }
     
     // Log step for debugging
@@ -252,57 +246,55 @@ class Workflow {
   }
   
   /**
-   * Record a warning for the dashboard
-   * @param {string} message - Warning message
-   * @param {string} phase - Phase (Setup, Validation, Build, Deploy, Results)
-   * @param {string} [step] - Step name
-   * @param {string} [severity] - Severity level (error, warning, info)
+   * Record a warning message
+   * @param {string|Object} message - Warning message or object
+   * @param {string} phase - Phase in which the warning occurred
+   * @param {string} step - Step in which the warning occurred
+   * @param {string} severity - Warning severity (warning, error, info)
+   * @param {string} context - Additional context for the warning
    */
-  recordWarning(message, phase, step = null, severity = 'warning') {
-    // Skip empty warnings
+  recordWarning(message, phase, step = null, severity = 'warning', context = null) {
     if (!message) return;
     
-    // Normalize message in case it's an object
-    const warningMessage = typeof message === 'object' 
-      ? (message.message || JSON.stringify(message))
-      : message;
-    
-    // Auto-detect severity for build info messages
-    if (phase === 'Build' && !severity) {
-      // These are informational messages, not warnings
-      if (warningMessage.startsWith('Starting build') || 
-          warningMessage.startsWith('Cleaned build') ||
-          warningMessage.startsWith('TypeScript check passed') ||
-          warningMessage.startsWith('Building all packages')) {
-        severity = 'info';
-      }
+    // Handle both string warnings and object warnings
+    let warning;
+    if (typeof message === 'object' && message !== null) {
+      warning = {
+        message: message.message || String(message),
+        phase: phase || message.phase || 'Unknown',
+        step: step || message.step || null,
+        severity: severity || message.severity || 'warning',
+        timestamp: new Date().toISOString(),
+        context: context || message.context || null,
+      };
+    } else {
+      warning = {
+        message: String(message),
+        phase,
+        step,
+        severity,
+        timestamp: new Date().toISOString(),
+        context
+      };
     }
     
-    const warning = {
-      message: warningMessage,
-      phase,
-      step,
-      severity,
-      timestamp: new Date().toISOString()
-    };
-    
-    // Prevent duplicate warnings
-    const existingWarningIndex = this.workflowWarnings.findIndex(w => 
-      w.message === warningMessage && 
-      w.phase === phase && 
-      w.step === step
+    // Ensure we're not duplicating the same warning
+    const isDuplicate = this.workflowWarnings.some(
+      w => w.message === warning.message && 
+           w.phase === warning.phase && 
+           w.step === warning.step
     );
     
-    if (existingWarningIndex === -1) {
+    if (!isDuplicate) {
       this.workflowWarnings.push(warning);
       
-      // Log the warning to the console if verbose
-      if (this.options.verbose) {
-        this.logger.debug(`Recorded warning: ${warningMessage} (${phase}${step ? ` - ${step}` : ''}, ${severity})`);
-      }
+      // Log the warning to the console with appropriate severity level
+      const icon = severity === 'error' ? '❌' : severity === 'warning' ? '⚠️' : 'ℹ️';
+      const phaseStep = step ? `${phase} - ${step}` : phase;
+      const logMethod = severity === 'error' ? 'error' : 
+                       severity === 'warning' ? 'warn' : 'info';
       
-      // For debugging - log all warnings using our logger instead of console
-      this.logger.info(`[WARNING ADDED] ${warningMessage} (${phase}${step ? ` - ${step}` : ''}, ${severity}) - Total: ${this.workflowWarnings.length}`);
+      this.logger[logMethod](`${icon} ${phaseStep}: ${warning.message}`);
     }
   }
 
@@ -332,7 +324,24 @@ class Workflow {
       // 4. Deploy Phase
       await this.deploy();
       
-      // 5. Results Phase (Pass buildMetrics)
+      // ---> Log final state BEFORE generating results/dashboard
+      this.logger.debug("--- Final Workflow State Check BEFORE generateResults ---");
+      // *** Convert Map to Array HERE for logging final state ***
+      const finalStepsArray = Array.from(this.workflowSteps.values());
+      this.logger.debug(`Final Steps Array (${finalStepsArray.length}):`);
+      finalStepsArray.forEach((step, index) => {
+           this.logger.debug(`  - Step Index [${index}]: name=${step?.name}, success=${step?.success}, error=${step?.error}`);
+      });
+      this.logger.debug(`Final Warnings Array (${this.workflowWarnings.length}):`);
+      this.workflowWarnings.forEach((warning, index) => {
+          this.logger.debug(`  - Warning [${index}]: msg="${warning?.message?.substring(0,100)}...", severity=${warning?.severity}, phase=${warning?.phase}, step=${warning?.step}`);
+      });
+      this.logger.debug("--- Final Phase Durations Check ---");
+      logger.debug(JSON.stringify(this.metrics.phaseDurations, null, 2));
+      this.logger.debug("----------------------------------------------------");
+      // ---> End Log
+
+      // 5. Results Phase (Passes workflow instance `this` which includes the Map)
       const _reportPath = await this.generateResults();
       
       // 6. Cleanup Phase (New)
@@ -581,59 +590,107 @@ class Workflow {
       
       this.recordWorkflowStep('Package Analysis', 'Validation', true, Date.now() - packageStartTime);
       
-      // Skip quality checks if requested
+      // --- Declare status variables in higher scope --- 
+      let testStepSuccess = true; 
+      let testStepError = null;   
+      let advancedChecksSuccess = true;
+      let advancedChecksError = null;
+      // ----------------------------------------------
+
       if (this.options.skipTests) {
-        this.logger.warn('Skipping quality checks due to --skip-tests flag');
-        this.progressTracker.completeStep(true, 'Quality checks skipped');
-        this.recordWorkflowStep('Quality Checks', 'Validation', true, 0, 'Skipped');
-        this.recordWorkflowStep('Validation Phase', 'Validation', true, Date.now() - phaseStartTime);
+        this.logger.warn('Skipping test execution due to --skip-tests flag');
+        this.progressTracker.completeStep(true, 'Test execution skipped');
+        this.recordWorkflowStep('Test Execution', 'Validation', true, 0, 'Skipped');
+        this.recordWorkflowStep('Validation Phase', 'Validation', true, Date.now() - phaseStartTime); 
         return;
+      } else {
+          // Run tests (using TestCoordinator)
+          const testStartTime = Date.now();
+          this.logger.info('Running test execution coordination...'); 
+          try {
+            const testResult = await this.testCoordinator.runTestsAndReport();
+            
+            // --- Determine FINAL Test Step Status & Error --- 
+            testStepSuccess = testResult.success; // Start with command exit status
+            testStepError = testResult.error;   // Get potential error from validator
+
+            // If command succeeded BUT validator reported an error (e.g., parsing failure)
+            // THEN the step overall is considered FAILED for reporting.
+            if (testResult.success === true && testResult.error) { 
+                 this.recordWarning(testResult.error, 'Validation', 'Test Execution', 'warning'); 
+                 testStepSuccess = false; // <<< OVERRIDE success to FALSE
+                 testStepError = testResult.error; // Make sure this error message is used
+                 logger.warn(`Test Execution step outcome OVERRIDDEN to FAILED due to validator error: ${testStepError}`);
+            } 
+            // If command failed without a specific validator error message
+            else if (testResult.success === false && !testResult.error) {
+                 testStepError = 'Test execution command failed without specific error message.';
+                 this.recordWarning(testStepError, 'Validation', 'Test Execution', 'error'); 
+                 testStepSuccess = false;
+            }
+             // If command failed WITH a specific validator error message, ensure status is false
+            else if (testResult.success === false && testResult.error) {
+                 testStepSuccess = false;
+                 // Error message might already be in warnings via testResult.warnings loop below
+                 if (!this.workflowWarnings.some(w => w.message === testResult.error)) {
+                    this.recordWarning(testResult.error, 'Validation', 'Test Execution', 'error'); 
+                 }
+            }
+
+            // Record specific warnings from test coordinator output (e.g., actual test failures)
+            if (testResult.warnings && testResult.warnings.length > 0) {
+              testResult.warnings.forEach(warning => {
+                 const message = typeof warning === 'object' ? warning.message : warning;
+                 if (message) { this.recordWarning(message, 'Validation', 'Test Execution', 'error'); }
+              });
+               // Also mark the step as failed if there were test assertion failures reported as warnings
+               if (testStepSuccess) { // Only mark failed if not already failed by command/parsing
+                 testStepSuccess = false;
+                 testStepError = testStepError || 'One or more tests failed.'; 
+                 logger.warn('Test Execution step marked as failed due to test assertion failures.');
+               }
+            }
+
+            // --- Process Test Metrics (Placeholder - uses final determined testStepSuccess) ---
+            this.metrics.testResults = this.metrics.testResults || {};
+            this.metrics.testResults.testStepsSuccess = testStepSuccess;
+            const unitTestData = testResult.unitTests || {};
+            this.metrics.testResults.unitTestsPassed = unitTestData.passed ?? 0;
+            this.metrics.testResults.unitTestsTotal = unitTestData.total ?? 0;
+            this.metrics.testResults.testFiles = unitTestData.files ?? [];
+            this.metrics.testResults.coverage = (typeof testResult.coverage === 'number' && !isNaN(testResult.coverage))
+                                              ? testResult.coverage
+                                              : null;
+            
+            // Add detailed error information if tests failed
+            if (!testStepSuccess && testStepError) {
+              this.metrics.testResults.error = testStepError;
+            }
+            
+            this.logger.info('Processing of Unit Test and Coverage results complete.');
+            logger.debug(`Updated test metrics: ${JSON.stringify(this.metrics.testResults)}`);
+            // --- End Test Metrics Processing ---
+
+          } catch (error) {
+              // Handle errors from invoking the test coordinator itself 
+              const testErrorMsg = `Test coordination failed: ${error.message}`;
+              this.logger.error(testErrorMsg);
+              testStepSuccess = false; 
+              testStepError = testErrorMsg;
+              // Record step failure HERE, before trying to record again below
+              this.recordWorkflowStep('Test Execution', 'Validation', false, Date.now() - testStartTime, testErrorMsg); 
+          }
+          // Record the Test Execution step using the final determined status AFTER try/catch
+          // Avoid recording twice if catch block already did
+          if (!this.workflowSteps.has('Test Execution')) {
+                this.recordWorkflowStep('Test Execution', 'Validation', testStepSuccess, Date.now() - testStartTime, testStepError);
+          }
       }
-      
-      // Run all quality checks
-      const qualityStartTime = Date.now();
-      this.logger.info('Running quality checks...');
-      
+        
+      // Run advanced checks 
+      this.logger.info("Running advanced checks...");
+      const advancedCheckStartTime = Date.now();
       try {
-        // Core quality checks (lint, type check, tests)
-        const checkResult = await this.qualityChecker.runAllChecks();
-        
-        // ---> Update metrics with DETAILED test results <-----
-        // Ensure this.metrics.testResults exists
-        if (!this.metrics.testResults || typeof this.metrics.testResults !== 'object') {
-            this.logger.warn('Initializing this.metrics.testResults as it was missing or invalid.');
-            this.metrics.testResults = {}; 
-        }
-        
-        // Store results from qualityChecker, prioritizing the specific fields
-        this.metrics.testResults.lintSuccess = checkResult.results?.linting?.success ?? null;
-        this.metrics.testResults.typeCheckSuccess = checkResult.results?.typeChecking?.success ?? null;
-        this.metrics.testResults.testStepsSuccess = checkResult.results?.testing?.success ?? null; // Success of the test runner steps
-
-        // Store actual unit test counts from the new structure
-        const unitTestData = checkResult.unitTests || {};
-        this.metrics.testResults.unitTestsPassed = unitTestData.passed ?? 0;
-        this.metrics.testResults.unitTestsTotal = unitTestData.total ?? 0;
-        this.metrics.testResults.testFiles = unitTestData.files ?? []; // Store the test files information
-
-        // Store coverage percentage
-        this.metrics.testResults.coverage = (typeof checkResult.coverage === 'number' && !isNaN(checkResult.coverage)) 
-                                          ? checkResult.coverage 
-                                          : null; 
-
-        logger.debug(`Updated test metrics: ${JSON.stringify(this.metrics.testResults)}`);
-        
-        // Record all quality check warnings
-        if (checkResult.warnings && checkResult.warnings.length > 0) {
-          checkResult.warnings.forEach(warning => {
-            this.recordWarning(warning, 'Validation', 'Quality Checks');
-          });
-        }
-        
-        // Run advanced checks with more detailed analysis
-        this.logger.info("Running advanced checks...");
-        
-        try {
           // Run TypeScript and ESLint checks in parallel first
           const criticalChecks = ['typescript', 'lint'];
           
@@ -685,13 +742,13 @@ class Workflow {
           
           // Run remaining advanced checks in parallel
           const remainingChecks = {
-            skipBundleCheck: this.options.skipBundleCheck || false,
-            skipDocsCheck: this.options.skipDocsCheck || false,
-            skipDocsFreshnessCheck: this.options.skipDocsFreshnessCheck || false,
-            skipDeadCodeCheck: this.options.skipDeadCodeCheck || false,
+            skipBundleCheck: this.options.skipAdvancedChecks || this.options.skipBundleCheck || false,
+            skipDocsCheck: this.options.skipAdvancedChecks || this.options.skipDocsCheck || false,
+            skipDocsFreshnessCheck: this.options.skipAdvancedChecks || this.options.skipDocsFreshnessCheck || false,
+            skipDeadCodeCheck: this.options.skipAdvancedChecks || this.options.skipDeadCodeCheck || false,
             skipTypeCheck: true, // Skip TypeScript check as we already ran it
             skipLintCheck: true, // Skip lint check as we already ran it
-            skipWorkflowValidation: this.options.skipWorkflowValidation || false,
+            skipWorkflowValidation: this.options.skipAdvancedChecks || this.options.skipWorkflowValidation || false,
             skipHealthCheck: true, // Skip health check as we already ran it
             ignoreAdvancedFailures: true,
             parallelChecks: true, // Enable parallel check execution
@@ -842,236 +899,153 @@ class Workflow {
           // ENHANCED ERROR COLLECTION: Ensure ALL advanced check errors are collected
           // This ensures all errors show up in the Issues & Warnings section
           
-          // First process workflowValidation specifically (most critical)
-          if (this.advancedCheckResults.workflowValidation) {
-            const validation = this.advancedCheckResults.workflowValidation;
-            if (validation.success === false || validation.status === 'error') {
-              // Extract detailed error information
-              let errorMessage = 'Workflow validation failed';
-              if (validation.data && validation.data.issues && validation.data.issues.length > 0) {
-                // Format individual issues
-                validation.data.issues.forEach(issue => {
-                  this.recordWarning(
-                    `Workflow validation error: ${issue.message || issue}`,
-                    'Validation',
-                    'Workflow Validation',
-                    'error'
-                  );
-                });
-              } else if (validation.error || validation.message) {
-                // Use general error message if no specific issues
-                this.recordWarning(
-                  `Workflow validation error: ${validation.error || validation.message}`,
-                  'Validation',
-                  'Workflow Validation',
-                  'error'
-                );
-              } else {
-                // Fallback general error
+          if (this.advancedCheckResults) {
+            // Process all advanced checks for warnings and errors
+            Object.entries(this.advancedCheckResults).forEach(([checkName, check]) => {
+              // First check for success/error flags
+              if (check.success === false || check.status === 'error') {
+                // Extract detailed error information
+                const errorMessage = check.error || check.message || `${checkName} check failed`;
                 this.recordWarning(
                   errorMessage,
                   'Validation',
-                  'Workflow Validation',
+                  checkName,
                   'error'
                 );
               }
-            }
-          }
-          
-          // Now process ALL other advanced checks to ensure completeness
-          Object.entries(this.advancedCheckResults).forEach(([checkName, check]) => {
-            // Skip already processed checks
-            if (checkName === 'workflowValidation' || checkName === 'deadCode' || 
-                checkName === 'bundleSize' || checkName === 'typescript' || 
-                checkName === 'lint' || checkName === 'docsFreshness' || 
-                checkName === 'docsQuality' || checkName === 'health') {
-              return;
-            }
-            
-            // Process warnings for the check
-            if (check.warnings && Array.isArray(check.warnings)) {
-              check.warnings.forEach(warning => {
-                this.recordWarning(
-                  typeof warning === 'string' ? warning : warning.message || JSON.stringify(warning),
-                  'Validation',
-                  checkName,
-                  'warning'
-                );
-              });
-            }
-            
-            // Process errors for the check
-            if ((check.success === false || check.status === 'error') && 
-                (check.data || check.error || check.message)) {
               
-              // Check for specific error data structures
-              if (check.data) {
-                // Extract issues/errors from data
-                if (check.data.issues && Array.isArray(check.data.issues)) {
-                  check.data.issues.forEach(issue => {
-                    this.recordWarning(
-                      `${checkName} issue: ${issue.message || issue}`,
-                      'Validation',
-                      checkName,
-                      'error'
-                    );
-                  });
-                } else if (check.data.errors && Array.isArray(check.data.errors)) {
-                  check.data.errors.forEach(error => {
-                    this.recordWarning(
-                      `${checkName} error: ${error.message || error}`,
-                      'Validation',
-                      checkName,
-                      'error'
-                    );
-                  });
-                } else if (check.data.error) {
-                  // Single error object
+              // Then process warnings array if present
+              if (Array.isArray(check.warnings) && check.warnings.length > 0) {
+                check.warnings.forEach(warning => {
                   this.recordWarning(
-                    `${checkName} error: ${check.data.error.message || check.data.error}`,
+                    warning.message || warning,
                     'Validation',
                     checkName,
-                    'error'
+                    'warning',
+                    warning.context || warning.file
                   );
-                }
-              } else if (check.error || check.message) {
-                // Direct error property
-                this.recordWarning(
-                  `${checkName} error: ${check.error || check.message}`,
-                  'Validation',
-                  checkName,
-                  'error'
-                );
+                });
               }
-            }
-          });
-          
-          // Record advanced check step
-          this.recordWorkflowStep(
-            'Advanced Checks', 
-            'Validation', 
-            true, 
-            remainingResults.duration || performanceMonitor.measure('advancedChecks')
-          );
-          
-          // ---> Define qualityErrorMsg outside the if block <-----
-          let qualityErrorMsg = null;
-          
-          // Determine overall quality check status based on the primary checker (not the additional ones)
-          if (!checkResult.success) {
-            qualityErrorMsg = checkResult.error || 'Quality checks failed without specific error message'; // Assign value here
-            this.logger.warn('Quality checks finished with warnings or errors');
-            this.logger.warn(`Specific Error: ${qualityErrorMsg}`);
-            
-            // Record the Quality Checks step itself as failed, using the specific error message
-            this.recordWorkflowStep(
-              'Quality Checks', 
-              'Validation', 
-              false, // Mark step as failed
-              Date.now() - qualityStartTime, 
-              qualityErrorMsg // Use the specific error here for the step details
-            );
-            
-            // ---> DO NOT add a separate Warning for the generic step failure <--- 
-            // The specific error is already captured in the step details and 
-            // potentially by the `generateIssues` function looking at failed steps or specific warnings from sub-modules.
-            
-          } else {
-            this.logger.success('✓ All quality checks passed');
-            this.recordWorkflowStep('Quality Checks', 'Validation', true, Date.now() - qualityStartTime);
-          }
-          
-          // ---> Process general warnings AFTER determining step success/failure <-----
-          // (This was moved from an earlier incorrect position)
-          if (checkResult.warnings && Array.isArray(checkResult.warnings) && checkResult.warnings.length > 0) {
-            this.logger.debug(`Processing ${checkResult.warnings.length} general warnings from QualityChecker...`);
-            // ---> Get the main error message if Quality Checks failed <-----
-            const qualityCheckStepError = !checkResult.success ? qualityErrorMsg : null;
-            
-            checkResult.warnings.forEach(warning => {
-              const msg = typeof warning === 'string' ? warning : warning?.message;
-              // ---> Prevent adding warnings that duplicate the main Quality Check error <-----
-              // Also skip generic phase failure messages if step context is missing
-              const isRedundantError = qualityCheckStepError && msg?.includes(qualityCheckStepError);
-              const isGenericPhaseFailure = !warning?.step && msg?.includes('Phase failed');
               
-              if (msg && !isRedundantError && !isGenericPhaseFailure) { 
-                this.recordWarning(
-                  msg,
-                  warning?.phase || 'Validation', 
-                  warning?.step || 'Quality Checks', 
-                  warning?.severity || 'warning' 
-                );
+              // Process issues array if present (often used instead of warnings)
+              if (Array.isArray(check.issues) && check.issues.length > 0) {
+                check.issues.forEach(issue => {
+                  this.recordWarning(
+                    issue.message || issue,
+                    'Validation',
+                    checkName,
+                    issue.severity || 'warning',
+                    issue.context || issue.file
+                  );
+                });
+              }
+              
+              // Process data.issues array if present (nested data structure)
+              if (check.data && Array.isArray(check.data.issues) && check.data.issues.length > 0) {
+                check.data.issues.forEach(issue => {
+                  this.recordWarning(
+                    issue.message || issue,
+                    'Validation',
+                    checkName,
+                    issue.severity || 'warning',
+                    issue.context || issue.file
+                  );
+                });
               }
             });
           }
-          // ---> END PROCESSING GENERAL WARNINGS <-----
           
-          // Log warning count for the dashboard
-          const warningCount = this.workflowWarnings.length;
-          if (warningCount > 0) {
-            this.logger.info(`Collected ${warningCount} warnings - details will be shown in dashboard`);
-          }
-        } catch (error) {
-          this.logger.error(`Advanced checks warning: ${error.message}`);
-          this.recordWarning(error.message, 'Validation', 'Advanced Checks');
-        }
+          // --- Determine Advanced Checks step success/error based on results --- 
+          advancedChecksSuccess = true; // Assume success initially
+          advancedChecksError = null;
+          
+          // Check if any advanced check failed (respecting treatAsWarning flags)
+          if (!this.options.ignoreAdvancedFailures && this.advancedCheckResults) { // Check if results exist
+               for (const [checkName, checkResult] of Object.entries(this.advancedCheckResults)) {
+                   // Default treatAsWarning to false if not specified for a check
+                   const treatAsWarning = (checkName === 'lint' && this.options.treatLintAsWarning) ||
+                                          (checkName === 'health' && this.options.treatHealthAsWarning) ||
+                                          false; // Default
+                                          
+                   // If the check object exists and explicitly failed, and is not treated as just a warning
+                   if (checkResult && checkResult.success === false && !treatAsWarning) { 
+                       advancedChecksSuccess = false; 
+                       // Prioritize the error message from the failed check
+                       advancedChecksError = checkResult.error || checkResult.message || `${checkName} check failed`; 
+                       logger.warn(`Advanced check [${checkName}] failed, marking overall Advanced Checks step as failed. Error: ${advancedChecksError}`);
+                       break; // Stop on first critical failure
+                   }
+               }
+           }
+           // --- End Determination --- 
+          
+          this.recordWorkflowStep('Advanced Checks', 'Validation', advancedChecksSuccess, Date.now() - advancedCheckStartTime, advancedChecksError);
       } catch (error) {
-        this.logger.error(`Quality checks failed: ${error.message}`);
-        this.progressTracker.completeStep(false, `Validation failed: ${error.message}`);
-        this.recordWorkflowStep('Quality Checks', 'Validation', false, Date.now() - qualityStartTime, error.message);
-        this.recordWorkflowStep('Validation Phase', 'Validation', false, Date.now() - phaseStartTime, error.message);
-        throw error;
+          // Handle errors *during* the advanced checks execution block
+          this.logger.error(`Advanced checks execution error: ${error.message}`);
+          advancedChecksError = `Advanced checks failed: ${error.message}`;
+          this.recordWarning(advancedChecksError, 'Validation', 'Advanced Checks', 'error');
+          advancedChecksSuccess = false; // Mark as failed
+          if(!this.workflowSteps.has('Advanced Checks')) {
+              const duration = Date.now() - advancedCheckStartTime;
+              // Always record a minimum duration of 1ms to avoid zero timing issues
+              this.recordWorkflowStep('Advanced Checks', 'Validation', false, Math.max(duration, 1), advancedChecksError);
+          }
       }
-      
-      // Cache validation results if enabled
-      // --- DISABLED CACHING ---
-      /*
-      if (!this.options.noCache) {
-        const { saveValidationCache } = await import('./workflow/workflow-cache.js');
-        const cacheKey = await generateCacheKey('validation', [
-          'package.json',
-          'tsconfig.json',
-          '.eslintrc.js',
-          '.eslintignore'
-        ]);
-        
-        // ---> DEBUG: Log data before saving validation cache
-        this.logger.debug('--- SAVING VALIDATION CACHE ---');
-        this.logger.debug(`Cache Key: ${cacheKey}`);
-        this.logger.debug(`Advanced Checks: ${JSON.stringify(this.advancedCheckResults).substring(0, 200)}...`);
-        this.logger.debug(`Warnings: ${this.workflowWarnings.length}`);
-        this.logger.debug(`Test Results: ${JSON.stringify(this.metrics.testResults)}`);
-        // Pass this.options which should contain metrics
-        await saveValidationCache(
-          this.cache, 
-          cacheKey, 
-          this.advancedCheckResults, 
-          this.workflowSteps,
-          this.workflowWarnings,
-          this.options // Pass the whole options object containing metrics
-        );
-      }
-      */
-      // --- END DISABLED CACHING ---
-      
-      this.progressTracker.completeStep(true, 'Validation completed');
-      this.recordWorkflowStep('Validation Phase', 'Validation', true, Date.now() - phaseStartTime);
 
-      // Calculate phase duration
-      const phaseEndTime = Date.now();
-      this.metrics.phaseDurations.validation = phaseEndTime - phaseStartTime;
+      // --- Finalize Validation Phase Status Recording --- 
+      let overallSuccess = advancedChecksSuccess && testStepSuccess; 
+      let overallError = null; 
       
-      return true;
+      if (!testStepSuccess) {
+          overallError = testStepError || 'Test Execution failed'; 
+      } else if (!advancedChecksSuccess) {
+          overallError = advancedChecksError || 'Advanced checks failed';
+      } 
+       
+      logger.debug(`--- Final Validation Phase Status Check ---`);
+      logger.debug(`testStepSuccess: ${testStepSuccess}, testStepError: ${testStepError}`);
+      logger.debug(`advancedChecksSuccess: ${advancedChecksSuccess}, advancedChecksError: ${advancedChecksError}`);
+      logger.debug(`Calculated overallSuccess: ${overallSuccess}, overallError: ${overallError}`);
+
+      this.progressTracker.completeStep(overallSuccess, `Validation phase completed${overallSuccess ? '' : ' with issues'}`);
+      this.recordWorkflowStep('Validation Phase', 'Validation', overallSuccess, Date.now() - phaseStartTime, overallError); 
+      
     } catch (error) {
-      this.progressTracker.completeStep(false, `Validation failed: ${error.message}`);
-      this.recordWorkflowStep('Validation Phase', 'Validation', false, Date.now() - phaseStartTime, error.message);
-      throw error;
+        // Outer catch handles errors from Package Analysis etc.
+         this.progressTracker.completeStep(false, `Validation failed: ${error.message}`);
+         if (!this.workflowSteps.get('Validation Phase')?.success) { // Check if phase already marked failed
+             this.recordWorkflowStep('Validation Phase', 'Validation', false, Date.now() - phaseStartTime, error.message);
+         }
+         this.logger.error('\nValidation Phase Failed:');
+         this.logger.error(`➤ ${error.message}`);
+         if (error.output) {
+             this.logger.error('\nCommand Output:');
+             this.logger.error(error.output);
+         }
+         throw error;
     }
+    
+    // Calculate phase duration
+    const phaseEndTime = Date.now();
+    this.metrics.phaseDurations.validation = phaseEndTime - phaseStartTime;
+    this.metrics.duration = phaseEndTime - this.metrics.setupStart;
   }
 
   /**
-   * Build Phase
+   * Executes the build phase of the workflow.
+   * Builds the 'admin' and 'hours' packages in parallel.
+   * Records build metrics (duration, size, file count, success/error) for each package.
+   * Calculates overall build performance metrics.
+   * Skips execution if `this.options.skipBuild` is true.
+   * Calculates and records the total build phase duration in `this.metrics.phaseDurations.build`,
+   * regardless of build success or failure.
+   * 
+   * @async
+   * @returns {Promise<Object|undefined>} A promise that resolves with an object containing the 
+   *                                      metrics for each built package (keyed by package name), 
+   *                                      or undefined if the build is skipped.
+   * @throws {Error} If any package build fails and `this.options.ignoreBuildFailures` (or similar) is not set.
    */
   async build() {
     this.progressTracker.startStep('Build Phase');
@@ -1221,12 +1195,12 @@ class Workflow {
       this.recordWorkflowStep('Package Build', 'Build', false, 0, error.message);
       this.recordWorkflowStep('Build Phase', 'Build', false, Date.now() - phaseStartTime, error.message);
       throw error;
+    } finally {
+      // Calculate phase duration
+      const phaseEndTime = Date.now();
+      this.metrics.phaseDurations.build = phaseEndTime - phaseStartTime;
     }
 
-    // Calculate phase duration
-    const phaseEndTime = Date.now();
-    this.metrics.phaseDurations.build = phaseEndTime - phaseStartTime;
-    
     // Return the package metrics
     return this.metrics.packageMetrics; 
   }
@@ -1370,12 +1344,14 @@ class Workflow {
       
       // Store channel cleanup results in metrics
       this.metrics.channelCleanup = {
+        status: cleanupResult.success ? 'success' : 'error',
         success: cleanupResult.success,
         sitesProcessed: Object.keys(cleanupResult.stats || {}).length,
         totalChannels: Object.values(cleanupResult.stats || {}).reduce((sum, stat) => sum + (stat?.found || 0), 0),
         channelsKept: Object.values(cleanupResult.stats || {}).reduce((sum, stat) => sum + (stat?.kept || 0), 0),
-        channelsDeleted: cleanupResult.deletedCount || 0,
-        totalErrors: cleanupResult.totalErrors || 0,
+        cleanedChannels: cleanupResult.deletedCount || 0,
+        failedChannels: cleanupResult.totalErrors || 0,
+        skippedChannels: Object.values(cleanupResult.stats || {}).reduce((sum, stat) => sum + (stat?.skipped || 0), 0),
         // Add the preview comparison data for the dashboard
         previewComparison: cleanupResult.previewComparison || {},
         // Add site-specific data for the dashboard
@@ -1418,7 +1394,8 @@ class Workflow {
       const dashboardResult = await generateWorkflowDashboard(this, {
         isCI: process.env.CI === 'true',
         outputPath: join(process.cwd(), 'dashboard.html'),
-        noOpen: process.env.CI === 'true'
+        noOpen: process.env.CI === 'true',
+        verbose: this.options.verbose
       });
       
       if (dashboardResult.success) {

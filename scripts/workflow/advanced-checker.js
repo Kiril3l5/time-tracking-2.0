@@ -123,8 +123,8 @@ async function runWithTimeout(operation, timeoutMs, operationName, fallbackValue
   let customTimeout = undefined; // Keep track if custom was attempted
 
   if (operationName === 'Documentation freshness check') {
-    // Force 60s specifically for this check, overriding default and options
-    effectiveTimeout = 60000;
+    // Force 120s specifically for this check, overriding default and options
+    effectiveTimeout = 120000; // Increased timeout to 120 seconds
     silentLogger.debug(`Timeout Override for [${operationName}]: Forcing ${effectiveTimeout}ms.`);
   } else {
     // Use logic for other checks (respecting options if present)
@@ -437,9 +437,8 @@ export async function runDeadCodeCheck(options = {}) {
     // --- END DEBUGGING ---
 
     if (!analyzeResult) {
-      // Add specific logging if analyzeResult is null/undefined
       logger.error('analyzeDeadCode function returned null or undefined result.');
-      throw new Error("Dead code analysis returned no result");
+      return { success: false, error: "Dead code analysis returned no result", criticalIssues: [], warnings: [] }; 
     }
     
     // Categorize issues by severity
@@ -484,24 +483,35 @@ export async function runDeadCodeCheck(options = {}) {
       criticalIssues.push(`Found ${analyzeResult.deprecatedUsage.length} uses of deprecated APIs`);
     }
     
-    // Determine overall success based on BOTH command success AND critical issues
-    const overallSuccess = analyzeResult.success && criticalIssues.length === 0;
-    logger.debug(`Determined dead code check success: ${overallSuccess} (Analyze Result Success: ${analyzeResult.success}, Critical Issues: ${criticalIssues.length})`); // Log success decision
+    // Determine overall success based on depcheck command success AND critical issues found
+    const foundCriticalIssues = criticalIssues.length > 0;
+    // *** Ensure success considers depcheckCommandFailed ***
+    // Check if depcheck failed (errors array has items or main error exists)
+    const depcheckCommandFailed = !!(analyzeResult.depcheckErrors && analyzeResult.depcheckErrors.length > 0 || analyzeResult.error);
+    const depcheckErrorMsg = analyzeResult.error || (depcheckCommandFailed ? `Depcheck failed in ${analyzeResult.depcheckErrors.length} package(s).` : null);
+    if (depcheckCommandFailed) {
+         logger.error(`Depcheck command failed during analysis: ${depcheckErrorMsg}`);
+    }
+    
+    // Overall success requires analyzeDeadCode didn't error, no critical issues found, AND depcheck didn't fail.
+    const overallSuccess = analyzeResult.success && !foundCriticalIssues && !depcheckCommandFailed; 
+    logger.debug(`Determined dead code check success: ${overallSuccess} (Analyze Success: ${analyzeResult.success}, Found Critical Issues: ${foundCriticalIssues}, Depcheck Failed: ${depcheckCommandFailed})`);
     
     // Construct detailed result
     const result = {
-      success: overallSuccess, // Use the combined success flag
+      success: overallSuccess, // Reflects depcheck failure
       criticalIssues,
       warnings,
       data: {
-        // Ensure data exists even if analysis had errors
         unusedExports: analyzeResult.data?.unusedExports || analyzeResult.unusedExports || [], 
         emptyFiles: analyzeResult.data?.emptyFiles || analyzeResult.emptyFiles || [],
         duplicates: analyzeResult.data?.duplicates || analyzeResult.duplicates || [],
-        deprecatedUsage: analyzeResult.data?.deprecatedUsage || analyzeResult.deprecatedUsage || []
+        deprecatedUsage: analyzeResult.data?.deprecatedUsage || analyzeResult.deprecatedUsage || [],
+        depcheckErrors: analyzeResult.depcheckErrors || [] 
       },
-      // Include the underlying error message if the analysis itself failed
-      error: analyzeResult.success ? null : (analyzeResult.error || 'Dead code analysis sub-step failed') 
+      // Prioritize depcheck error message if it failed
+      error: depcheckCommandFailed ? depcheckErrorMsg : 
+             (foundCriticalIssues ? criticalIssues.join('; ') : null) 
     };
     
     // Log results

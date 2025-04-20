@@ -13,7 +13,7 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
-    "isolatedModules": true,
+    "isolatedModules": false,
     "noEmit": true,
     "jsx": "react-jsx",
     "strict": true,
@@ -34,9 +34,15 @@
     "packages/*/tests/**/*.ts",
     "packages/*/tests/**/*.tsx",
     "packages/*/src/tests/**/*.ts",
-    "packages/*/src/tests/**/*.tsx"
+    "packages/*/src/tests/**/*.tsx",
+    "scripts",
+    "*.config.ts",
+    "knip.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "dist",
+    "coverage",
+    "temp"
   ]
 }

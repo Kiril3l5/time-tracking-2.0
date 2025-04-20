@@ -55,10 +55,9 @@ import { verifyAuth } from './auth/auth-manager.js';
 import { runTests } from './checks/test-runner.js';
 import { runLintCheck } from './checks/lint-check.js';
 import { runTypeScriptCheck } from './checks/typescript-check.js';
-import { validateTypes } from './typescript/type-validator.js';
 
 // Import Firebase modules
-import { deployToFirebase } from './firebase/deployment.js';
+import { deployToFirebase } from './workflow/deployment-manager.js';
 
 // Import build modules
 import { buildPackages } from './build/build-manager.js';
