@@ -44,14 +44,17 @@ If any of these steps fail, fix the issues before proceeding.
 Before pushing to GitHub, you can test your changes locally using our preview script:
 
 ```bash
-# Run the preview script (includes linting, type checking, building, and deploying)
-pnpm run preview
+# Run the automated workflow (includes linting, type checking, building, and deploying)
+pnpm run workflow
 
-# To run a quicker preview (skipping certain checks)
-pnpm run preview --skip-lint --skip-tests
+# To run a quicker workflow (skipping certain checks)
+pnpm run workflow --skip-tests
 
 # To run without deploying (just build and check)
-pnpm run preview:clean
+# Note: This requires running build and checks separately or adjusting workflow options
+pnpm run build:all && pnpm run lint && pnpm run test
+# Or use workflow flags:
+pnpm run workflow --skip-deploy
 ```
 
 The preview script creates temporary preview URLs for both the admin and hours portals:
@@ -76,7 +79,7 @@ Once local testing is successful, you can either:
 
 2. **Use the automated workflow:**
    ```bash
-   # Run the automated workflow which handles PR creation
+   # Run the automated workflow which handles commit/push options
    pnpm run workflow
    ```
 
@@ -168,7 +171,7 @@ The deployment workflow has received several optimizations:
 
 4. **Build Optimization**
    - Eliminated double build with skipBuild option
-   - Sequential package building with `pnpm run build:all` to ensure proper dependency handling
+   - Parallel package building using Promise.all in the workflow script
    - Platform-specific clean commands for Windows and Unix systems
    - Build artifact verification before deployment
    - Resource-aware scheduling

@@ -210,7 +210,8 @@ export class DashboardGenerator {
           ? (data.metrics.deploymentStatus.status)
           : (data.metrics?.deploymentStatus)),
         channelCleanup: data.metrics?.channelCleanup || { status: 'pending', cleanedChannels: 0, failedChannels: 0 },
-        dashboardPath: data.metrics?.dashboardPath || null
+        dashboardPath: data.metrics?.dashboardPath || null,
+        previousPreview: data.metrics?.previousPreview || {}
       };
       logger.debug('Normalized metrics.phaseDurations:', JSON.stringify(normalizedMetrics.phaseDurations));
       logger.debug('Normalized metrics.testResults:', JSON.stringify(normalizedMetrics.testResults));
@@ -220,7 +221,7 @@ export class DashboardGenerator {
       }
     }
     
-    // Normalize preview URLs
+    // Normalize preview URLs - *** INCLUDE PREVIOUS PREVIEW ***
     const normalizedPreview = data.preview ? {
       admin: {
         url: data.preview.admin?.url || '',
@@ -229,8 +230,18 @@ export class DashboardGenerator {
       hours: {
         url: data.preview.hours?.url || '',
         status: this.normalizeStatus(data.preview.hours?.status)
-      }
+      },
+      // Add previous preview data if it exists in metrics
+      previousAdmin: data.metrics?.previousPreview?.admin ? {
+          url: data.metrics.previousPreview.admin.url || '',
+          status: this.normalizeStatus(data.metrics.previousPreview.admin.status)
+      } : null,
+      previousHours: data.metrics?.previousPreview?.hours ? {
+          url: data.metrics.previousPreview.hours.url || '',
+          status: this.normalizeStatus(data.metrics.previousPreview.hours.status)
+      } : null
     } : null;
+    // *** END PREVIOUS PREVIEW FIX ***
     
     // Normalize advanced checks - **Ensure duration is preserved**
     const normalizedAdvancedChecks = {};
@@ -578,7 +589,11 @@ export class DashboardGenerator {
       <div class="preview-card">
         <h3>${this.escapeHtml(name)}</h3>
         <p>Status: <span class="status ${statusClass}">${status}</span></p>
-        ${data.url ? `<a href="${this.escapeHtml(data.url)}" class="preview-link" target="_blank">${this.escapeHtml(data.url)}</a>` : ''}
+        ${data.url ? `<a href="${this.escapeHtml(data.url)}" class="preview-link current-link" target="_blank">Current: ${this.escapeHtml(data.url)}</a>` : ''}
+        ${this.data.preview?.previousAdmin && name === 'Admin' && this.data.preview.previousAdmin.url ? 
+          `<a href="${this.escapeHtml(this.data.preview.previousAdmin.url)}" class="preview-link previous-link" target="_blank">Previous: ${this.escapeHtml(this.data.preview.previousAdmin.url)}</a>` : ''}
+        ${this.data.preview?.previousHours && name === 'Hours' && this.data.preview.previousHours.url ? 
+          `<a href="${this.escapeHtml(this.data.preview.previousHours.url)}" class="preview-link previous-link" target="_blank">Previous: ${this.escapeHtml(this.data.preview.previousHours.url)}</a>` : ''}
         ${data.timestamp ? `<p class="timestamp">Last updated: ${new Date(data.timestamp).toLocaleString()}</p>` : ''}
       </div>
     `;
@@ -1017,6 +1032,11 @@ export class DashboardGenerator {
       .preview-card h3 { margin-top: 0; margin-bottom: 10px; }
       .preview-link { display: block; word-wrap: break-word; margin: 8px 0; color: #2563eb; text-decoration: none; font-size: 0.9em; }
       .preview-link:hover { text-decoration: underline; }
+      .preview-link.previous-link {
+        color: var(--text-secondary); /* Use grey color */
+        opacity: 0.85; /* Slightly fade it */
+        font-size: 0.85em; /* Make it a bit smaller */
+      }
       .preview-card .timestamp { font-size: 0.8em; color: var(--text-secondary); margin-top: 10px; }
       
       .overall-status .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 15px; margin-bottom: 20px; }

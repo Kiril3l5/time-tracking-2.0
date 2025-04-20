@@ -213,9 +213,7 @@ The project documentation is organized into the following categories:
 
 ### Testing & Quality
 - [Testing Strategy](./docs/testing/testing-strategy.md)
-- [Unit Testing Guide](./docs/testing/unit-testing-guide.md)
-- [E2E Testing Guide](./docs/testing/e2e-testing-guide.md)
-- [Performance Testing](./docs/testing/performance-testing.md)
+<!-- Other testing docs (Unit, E2E, Performance) planned -->
 
 ### Deployment & Workflow
 - [Preview Deployment Guide](./docs/workflow/preview-deployment-guide.md)

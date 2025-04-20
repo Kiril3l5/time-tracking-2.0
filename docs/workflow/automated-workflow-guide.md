@@ -162,6 +162,7 @@ The local workflow progresses through six distinct phases:
   - Linting with ESLint (runs in parallel)
   - Type checking with TypeScript (runs in parallel)
   - Tests with Vitest
+    - **Note:** Currently, the tests executed by Vitest (`pnpm test`) are primarily placeholders (e.g., `dummy.test.ts`, `basic.test.ts`). These need to be replaced with meaningful unit and integration tests covering application logic and components as development progresses.
 - Performs advanced checks:
   - Documentation quality and freshness
   - Dead code detection

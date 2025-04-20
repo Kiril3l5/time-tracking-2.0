@@ -104,23 +104,32 @@ const LoginForm = ({
     
     try {
       setIsSubmitting(true);
-      await login(email, password, rememberMe);
+      await login(email, password);
       
+      // Store email if "Remember me" is checked
+      if (rememberMe) {
+        localStorage.setItem('rememberedUser', email);
+      } else {
+        localStorage.removeItem('rememberedUser');
+      }
+      // Always store the last logged-in user for potential biometric use
+      localStorage.setItem('lastUser', email);
+
       // Redirect
       if (redirectUrl) {
         window.location.href = redirectUrl;
       }
     } catch (err: unknown) {
-      // Handle different error codes
-      const errorMessage = err && typeof err === 'object' && 'code' in err
-        ? err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' 
-          ? 'Invalid email or password'
-          : err.code === 'auth/too-many-requests'
-            ? 'Too many failed login attempts. Please try again later.'
-            : 'An error occurred during login. Please try again.'
-        : 'An error occurred during login. Please try again.';
-      
-      setError(errorMessage);
+      // Check if it's the specific service unavailable error
+      if (err instanceof Error && err.message === "Authentication service is not available.") {
+        setError("Login service is currently unavailable. Please try again later.");
+      } else {
+        // Handle other Firebase auth errors
+        const errorMessage = err && typeof err === 'object' && 'code' in err
+          ? getFirebaseErrorMessage(err.code as string)
+          : 'An unexpected error occurred during login.';
+        setError(errorMessage);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -301,6 +310,25 @@ const LoginForm = ({
       )}
     </div>
   );
+};
+
+// Helper function to map Firebase error codes to user-friendly messages
+const getFirebaseErrorMessage = (code: string): string => {
+  switch (code) {
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential': // Catch all invalid credential errors
+      return 'Invalid email or password.';
+    case 'auth/too-many-requests':
+      return 'Too many failed login attempts. Please try again later or reset your password.';
+    case 'auth/network-request-failed':
+      return 'Network error. Please check your internet connection.';
+    case 'auth/user-disabled':
+      return 'This account has been disabled.';
+    default:
+      console.error('Unhandled Firebase Auth Error Code:', code); // Log unhandled codes
+      return 'An unexpected error occurred during login.';
+  }
 };
 
 export default LoginForm; 

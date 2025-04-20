@@ -11,15 +11,15 @@
  * @module checks/doc-freshness
  */
 
-import fs from 'fs/promises';
-import path from 'path';
-import * as glob from 'glob';
 import { logger } from '../core/logger.js';
 import { commandRunner } from '../core/command-runner.js';
 import { ErrorAggregator, ValidationError } from '../core/error-handler.js';
-import { isCI, getEnvironmentType } from '../core/environment.js';
+import { isCI } from '../core/environment.js';
 import { getCurrentBranch } from '../workflow/branch-manager.js'; // Import function to get current branch
 import { fileURLToPath } from 'url'; // Added missing import
+import path from 'path'; // Ensure path is imported
+import fs from 'fs/promises'; // Ensure fs/promises is imported
+import * as glob from 'glob'; // Ensure glob is imported
 
 /* global process */
 
@@ -206,7 +206,7 @@ export async function checkDocumentation(options = {}) {
     // 2. Separate changed source files and doc files
     const changedSourceFiles = changedFiles.filter(f => SOURCE_EXTENSIONS.some(ext => f.endsWith(ext)));
     const changedDocFiles = changedFiles.filter(f => 
-        DOC_PATTERNS.some(pattern => glob.sync(f, { matchBase: true }).length > 0) && f.endsWith('.md')
+        DOC_PATTERNS.some(_pattern => glob.sync(f, { matchBase: true }).length > 0) && f.endsWith('.md')
     );
 
     if (verbose && !silent) {

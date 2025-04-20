@@ -20,7 +20,6 @@
 
 import { logger } from '../core/logger.js';
 import { commandRunner } from '../core/command-runner.js';
-import { progressTracker } from '../core/progress-tracker.js';
 import fs from 'fs';
 import path from 'path';
 import fsPromises from 'fs/promises';
@@ -345,8 +344,9 @@ export async function runStandardTests(options = {}) {
                 
                 // Build a simple test files array from the output
                 if (passedFilesMatch && totalFilesMatch) {
-                  const passedFiles = parseInt(passedFilesMatch[1], 10);
-                  const totalFiles = parseInt(totalFilesMatch[1], 10);
+                  // Prefix unused variables
+                  const _passedFiles = parseInt(passedFilesMatch[1], 10);
+                  const _totalFiles = parseInt(totalFilesMatch[1], 10);
                   
                   // Extract file paths from output
                   const fileRegex = /✓\s+([\w/.]+\.test\.[jt]sx?)/g;

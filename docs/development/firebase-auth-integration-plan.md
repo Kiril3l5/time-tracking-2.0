@@ -2,34 +2,35 @@
 
 ## Overview
 
-This document outlines the plan for integrating Firebase Authentication into the Time Tracking 2.0 application, supporting both the admin portal (for managers) and hours portal (for workers) with biometric authentication for mobile devices.
+This document outlines the plan and current implementation for Firebase Authentication in the Time Tracking 2.0 application, supporting both the admin portal (for managers) and hours portal (for workers).
 
-**Last Updated**: 2024-06-15 (Updated during implementation)  
-**Status**: In Progress  
-**Author**: Claude  
+**Last Updated**: 2024-06-16 (Reflected state management refactor)
+**Status**: In Progress (Core Refactor Complete)  
+**Author**: Claude / Gemini
 
 ## Implementation Progress
 
-### Completed (Phase 1: Core Authentication)
+### Completed
 - ✅ Enhanced auth service with persistence strategy
-- ✅ Enhanced auth hooks for better role-based access control 
-- ✅ Created AuthProvider in common package
-- ✅ Created ProtectedRoute components
 - ✅ Created responsive LoginForm component
 - ✅ Created responsive RegisterForm component
 - ✅ Added basic biometric authentication capability detection
 - ✅ Created comprehensive database schema documentation ([Database Schema](../schema/database-schema.md))
 - ✅ Created permissions system documentation ([Permissions System](../schema/permissions-system.md))
+- ✅ **Refactored State Management**: Centralized auth state (user, profile, loading) in Zustand (`useAuthStore`).
+- ✅ **Refactored Auth Context**: `AuthProvider` now provides only auth *actions* (login, register, logout) via `useAuth` hook.
+- ✅ **Implemented Central Listener**: `App.tsx` listener updates Zustand state and fetches Firestore user data (`User` type).
+- ✅ **Updated Registration**: `register` action in `AuthProvider` now creates Firestore document matching `User` type.
+- ✅ **Enabled Role Hooks**: Zustand hooks (`useIsAdmin`, `useIsManager`, `useIsWorker`) are functional based on Firestore `User.role`.
 
 ### In Progress
-- 🔄 Implementing capability to store user credentials for biometric login
-- 🔄 Preparing for portal integration
-- 🔄 Updating registration implementation to create all required user documents
+- 🔄 Portal Integration: Implementing login/register pages in specific portals.
+- 🔄 Biometric Authentication: Implementing credential storage and actual biometric login flow.
+- 🔄 User profile management UI.
 
 ### Pending
-- Portal-specific login pages
-- User profile management
-- Biometric authentication testing
+- Biometric authentication testing across platforms.
+- Advanced features (2FA, Google Sign-in, etc.)
 
 ## 1. Current Infrastructure Analysis
 
@@ -115,26 +116,51 @@ The project already has Firebase security rules in place with:
 
 ## 4. Implementation Plan
 
-### 4.1 Common Package Authentication Module ✅
+### 4.1 Common Package Authentication Module (`packages/common`)
 
-Location: `packages/common/src/firebase/auth/`
+1.  **Firebase Core Initialization (`src/firebase/core/firebase.ts`)** ✅
+    *   Initializes Firebase app, Auth, Firestore (db), etc.
+    *   Exports `auth` and `db` instances.
 
-1. **Firebase Auth Configuration** ✅
-   - Enhanced `auth-service.ts` with persistence options
-   - Added token refresh handling
+2.  **Authentication Actions Context (`src/providers/AuthProvider.tsx`)** ✅
+    *   Provides a React Context (`AuthContext`) focused *solely* on authentication **actions**.
+    *   Exports the `AuthProvider` component to wrap parts of the app needing actions.
+    *   Exports the `useAuth` hook for components to access actions: `login`, `register`, `logout`, `resetPassword`.
+    *   The `register` action includes logic to create the corresponding Firestore document (`User` type) after successful Firebase Auth user creation.
+    *   **Does NOT manage state directly.** State is handled by the Zustand store.
 
-2. **Authentication Context** ✅
-   - Created `AuthProvider.tsx` for React context
-   - Implemented authentication state tracking
-   - Provided login/logout methods
+3.  **Authentication State (Zustand Store)** ✅
+    *   (See Section 4.1.1 below for details)
 
-3. **Role Management** ✅
-   - Implemented role verification utilities
-   - Added permission checks
+4.  **Firestore Types (`src/types/firestore.ts`)** ✅
+    *   Defines the `User` interface, which is the source of truth for the structure of user data stored in Firestore.
+    *   Defines other relevant Firestore data structures (e.g., `TimeEntry`).
 
-4. **Biometric Authentication Utility** ✅
-   - Added platform-specific biometric auth detection
-   - Added secure credential storage foundation
+5.  **(Deprecated) Role/Permission Utilities (`src/firebase/auth/`, `src/utils/permissions`)** ⚠️
+    *   Older utility functions for role/permission checks might exist but should be superseded by the Zustand-based role selector hooks (`useIsAdmin`, etc.) where applicable.
+    *   Review and potentially deprecate/remove if replaced by Zustand selectors.
+
+6.  **Biometric Auth Utilities (`src/firebase/auth/auth-service.ts`)** ✅
+    *   Includes functions for biometric capability detection (`isBiometricAvailable`, `isBiometricEnabled`).
+    *   Includes helpers for credential persistence (`getRememberedUser`, `getLastUser`).
+    *   Will be expanded for actual biometric login flow.
+
+### 4.1.1 Zustand Authentication Store (`src/store/useAuthStore.ts`) ✅
+
+*   **Purpose**: Serves as the single source of truth for global authentication **state** across the application.
+*   **State Managed**:
+    *   `user: FirebaseUser | null`: The current Firebase Auth user object.
+    *   `userProfile: User | null`: The corresponding Firestore user data (conforming to the `User` type from `types/firestore.ts`).
+    *   `isLoading: boolean`: Tracks the initial auth state loading.
+    *   `isAuthenticated: boolean`: Derived state indicating if a user is logged in.
+    *   `error: string | null`: Stores any auth-related errors.
+*   **Updating**: The store state is primarily updated by the central `onAuthStateChanged` listener located in `packages/hours/src/App.tsx`.
+*   **Accessing State**: Components access the state reactively using selector hooks:
+    *   `useAuthStatus()`: Returns `{ isLoading, isAuthenticated }`.
+    *   `useCurrentUser()`: Returns the Firebase `User` object.
+    *   `useCurrentUserProfile()`: Returns the Firestore `User` data object.
+    *   `useIsAdmin()`, `useIsManager()`, `useIsWorker()`: Return boolean based on the `role` in the `userProfile` state.
+*   **Accessing Actions**: The central listener uses `useAuthActions()` to get store actions (`setUser`, `setUserProfile`, `setLoading`, `setError`).
 
 ### 4.2 Protected Route Components ✅
 
@@ -168,21 +194,20 @@ Location: `packages/common/src/components/auth/`
 4. **Profile Management Component** ⏳
    - (Pending implementation)
 
-### 4.4 Authentication Hooks ✅
+### 4.4 Authentication Hooks
 
-Location: `packages/common/src/firebase/auth/`
+Two primary sets of hooks facilitate interaction with the authentication system:
 
-1. **Enhanced useAuth Hook** ✅
-   - Improved hook for easier consumption
-   - Added authentication status and methods
+1.  **Auth Action Hook (`packages/common/src/providers/AuthProvider.tsx`)** ✅
+    *   `useAuth()`: Provides access to the authentication **action** functions (`login`, `register`, `logout`, `resetPassword`) defined in the `AuthProvider` context. Used by components that need to trigger these actions (e.g., `LoginForm`, `RegisterForm`).
 
-2. **useAuthState Hook** ✅
-   - Added methods to track authentication state
-   - Handle loading states
-
-3. **usePermissions and useRole Hooks** ✅
-   - Added checks for user permissions
-   - Added verification for role-based access
+2.  **Auth State Hooks (`packages/common/src/store/useAuthStore.ts`)** ✅
+    *   These hooks select specific pieces of **state** from the global Zustand store.
+    *   `useAuthStatus()`: Selects `{ isLoading, isAuthenticated }`. Used for routing and conditional rendering.
+    *   `useCurrentUser()`: Selects the Firebase Auth `User` object.
+    *   `useCurrentUserProfile()`: Selects the Firestore `User` data object.
+    *   `useIsAdmin()`, `useIsManager()`, `useIsWorker()`: Select boolean based on the `role` field in the Firestore `User` data. Used for role-based UI/feature control.
+    *   `useAuthActions()`: Selects the store's internal actions (`setUser`, `setUserProfile`, etc.). Primarily used internally by the central `onAuthStateChanged` listener in `App.tsx`.
 
 ### 4.5 Admin Portal Integration ⏳
 
@@ -197,18 +222,19 @@ Location: `packages/admin/src/`
 3. **Admin-specific Auth UI** ⏳
    - (Pending implementation)
 
-### 4.6 Hours Portal Integration ⏳
+### 4.6 Hours Portal Integration (`packages/hours`)
 
-Location: `packages/hours/src/`
+1.  **Auth Provider Integration & Listener** ✅
+    *   The root component `App.tsx` now wraps the application's router with `<AuthProvider>` from `@common`. This makes authentication actions (`useAuth`) available to components within the portal.
+    *   `App.tsx` also contains the central `onAuthStateChanged` listener that updates the global Zustand store (`useAuthStore`) with the current auth state and Firestore user data.
 
-1. **Auth Provider Integration** ⏳
-   - (Pending implementation)
+2.  **Protected Routes Setup** ✅
+    *   `App.tsx` uses the `RequireAuth` component (which checks state via `useAuthStatus` from Zustand) to protect application routes like `/time`, `/dashboard`, `/history`, `/reports`.
 
-2. **Protected Routes Setup** ⏳
-   - (Pending implementation)
-
-3. **Worker-specific Auth UI** ⏳
-   - (Pending implementation)
+3.  **Worker-specific Auth UI** 🔄
+    *   Login/Registration pages (`LoginPage.tsx`, `RegisterPage.tsx`) exist.
+    *   These pages utilize the common `LoginForm` and `RegisterForm` components.
+    *   Need to ensure these pages correctly use the `useAuth()` hook to call `login`/`register` actions.
 
 ### 4.7 Mobile Biometric Authentication ⏳
 
@@ -224,98 +250,47 @@ Location: `packages/hours/src/`
 
 ## 5. Integration with Existing Firebase Rules
 
-The authentication implementation will utilize the existing Firebase security rules with minimal changes:
+The authentication implementation utilizes existing Firebase security rules and interacts with Firestore user documents.
 
-### 5.1 User Document Structure
+### 5.1 User Document Structure (`users` collection)
 
-Based on our [Database Schema](../schema/database-schema.md), user documents in Firestore will include:
+The structure of documents stored in the `/users/{userId}` collection should align with the `User` interface defined in `packages/common/src/types/firestore.ts`. The key fields include:
 
-```javascript
-{
-  id: string,           // Firebase Auth UID
-  email: string,        // User email
-  firstName: string,    // First name
-  lastName: string,     // Last name
-  companyId: string,    // Associated company ID
-  managerId: string,    // Manager's user ID or "No Manager"
-  role: string,         // "user", "manager", "admin", or "superadmin" 
-  permissions: {        // Detailed permissions as documented in Permissions System
-    approveTime: boolean,
-    assignManagers: boolean,
-    // ... other permissions
-  },
-  settings: {           // UI settings (duplicates permissions)
-    // ... same structure as permissions
-  },
-  profile: {            // User profile details
-    department: string,
-    position: string,
-    location: string,
-    phoneNumber: string,
-    employmentType: string,
-    hireDate: timestamp
-  },
-  billingRate: {        // Billing rates
-    standardRate: number,
-    overtimeRate: number,
-    ptoRate: number
-  },
-  assignedWorkers: [],  // Array of worker UIDs (for managers)
-  managerInfo: {        // Additional manager capabilities
-    canApproveOvertime: boolean,
-    departmentsManaged: [],
-    maxApprovalAmount: number
-  },
-  metadata: {           // Record metadata
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    lastLoginAt: timestamp,
-    createdBy: string,
-    version: number
-  },
-  active: boolean,      // Whether user is active
-  status: string        // User status ("active", "inactive", "pending")
+```typescript
+// Path: packages/common/src/types/firestore.ts
+export interface User {
+  // NOTE: The document ID in Firestore IS the Firebase Auth UID (userId).
+  // The 'id' field below might be redundant if always equal to the doc ID.
+  id: string; 
+  email: string; 
+  firstName: string;
+  lastName: string;
+  companyId: string;
+  managerId?: string; // Optional manager relationship
+  role: 'user' | 'manager' | 'admin' | 'superadmin'; // Role identifier
+  permissions: string[]; // List of specific permission strings (if used)
+  isActive: boolean; // Account status
+  lastLoginAt?: Date | string; // Timestamp of last login (ISO String recommended)
+  createdAt: Date | string; // Timestamp of creation (ISO String recommended)
+  updatedAt: Date | string; // Timestamp of last update (ISO String recommended)
+  metadata?: { // Optional metadata
+    registrationMethod: string;
+    registrationTime: string;
+    userAgent?: string;
+    [key: string]: unknown;
+  };
 }
 ```
 
-Additionally, we will create related documents in `userSettings` and `userStats` collections during registration. See the [Database Schema](../schema/database-schema.md) for complete details on these collections.
+*   The `register` function in `AuthProvider` creates documents with this structure (excluding `id` and `updatedAt`).
+*   The `onAuthStateChanged` listener in `App.tsx` fetches documents matching this structure.
+*   Security rules (`firestore.rules`) reference fields like `role`, `companyId`, `managerId` to enforce access control.
 
-### 5.2 Custom Claims for Role Management
+### 5.2 Security Rule Considerations
 
-Implement Firebase Functions to set custom claims:
-```javascript
-// functions/src/auth/setUserRole.js
-exports.setUserRole = functions.https.onCall(async (data, context) => {
-  // Verify admin permission
-  if (!context.auth || !(await isAdmin(context.auth.uid))) {
-    throw new functions.https.HttpsError('permission-denied', 'Only admins can set roles');
-  }
-  
-  const { uid, role, permissions } = data;
-  
-  // Validate role
-  if (!['user', 'manager', 'admin', 'superadmin'].includes(role)) {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid role');
-  }
-  
-  // Set custom claims
-  await admin.auth().setCustomUserClaims(uid, { 
-    role,
-    permissions: permissions || {}
-  });
-  
-  // Update Firestore document with role and permissions
-  await admin.firestore().collection('users').doc(uid).update({
-    role,
-    permissions: permissions || {},
-    settings: permissions || {},
-    'metadata.updatedAt': admin.firestore.FieldValue.serverTimestamp(),
-    'metadata.updatedBy': context.auth.uid
-  });
-  
-  return { success: true };
-});
-```
+*   **User Creation**: Rules must allow authenticated users (specifically during the registration process, perhaps checked via token claims or temporary flags) to create their *own* user document in the `users` collection (`/users/{userId}` where `userId == request.auth.uid`).
+*   **Profile Updates**: Rules should define who can update user documents (e.g., users can update their own non-critical fields, managers/admins can update specific fields like `role` or `isActive`).
+*   **Read Access**: Rules define who can read user documents (e.g., users can read their own, managers can read their assigned workers, admins can read all within their scope).
 
 ## 6. Documentation
 
@@ -332,21 +307,28 @@ Additional documentation to be created:
 
 ## 7. Next Steps
 
-1. **Update Registration Implementation**:
-   - Enhance the registration function to create all three required documents
-   - Implement proper validation and error handling
+With the core authentication state management refactored and the basic user document creation implemented, the next priorities are:
 
-2. **Complete Portal Integration**:
-   - Implement protected routes in both portals
-   - Create portal-specific login/registration pages
+1.  **Enhance Registration Flow** 🔄:
+    *   Implement creation of any additional related Firestore documents required upon user registration (e.g., `userSettings`, `userStats`, if planned according to the [Database Schema](../schema/database-schema.md)).
+    *   Ensure robust validation and user-friendly error handling on the `RegisterForm`.
 
-3. **Implement Profile Management**:
-   - Create components for viewing and editing user profiles
-   - Implement permission-based field visibility and editability
+2.  **Complete Portal Integration** 🔄:
+    *   Finalize portal-specific login/registration pages (`LoginPage.tsx`, `RegisterPage.tsx`) in `packages/hours` and `packages/admin`, ensuring they correctly use the `useAuth()` hook for actions.
+    *   Integrate role-based protected routes fully within the `packages/admin` portal.
 
-4. **Finalize Biometric Authentication**:
-   - Complete implementation for supported platforms
-   - Add fallback mechanisms for unsupported platforms
+3.  **Implement Profile Management** 🔄:
+    *   Create UI components for viewing and editing user profiles (leveraging the `User` data from `useCurrentUserProfile`).
+    *   Implement permission-based field visibility and editability according to `firestore.rules`.
+
+4.  **Finalize Biometric Authentication** 🔄:
+    *   Implement secure credential storage and the actual biometric login/authentication flow for supported platforms (WebAuthn for web, platform APIs for native/PWA if applicable).
+    *   Add appropriate fallback mechanisms for unsupported platforms or user preference.
+
+5.  **Testing**: 
+    *   Add unit and integration tests for authentication components and hooks.
+    *   Perform end-to-end testing of login, registration, logout, and protected routes.
+    *   Conduct usability testing on the authentication flow.
 
 ## 8. Security Considerations
 

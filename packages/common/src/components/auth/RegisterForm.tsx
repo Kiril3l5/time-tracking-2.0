@@ -19,6 +19,14 @@ interface RegisterFormProps {
   onLogin?: () => void;
 }
 
+interface RegistrationFormData {
+  firstName: string;
+  lastName: string;
+  companyId?: string; 
+  managerId?: string; 
+  role?: 'user' | 'manager' | 'admin'; 
+}
+
 const RegisterForm = ({
   redirectUrl = '/',
   logo,
@@ -107,18 +115,20 @@ const RegisterForm = ({
     try {
       setIsSubmitting(true);
       
-      // Register user
-      await register(email, password, {
+      // Prepare the form data object for the register function
+      const formData: RegistrationFormData = {
         firstName,
         lastName,
-        email,
-        companyId: companyId || 'default', // In a real app, this would be required
-        managerId: managerId || undefined,
+        // Pass companyId, managerId, and role if they are available
+        // from props or other context
+        companyId: companyId || undefined, // Pass undefined if empty string
+        managerId: managerId || undefined, // Pass undefined if empty string
         role: defaultRole,
-        permissions: [],
-        isActive: true,
-      });
-      
+      };
+
+      // Register user using the updated function signature
+      await register(email, password, formData);
+
       // Show success and redirect after delay
       setSuccess(true);
       setTimeout(() => {
@@ -127,24 +137,37 @@ const RegisterForm = ({
         }
       }, 1500);
     } catch (err: unknown) {
-      // Handle Firebase auth errors
-      if (err && typeof err === 'object' && 'code' in err) {
-        if (err.code === 'auth/email-already-in-use') {
-          setError('This email is already registered. Please use a different email or login.');
-        } else if (err.code === 'auth/invalid-email') {
-          setError('Invalid email address format.');
-        } else if (err.code === 'auth/weak-password') {
-          setError('Password is too weak. Please choose a stronger password.');
-        } else {
-          setError('message' in err && typeof err.message === 'string' 
-            ? err.message 
-            : 'An error occurred during registration.');
-        }
+      // Check if it's the specific service unavailable error
+      if (err instanceof Error && err.message === "Authentication service is not available.") {
+        setError("Registration service is currently unavailable. Please try again later.");
+      } else if (err && typeof err === 'object' && 'code' in err) {
+        // Handle specific Firebase auth errors
+        setError(getFirebaseErrorMessage(err.code as string));
       } else {
-        setError('An error occurred during registration.');
+        // Handle generic errors
+        setError(err instanceof Error ? err.message : 'An unexpected error occurred during registration.');
       }
     } finally {
       setIsSubmitting(false);
+    }
+  };
+  
+  // Helper function to map Firebase error codes to user-friendly messages
+  const getFirebaseErrorMessage = (code: string): string => {
+    switch (code) {
+      case 'auth/email-already-in-use':
+        return 'This email is already registered. Please use a different email or login.';
+      case 'auth/invalid-email':
+        return 'Invalid email address format.';
+      case 'auth/weak-password':
+        return 'Password is too weak. Please choose a stronger password (at least 8 characters with upper, lower, number, and special char).';
+      case 'auth/operation-not-allowed':
+        return 'Email/password accounts are not enabled. Please contact support.';
+      case 'auth/network-request-failed':
+        return 'Network error. Please check your internet connection.';
+      default:
+        console.error('Unhandled Firebase Auth Error Code:', code); // Log unhandled codes
+        return 'An unexpected error occurred during registration.';
     }
   };
   
