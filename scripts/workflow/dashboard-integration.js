@@ -24,24 +24,24 @@ import process from 'process';
  * This function extracts the current state from a workflow instance and passes it
  * to the DashboardGenerator to create a visual representation of the workflow execution.
  * 
- * @param {Object} workflow - The workflow instance containing execution state
- * @param {Map<string,Object>} workflow.workflowSteps - Map of workflow steps with their status
- * @param {Array<Error>} workflow.workflowErrors - Array of errors encountered during workflow execution
- * @param {Array<Object>} workflow.workflowWarnings - Array of warnings encountered during workflow execution
- * @param {Object} workflow.metrics - Metrics collected during execution
- * @param {number} workflow.metrics.duration - Total duration of the workflow
- * @param {Object} workflow.metrics.phaseDurations - Duration of each phase
- * @param {Object} workflow.metrics.buildPerformance - Build performance metrics
- * @param {Object} workflow.metrics.packageMetrics - Package-specific metrics
- * @param {Object} workflow.metrics.testResults - Test execution results
- * @param {Object} workflow.metrics.deploymentStatus - Status of deployments
- * @param {Object} workflow.metrics.channelCleanup - Channel cleanup status
- * @param {string} workflow.metrics.dashboardPath - Path to the generated dashboard
- * @param {Object} workflow.previewUrls - URLs for preview environments
- * @param {string} workflow.previewUrls.admin - Admin preview URL
- * @param {string} workflow.previewUrls.hours - Hours preview URL
- * @param {Object} workflow.advancedCheckResults - Results from advanced checks
- * @param {Object} workflow.options - Workflow configuration options
+ * @param {Object} workflowData - The workflow instance containing execution state
+ * @param {Map<string,Object>} workflowData.workflowSteps - Map of workflow steps with their status
+ * @param {Array<Error>} workflowData.workflowErrors - Array of errors encountered during workflow execution
+ * @param {Array<Object>} workflowData.workflowWarnings - Array of warnings encountered during workflow execution
+ * @param {Object} workflowData.metrics - Metrics collected during execution
+ * @param {number} workflowData.metrics.duration - Total duration of the workflow
+ * @param {Object} workflowData.metrics.phaseDurations - Duration of each phase
+ * @param {Object} workflowData.metrics.buildPerformance - Build performance metrics
+ * @param {Object} workflowData.metrics.packageMetrics - Package-specific metrics
+ * @param {Object} workflowData.metrics.testResults - Test execution results
+ * @param {Object} workflowData.metrics.deploymentStatus - Status of deployments
+ * @param {Object} workflowData.metrics.channelCleanup - Channel cleanup status
+ * @param {string} workflowData.metrics.dashboardPath - Path to the generated dashboard
+ * @param {Object} workflowData.previewUrls - URLs for preview environments
+ * @param {string} workflowData.previewUrls.admin - Admin preview URL
+ * @param {string} workflowData.previewUrls.hours - Hours preview URL
+ * @param {Object} workflowData.advancedCheckResults - Results from advanced checks
+ * @param {Object} workflowData.options - Workflow configuration options
  * @param {Object} options - Additional options for dashboard generation
  * @param {boolean} [options.isCI=false] - Whether the dashboard is being generated in a CI environment
  * @param {boolean} [options.noOpen=false] - Whether to open the dashboard in a browser
@@ -52,274 +52,140 @@ import process from 'process';
  * @returns {Error} [result.error] - Error object if generation failed
  * @throws {Error} If dashboard generation fails
  */
-export async function generateWorkflowDashboard(workflow, options = {}) {
+export async function generateWorkflowDashboard(workflowData, options = {}) {
   try {
-    // ---> ADD LOGGING OF RAW INPUT <-----
+    // ---> LOGGING OF RAW INPUT ('workflowData' argument) <-----
     logger.debug('--- Raw Data Received by generateWorkflowDashboard ---');
-    if (workflow && workflow.workflowSteps instanceof Map) {
-        logger.debug(`Raw Steps Map (${workflow.workflowSteps.size}):`);
-        // Log step details carefully, avoid overly verbose objects if possible
-        workflow.workflowSteps.forEach((step, name) => {
-            logger.debug(`  - Step [${name}]: success=${step?.success}, error=${step?.error}`);
+    // Check properties directly on the received workflowData object
+    if (workflowData && Array.isArray(workflowData.steps)) {
+        logger.debug(`Received Steps Array (${workflowData.steps.length}):`);
+        workflowData.steps.forEach((step, index) => {
+            logger.debug(`  - Step [${index}]: name=${step?.name}, success=${step?.success}, error=${step?.error}`);
         });
     } else {
-        logger.warn('Raw workflow.workflowSteps is not a Map or is missing.');
+        logger.warn('Received workflowData.steps is not an Array or is missing.');
     }
-    if (workflow && Array.isArray(workflow.workflowWarnings)) {
-        logger.debug(`Raw Warnings Array (${workflow.workflowWarnings.length}):`);
-        // Log relevant warning fields
-        workflow.workflowWarnings.forEach((warning, index) => {
+    if (workflowData && Array.isArray(workflowData.warnings)) {
+        logger.debug(`Received Warnings Array (${workflowData.warnings.length}):`);
+        workflowData.warnings.forEach((warning, index) => {
              logger.debug(`  - Warning [${index}]: msg="${warning?.message?.substring(0,100)}...", severity=${warning?.severity}, phase=${warning?.phase}, step=${warning?.step}`);
         });
     } else {
-        logger.warn('Raw workflow.workflowWarnings is not an Array or is missing.');
+        logger.warn('Received workflowData.warnings is not an Array or is missing.');
+    }
+     if (workflowData && Array.isArray(workflowData.errors)) {
+        logger.debug(`Received Errors Array (${workflowData.errors.length})`);
+    } else {
+        logger.warn('Received workflowData.errors is not an Array or is missing.');
+    }
+     if (workflowData && workflowData.metrics) {
+        logger.debug(`Received Metrics Keys: ${Object.keys(workflowData.metrics).join(', ')}`);
+    } else {
+        logger.warn('Received workflowData.metrics is missing.');
     }
     logger.debug('----------------------------------------------------');
     // ---> END LOGGING <-----
 
-    // Add debug logs for metrics values
-    logger.info(`DEBUG: Raw workflow metrics before dashboard generation:`);
-    logger.info(`  - Duration: ${workflow.metrics?.duration || 'undefined'} ms`);
-    logger.info(`  - Setup start: ${workflow.metrics?.setupStart ? new Date(workflow.metrics.setupStart).toISOString() : 'undefined'}`);
-    logger.info(`  - Phase durations: Setup=${workflow.metrics?.phaseDurations?.setup || 0}, Validation=${workflow.metrics?.phaseDurations?.validation || 0}, Build=${workflow.metrics?.phaseDurations?.build || 0}`);
-    
-    if (!workflow.metrics || typeof workflow.metrics.duration !== 'number' || workflow.metrics.duration === 0) {
-      logger.warn(`WARNING: workflow.metrics.duration is ${workflow.metrics?.duration}. Calculating from start/end times.`);
-      
-      // Try to recreate duration from more reliable sources
-      if (workflow.startTime) {
-        const calculatedDuration = Date.now() - workflow.startTime;
-        logger.info(`  - Calculated duration from workflow.startTime: ${calculatedDuration} ms`);
-        
-        // If metrics exists but duration is zero, update it
-        if (workflow.metrics) {
-          workflow.metrics.duration = calculatedDuration;
-          logger.info(`  - Updated workflow.metrics.duration to ${workflow.metrics.duration} ms`);
-        }
-      }
-    }
-    
-    // Extract and normalize workflow state
-    const workflowState = {
-      steps: Array.isArray(workflow.workflowSteps) ? workflow.workflowSteps :
-             workflow.workflowSteps instanceof Map ? Array.from(workflow.workflowSteps.values()) : [],
-      errors: Array.isArray(workflow.workflowErrors) ? workflow.workflowErrors : [],
-      warnings: Array.isArray(workflow.workflowWarnings) ? workflow.workflowWarnings : [],
-      metrics: {
-        ...workflow.metrics,
-        duration: workflow.metrics?.duration || 0,
-        phaseDurations: workflow.metrics?.phaseDurations || {},
-        buildPerformance: workflow.metrics?.buildPerformance || {},
-        packageMetrics: {},  // Initialize as empty object that we'll properly fill
-        testResults: workflow.metrics?.testResults || {
-          totalTests: 0,
-          passedTests: 0
-        },
-        deploymentStatus: workflow.metrics?.deploymentStatus || null,
-        channelCleanup: workflow.metrics?.channelCleanup || null,
-        dashboardPath: workflow.metrics?.dashboardPath || null
-      },
-      preview: workflow.previewUrls ? {
+    // Construct the object holding the actual workflow results
+    const dataForGenerator = {
+      steps: Array.isArray(workflowData.steps) ? workflowData.steps : [], 
+      errors: Array.isArray(workflowData.errors) ? workflowData.errors : [],
+      warnings: Array.isArray(workflowData.warnings) ? workflowData.warnings : [],
+      metrics: workflowData.metrics || { phaseDurations: {}, packageMetrics: {}, testResults: {}, buildPerformance: {} },
+      preview: workflowData.previewUrls ? { 
         admin: {
-          url: workflow.previewUrls.admin || '',
-          status: (workflow.metrics?.deploymentStatus?.status || 'success')
+          url: workflowData.previewUrls.admin || '',
+          status: workflowData.errors?.some(e => e.phase === 'Deploy') ? 'error' : 'success' 
         },
         hours: {
-          url: workflow.previewUrls.hours || '',
-          status: (workflow.metrics?.deploymentStatus?.status || 'success')
+          url: workflowData.previewUrls.hours || '',
+          status: workflowData.errors?.some(e => e.phase === 'Deploy') ? 'error' : 'success'
         }
-      } : null,
-      advancedChecks: workflow.advancedCheckResults || {},
-      buildMetrics: workflow.metrics?.buildPerformance || {},
+      } : { admin: { url: '', status: 'pending'}, hours: { url: '', status: 'pending'} }, 
+      advancedChecks: workflowData.advancedCheckResults || {},
       options: {
-        ...workflow.options,
-        ...options
-      }
+        ...(workflowData.options || {}),
+      },
+      status: workflowData.status || (workflowData.errors?.length > 0 ? 'failed' : 'success'),
+      startTime: workflowData.startTime,
+      endTime: workflowData.endTime,
+      channelId: workflowData.channelId
     };
-    
-    // ---> ADD LOGGING AFTER Map to Array Conversion <-----
-    logger.debug('--- Raw Steps Array AFTER Map Conversion ---');
-    if (Array.isArray(workflowState.steps)) {
-        workflowState.steps.forEach((step, index) => {
-            logger.debug(`  - Step Index [${index}]: name=${step?.name}, success=${step?.success}, error=${step?.error}`);
-        });
+
+    // *** FIX: Explicitly copy previousPreviewData if it exists ***
+    if (workflowData.previousPreviewData) {
+      dataForGenerator.previousPreviewData = workflowData.previousPreviewData;
+      logger.debug('Copied previousPreviewData to dataForGenerator.');
     } else {
-        logger.warn('workflowState.steps is not an array after conversion!');
+      logger.debug('previousPreviewData not found in workflowData, not copying.');
     }
-    logger.debug('--------------------------------------------');
+
+    // ---> ADD LOGGING BEFORE PASSING TO GENERATOR <-----
+    logger.debug('--- Data Prepared FOR DashboardGenerator ---');
+    logger.debug(`Steps Count: ${dataForGenerator.steps?.length}`);
+    logger.debug(`Errors Count: ${dataForGenerator.errors?.length}`);
+    logger.debug(`Warnings Count: ${dataForGenerator.warnings?.length}`);
+    logger.debug(`Preview Status Admin: ${dataForGenerator.preview?.admin?.status}`);
+    logger.debug(`Preview Status Hours: ${dataForGenerator.preview?.hours?.status}`);
+    logger.debug(`Advanced Checks Keys: ${Object.keys(dataForGenerator.advancedChecks || {}).join(', ')}`);
+    logger.debug('-------------------------------------------');
     // ---> END LOGGING <-----
-    
-    // Properly extract and normalize package metrics
-    if (workflow.metrics?.packageMetrics && typeof workflow.metrics.packageMetrics === 'object') {
-      Object.keys(workflow.metrics.packageMetrics).forEach(pkgName => {
-        const pkgMetrics = workflow.metrics.packageMetrics[pkgName];
-        
-        if (pkgMetrics && typeof pkgMetrics === 'object') {
-          // Create normalized package metrics with consistent property names and proper fallbacks
-          workflowState.metrics.packageMetrics[pkgName] = {
-            success: pkgMetrics.success === true,
-            duration: typeof pkgMetrics.duration === 'number' ? pkgMetrics.duration : 0,
-            
-            // Handle both totalSize and size property names
-            totalSize: typeof pkgMetrics.totalSize === 'number' ? pkgMetrics.totalSize :
-                       typeof pkgMetrics.size === 'number' ? pkgMetrics.size : 0,
-                       
-            // Handle sizeBytes as well
-            sizeBytes: typeof pkgMetrics.sizeBytes === 'number' ? pkgMetrics.sizeBytes :
-                       typeof pkgMetrics.totalSize === 'number' ? pkgMetrics.totalSize :
-                       typeof pkgMetrics.size === 'number' ? pkgMetrics.size : 0,
-                       
-            fileCount: typeof pkgMetrics.fileCount === 'number' ? pkgMetrics.fileCount : 0,
-            
-            // Handle preformatted sizes
-            formattedSize: pkgMetrics.formattedSize || null,
-            
-            // Pass through errors and warnings
-            error: pkgMetrics.error || null,
-            warnings: Array.isArray(pkgMetrics.warnings) ? pkgMetrics.warnings : []
-          };
-        }
-      });
-    }
-    
-    // Add debug logging to help diagnose issues
-    logger.debug('Normalized packageMetrics for dashboard:');
-    logger.debug(JSON.stringify(workflowState.metrics.packageMetrics, null, 2));
-    
-    // Process steps to extract proper status
-    workflowState.steps = workflowState.steps.map(step => {
-      // *** PRIORITIZE the actual success flag ***
-      if (step.success === true) {
-        return { ...step, status: 'success' };
-      }
-      if (step.success === false) {
-        // Use 'error' for failure, 'warning' might be ambiguous here
-        return { ...step, status: 'error' }; 
-      }
 
-      // --- Fallback logic (less reliable, keep as last resort) ---
-      // Check if step has a name that indicates success in the log
-      const stepName = step.name || '';
-      const stepStatus = step.status || ''; // Might already have a status?
-      const stepLog = step.log || '';
-      const stepResult = step.result || {};
+    // *** FIX: Instantiate generator correctly and CALL initialize() ***
+    
+    // 1. Instantiate the generator, passing only relevant generator options
+    const generatorOptions = {
+        verbose: options.verbose || workflowData.options?.verbose || false,
+        outputPath: options.outputPath || null
+    };
+    const generator = new DashboardGenerator(generatorOptions); 
 
-      // If step has explicit success in result (redundant check, but safe)
-      if (stepResult.success === true) {
-        return { ...step, status: 'success' };
-      }
-      
-      // If step has explicit failure in result (redundant check, but safe)
-      if (stepResult.success === false) {
-        return { ...step, status: 'error' };
-      }
-      
-      // Check keywords only if success flag is missing/undefined
-      if (stepName.includes('✓') || stepName.includes('complete') || 
-          stepName.includes('success') || stepStatus.includes('success') ||
-          stepLog.includes('✓') || stepLog.includes('complete') || 
-          stepLog.includes('success') || 
-          stepName.includes('Phase')) { 
-        return { ...step, status: 'success' };
-      }
-      
-      if (stepName.includes('✗') || stepName.includes('error') || 
-          stepName.includes('failed') || stepStatus.includes('error') ||
-          stepLog.includes('✗') || stepLog.includes('error') || 
-          stepLog.includes('failed')) {
-        return { ...step, status: 'error' };
-      }
-      
-      if (stepName.includes('⚠') || stepName.includes('warning') || 
-          stepStatus.includes('warning') ||
-          stepLog.includes('⚠') || stepLog.includes('warning')) {
-        return { ...step, status: 'warning' };
-      }
-      
-      // Default to pending if success flag missing and no keywords found
-      logger.warn(`Step "${stepName || 'Unknown'}" has undefined success status and no clear keywords. Defaulting to pending.`);
-      return { ...step, status: 'pending' };
-    });
-    
-    // Filter out informational messages treated as warnings
-    workflowState.warnings = workflowState.warnings.filter(warning => {
-      // Keep warnings that don't have severity 'info'
-      return warning.severity !== 'info';
-    });
-    
-    // Process advanced checks to ensure they have proper status
-    if (workflowState.advancedChecks) {
-      Object.entries(workflowState.advancedChecks).forEach(([name, check]) => {
-        // Convert to proper status based on success flag
-        if (check.success === true) {
-          workflowState.advancedChecks[name].status = 'success';
-        } else if (check.success === false) {
-          workflowState.advancedChecks[name].status = 'error';
-        } else if (check.warnings && check.warnings.length > 0) {
-          workflowState.advancedChecks[name].status = 'warning';
-        } else if (check.issues && check.issues.length > 0) {
-          workflowState.advancedChecks[name].status = 'error';
-        }
-      });
+    // 2. Initialize the generator with the prepared workflow data object
+    // This calls normalizeData internally and sets generator.data
+    await generator.initialize(dataForGenerator); 
+
+    // DEBUG: Log the generator data state AFTER initialization
+    try {
+      logger.debug('[DEBUG] Generator data state AFTER initialize:', JSON.stringify(generator.data, null, 2));
+    } catch (e) {
+      logger.error('[DEBUG] Failed to stringify generator.data after initialize:', e.message);
+      logger.debug('[DEBUG] Raw generator.data:', generator.data); // Log raw object if stringify fails
     }
-    
-    // ---> Add debug logging before passing state to generator <-----
-    logger.debug('--- Data passed to DashboardGenerator ---');
-    logger.debug(`Steps Count: ${workflowState.steps?.length}`);
-    logger.debug(`Errors Count: ${workflowState.errors?.length}`);
-    logger.debug(`Warnings Count: ${workflowState.warnings?.length}`);
-    logger.debug(`Preview URLs Present: ${!!workflowState.preview}`);
-    logger.debug(`Metrics Keys: ${Object.keys(workflowState.metrics || {}).join(', ')}`);
-    logger.debug(`Metrics.buildPerformance: ${JSON.stringify(workflowState.metrics?.buildPerformance)}`);
-    logger.debug(`Advanced Checks Keys: ${Object.keys(workflowState.advancedChecks || {}).join(', ')}`);
-    // ---> End debug log <-----
-    
-    // Initialize dashboard generator with outputPath option if provided
-    const generator = new DashboardGenerator({
-      verbose: options.verbose || workflow.options?.verbose || false,
-      outputPath: options.outputPath || null
-    });
-    
-    // Initialize with workflow state
-    await generator.initialize(workflowState);
-    
-    // Generate dashboard
-    const result = await generator.generate();
-    
-    if (!result.success) {
-      throw new Error(`Failed to generate dashboard: ${result.error?.message || 'Unknown error'}`);
+    // END DEBUG
+
+    // 3. Now generate HTML *and save the file* using the initialized generator
+    //    The generate() method handles saving internally.
+    await generator.generate(); 
+
+    // --- FIX: Get the path from the generator's instance property --- 
+    const reportPath = generator.outputPath; 
+
+    // Check if reportPath is a valid string before proceeding
+    if (typeof reportPath !== 'string' || !reportPath) {
+        throw new Error('Failed to get a valid report path from the generator.');
     }
-    
-    // Save the dashboard path to the workflow state
-    if (workflow.metrics) {
-      workflow.metrics.dashboardPath = generator.outputPath;
-    }
-    workflowState.metrics.dashboardPath = generator.outputPath;
-    
-    // Open the dashboard in the browser if not in CI and not disabled
-    const isCI = options.isCI || workflow.options?.isCI || process.env.CI === 'true' || false;
-    const shouldOpen = !isCI && !(options.noOpen || workflow.options?.noOpen);
-    
-    if (shouldOpen && generator.outputPath) {
+
+    // --- REMOVE getGenerationTime for now --- 
+    logger.success(`✓ Dashboard generated successfully at ${reportPath}`);
+
+    // Open the report if not in CI and not explicitly skipped
+    if (!options.isCI && !options.noOpen) {
       try {
-        const openResult = await generator.openInBrowser();
-        if (!openResult || !openResult.success) {
-          logger.warn(`Failed to open dashboard in browser: ${openResult?.error?.message || 'Unknown error'}`);
-        }
+        // Normalize path for file URL
+        const normalizedPath = reportPath.replace(/\\/g, '/');
+        const fileUrl = `file:///${normalizedPath}`; // Ensure three slashes for file URLs
+        logger.debug(`Attempting to open report URL: ${fileUrl}`);
+        await open(fileUrl);
+        logger.info('Dashboard opened in browser successfully');
       } catch (openError) {
-        logger.warn(`Failed to open dashboard in browser: ${openError.message}`);
+        logger.warn(`Could not automatically open dashboard: ${openError.message}`);
+        logger.warn(`Please open manually: ${reportPath}`);
       }
     }
-    
-    return { 
-      success: true, 
-      path: generator.outputPath 
-    };
+
+    return { success: true, reportPath };
   } catch (error) {
-    logger.error('Failed to generate dashboard:', error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error : new Error(String(error))
-    };
+    logger.error(`Failed to initialize or generate dashboard: ${error.stack || error.message}`);
+    return { success: false, error };
   }
 } 

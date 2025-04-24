@@ -70,26 +70,38 @@ export async function deployPackage(options) {
     
     // Run Firebase deploy command
     const result = await commandRunner.runCommandAsync(
-      `firebase hosting:channel:deploy ${channelId} --only ${target}`, 
-      { 
+      `firebase hosting:channel:deploy ${channelId} --only ${target}`,
+      {
         stdio: 'inherit',
         timeout: 120000 // 2 minute timeout
       }
     );
-    
+
     if (!result.success) {
-      // Try to provide more specific error message
-      let errorMessage = `Deployment failed: ${result.error || 'Unknown error'}`;
-      
-      if (result.error && result.error.includes('not authenticated')) {
-        errorMessage = 'Firebase authentication failed. Please run "firebase login" first.';
-      } else if (result.error && result.error.includes('not detected') || result.error && result.error.includes('not found')) {
-        errorMessage = `Hosting target '${target}' not found. Run 'firebase target:apply hosting ${target} ${target}-autonomyhero-2024'.`;
-      } else if (result.error && result.error.includes('limit')) {
-        errorMessage = 'Channel limit reached. Try running "firebase hosting:channel:list" and delete old channels.';
+      logger.error(`Firebase deploy command failed for target: ${target}`);
+      logger.debug('Raw deployment result:', JSON.stringify(result, null, 2));
+
+      let detailedError = 'Unknown deployment error';
+      const errorOutput = result.error?.trim();
+      const standardOutput = result.output?.trim();
+
+      if (errorOutput) {
+        detailedError = errorOutput;
+      } else if (standardOutput) {
+        detailedError = standardOutput;
       }
-      
-      throw new Error(errorMessage);
+
+      if (detailedError.includes('not authenticated')) {
+        detailedError = 'Firebase authentication failed. Please run "firebase login" first.';
+      } else if (detailedError.includes('not detected') || detailedError.includes('not found')) {
+        detailedError = `Hosting target '${target}' not found or not configured correctly in firebase.json.`;
+      } else if (detailedError.includes('limit')) {
+        detailedError = 'Channel limit reached. Try running "firebase hosting:channel:list" and delete old channels.';
+      } else if (detailedError.includes('permission') || detailedError.includes('forbidden')) {
+        detailedError = `Permission denied during deployment for target '${target}'. Check Firebase project permissions.`;
+      }
+
+      throw new Error(`Deployment failed for ${target}: ${detailedError}`);
     }
     
     // Get channel URL from the list command since we can't reliably extract it from deploy output
@@ -223,18 +235,61 @@ export async function deployPackageWithWorkflowIntegration(options = {}) {
       workflowState.completeStep(stepName, { success: false, error });
       return deployResult;
     }
-    
-    // Record preview URLs
-    if (deployResult.urls) {
-      workflowState.setPreviewUrls(deployResult.urls);
-      workflowState.addWarning(`Deployed successfully. Preview URLs: ${JSON.stringify(deployResult.urls)}`, stepName, phase, 'info');
+
+    // --- FIX: Fetch URLs AFTER successful deployment --- 
+    let fetchedUrls = { hours: null, admin: null };
+    try {
+      logger.info('Deployment commands succeeded. Fetching preview URLs...');
+      // Fetch Hours URL
+      const hoursSiteName = 'hours-autonomyhero-2024';
+      const hoursListResult = await commandRunner.runCommandAsync(
+        `firebase hosting:channel:list --site ${hoursSiteName}`,
+        { stdio: 'pipe' } // Use pipe to capture list output
+      );
+      if (hoursListResult.success) {
+        fetchedUrls.hours = extractUrlFromListOutput(hoursListResult.output, channelId);
+        if (!fetchedUrls.hours) {
+           workflowState.addWarning(`Could not find URL for hours channel ${channelId} in list output.`, stepName, phase);
+        }
+      } else {
+        workflowState.addWarning(`Failed to list channels for hours: ${hoursListResult.error}`, stepName, phase);
+      }
+
+      // Fetch Admin URL
+      const adminSiteName = 'admin-autonomyhero-2024';
+      const adminListResult = await commandRunner.runCommandAsync(
+        `firebase hosting:channel:list --site ${adminSiteName}`,
+        { stdio: 'pipe' } // Use pipe to capture list output
+      );
+      if (adminListResult.success) {
+        fetchedUrls.admin = extractUrlFromListOutput(adminListResult.output, channelId);
+         if (!fetchedUrls.admin) {
+           workflowState.addWarning(`Could not find URL for admin channel ${channelId} in list output.`, stepName, phase);
+        }
+      } else {
+         workflowState.addWarning(`Failed to list channels for admin: ${adminListResult.error}`, stepName, phase);
+      }
+      logger.info('URL Fetching complete:', JSON.stringify(fetchedUrls));
+    } catch (fetchError) {
+       workflowState.addWarning(`Error fetching preview URLs: ${fetchError.message}`, stepName, phase);
+    }
+    // --- END FIX ---
+
+    // Record preview URLs if fetched
+    // FIX: Check fetchedUrls, not deployResult.urls
+    if (fetchedUrls.hours || fetchedUrls.admin) { 
+      workflowState.setPreviewUrls(fetchedUrls); 
+      workflowState.addWarning(`Deployed successfully. Preview URLs: ${JSON.stringify(fetchedUrls)}`, stepName, phase, 'info');
+    } else {
+       workflowState.addWarning(`Deployment succeeded but could not retrieve preview URLs for channel ${channelId}.`, stepName, phase);
     }
     
     // Record completion
     workflowState.completeStep(stepName, { 
       success: true, 
       channelId,
-      urls: deployResult.urls
+      // FIX: Pass the potentially null URLs from fetchedUrls
+      urls: fetchedUrls 
     });
     
     // Track metrics
@@ -244,7 +299,10 @@ export async function deployPackageWithWorkflowIntegration(options = {}) {
     });
     
     return {
-      ...deployResult,
+      // Return success even if URL fetch failed, deployment itself succeeded
+      success: true, 
+      channelId, 
+      urls: fetchedUrls, 
       duration: Date.now() - startTime
     };
   } catch (error) {
@@ -367,15 +425,16 @@ async function deployToFirebase(channelId) {
     const hoursResult = await commandRunner.runCommandAsync(
       `firebase hosting:channel:deploy ${channelId} --only hours`,
       { 
-        stdio: 'pipe',
+        stdio: 'inherit',
         timeout: 180000 // 3 minute timeout
       }
     );
     
     if (!hoursResult.success) {
+      const errorMsg = hoursResult.error || `Command failed with exit code ${hoursResult.code || 'unknown'}`;
       return { 
         success: false, 
-        error: `Hours deployment failed: ${hoursResult.error || 'Unknown error'}`
+        error: `Hours deployment failed: ${errorMsg}`
       };
     }
     
@@ -384,28 +443,24 @@ async function deployToFirebase(channelId) {
     const adminResult = await commandRunner.runCommandAsync(
       `firebase hosting:channel:deploy ${channelId} --only admin`,
       { 
-        stdio: 'pipe',
+        stdio: 'inherit',
         timeout: 180000 // 3 minute timeout
       }
     );
     
     if (!adminResult.success) {
+      const errorMsg = adminResult.error || `Command failed with exit code ${adminResult.code || 'unknown'}`;
       return { 
         success: false, 
-        error: `Admin deployment failed: ${adminResult.error || 'Unknown error'}`
+        error: `Admin deployment failed: ${errorMsg}`
       };
     }
     
-    // Extract preview URLs
-    const urls = {
-      hours: extractUrlFromOutput(hoursResult.output, channelId),
-      admin: extractUrlFromOutput(adminResult.output, channelId)
-    };
-    
+    logger.info('Firebase deploy commands completed successfully. URL retrieval will happen separately.');
+
     return {
       success: true,
       channelId,
-      urls
     };
   } catch (error) {
     logger.error(`Deployment error: ${error.message}`);
@@ -417,44 +472,28 @@ async function deployToFirebase(channelId) {
 }
 
 /**
- * Extract URL from Firebase deployment output
+ * Extract URL from Firebase hosting:channel:list output
  * 
- * @param {string} output - Command output
- * @param {string} channelId - Channel ID
+ * @param {string} output - Command output from channel:list
+ * @param {string} channelId - Channel ID to find
  * @returns {string|null} Extracted URL or null
  */
-function extractUrlFromOutput(output, channelId) {
+function extractUrlFromListOutput(output, channelId) {
   try {
-    if (!output) return null;
-    
-    // Try to find URL in the output
-    const lines = output.split('\n');
-    
-    // Look for the channel URL
-    for (const line of lines) {
-      if (line.includes('Channel URL') || line.includes('Live URL')) {
-        const urlMatch = line.match(/(https?:\/\/[^\s"]+)/);
+    if (!output || !channelId) return null;
+    const channelLines = output.split('\n');
+    for (const line of channelLines) {
+      // Check if the line contains the channel ID AND looks like a channel entry
+      if (line.includes(channelId) && line.match(/preview-/)) { 
+        const urlMatch = line.match(/https:\/\/[^\s]+/);
         if (urlMatch) {
-          return urlMatch[1];
+          return urlMatch[0];
         }
       }
     }
-    
-    // If no URL found in output, try alternative extraction
-    const urlRegex = new RegExp(`${channelId}[^\\s"]*\\.(web\\.app|firebaseapp\\.com)`, 'i');
-    for (const line of lines) {
-      const match = line.match(urlRegex);
-      if (match) {
-        const fullUrlMatch = line.match(/(https?:\/\/[^\s"]+)/);
-        if (fullUrlMatch) {
-          return fullUrlMatch[1];
-        }
-      }
-    }
-    
     return null;
   } catch (error) {
-    logger.debug(`URL extraction error: ${error.message}`);
+    logger.debug(`URL extraction from list output error: ${error.message}`);
     return null;
   }
 } 

@@ -141,7 +141,8 @@ export class DashboardGenerator {
       }
       
       this.workflowState = workflowState;
-      this.data = this.normalizeData(workflowState);
+      // FIX: Call normalizeData with the stored this.workflowState
+      this.data = this.normalizeData(this.workflowState); 
       
       // Set output path with proper path handling for Windows
       const defaultPath = join(__dirname, '../../dashboard.html');
@@ -186,11 +187,16 @@ export class DashboardGenerator {
     logger.info('Normalizing workflow data for dashboard');
     
     // Normalize steps
-    const normalizedSteps = Array.isArray(data.steps) ? data.steps.map(step => ({
-      ...step,
-      status: this.normalizeStatus(step.status),
-      duration: step.duration || 0
-    })) : [];
+    const normalizedSteps = Array.isArray(data.steps) ? data.steps.map(step => {
+      // DEBUG: Log step processing
+      const calculatedStatus = this.normalizeStatus(step.success);
+      logger.debug(`[DEBUG] Normalizing step: '${step.name}', success=${step.success}, calculated status=${calculatedStatus}`);
+      return {
+        ...step,
+        status: calculatedStatus, // Use the calculated status
+        duration: step.duration || 0
+      };
+    }) : [];
     
     if (this.verbose) {
       logger.info(`Normalized ${normalizedSteps.length} workflow steps`);
@@ -221,6 +227,9 @@ export class DashboardGenerator {
       }
     }
     
+    // --- PREVIOUS URL EXTRACTION - MAX DEBUG ---
+    // --- END PREVIOUS URL EXTRACTION ---
+    
     // Normalize preview URLs - *** INCLUDE PREVIOUS PREVIEW ***
     const normalizedPreview = data.preview ? {
       admin: {
@@ -231,34 +240,60 @@ export class DashboardGenerator {
         url: data.preview.hours?.url || '',
         status: this.normalizeStatus(data.preview.hours?.status)
       },
-      // Add previous preview data if it exists in metrics
-      previousAdmin: data.metrics?.previousPreview?.admin ? {
-          url: data.metrics.previousPreview.admin.url || '',
-          status: this.normalizeStatus(data.metrics.previousPreview.admin.status)
-      } : null,
-      previousHours: data.metrics?.previousPreview?.hours ? {
-          url: data.metrics.previousPreview.hours.url || '',
-          status: this.normalizeStatus(data.metrics.previousPreview.hours.status)
-      } : null
-    } : null;
-    // *** END PREVIOUS PREVIEW FIX ***
+      previousAdmin: data.previousPreviewData?.['admin-autonomyhero-2024']?.previous?.url 
+        ? { url: data.previousPreviewData['admin-autonomyhero-2024'].previous.url, status: 'success' } 
+        : null,
+      previousHours: data.previousPreviewData?.['hours-autonomyhero-2024']?.previous?.url 
+        ? { url: data.previousPreviewData['hours-autonomyhero-2024'].previous.url, status: 'success' } 
+        : null
+    } : {
+      // Default structure includes null previous entries
+      admin: { url: '', status: 'pending' },
+      hours: { url: '', status: 'pending' },
+      previousAdmin: data.previousPreviewData?.['admin-autonomyhero-2024']?.previous?.url 
+        ? { url: data.previousPreviewData['admin-autonomyhero-2024'].previous.url, status: 'success' } 
+        : null,
+      previousHours: data.previousPreviewData?.['hours-autonomyhero-2024']?.previous?.url 
+        ? { url: data.previousPreviewData['hours-autonomyhero-2024'].previous.url, status: 'success' } 
+        : null
+    };
     
     // Normalize advanced checks - **Ensure duration is preserved**
     const normalizedAdvancedChecks = {};
     if (data.advancedChecks) {
       Object.entries(data.advancedChecks).forEach(([name, check]) => {
         if (check && typeof check === 'object') { // Ensure check is an object
+            // FIX: Explicitly construct the normalized object, avoid spread issues
+            const originalStatus = check.status;
+            const normalizedStatus = this.normalizeStatus(check.status);
+            const checkDuration = typeof check.duration === 'number' ? check.duration : 0;
+            
             normalizedAdvancedChecks[name] = {
-              ...check, // Spread original check data
-              status: this.normalizeStatus(check.status),
-              duration: check.duration || check.metrics?.duration || 0 // Capture duration if available
+              // Explicitly assign required fields
+              name: name,
+              title: check.title || name, // Use title if available
+              status: normalizedStatus,
+              originalStatus: originalStatus,
+              duration: checkDuration,
+              // Carry over other potentially useful fields if they exist
+              message: check.message || null,
+              error: check.error || null,
+              details: check.details || null,
+              data: check.data || null // Carry over nested data if present
+              // Avoid spreading ...check to prevent unexpected overwrites
             };
         } else {
              logger.warn(`Invalid advanced check data for '${name}':`, check);
-             normalizedAdvancedChecks[name] = { status: 'error', error: 'Invalid check data format' };
+             normalizedAdvancedChecks[name] = { 
+                 name: name, 
+                 title: name, 
+                 status: 'error', 
+                 error: 'Invalid check data format', 
+                 duration: 0 
+             };
         }
       });
-      logger.debug('Normalized advancedChecks:', JSON.stringify(normalizedAdvancedChecks));
+      logger.debug('[DEBUG] Normalized advancedChecks (inside loop):', JSON.stringify(normalizedAdvancedChecks));
     }
     
     // Determine overall status - Consider errors, warnings, AND incoming status
@@ -426,8 +461,8 @@ export class DashboardGenerator {
     logger.debug('Overall Status - Test Results Data:', JSON.stringify(testResults));
 
     const overallDuration = this.formatDuration(metrics.duration || 0);
-    const deploymentStatus = this.normalizeStatus(metrics.deploymentStatus); // Normalize status
-    const deploymentSuccess = deploymentStatus === 'success';
+    // FIX 1: Directly use the normalized status for class generation
+    const deploymentStatus = this.normalizeStatus(metrics.deploymentStatus);
     
     // --- Corrected Test Results Logic --- 
     let testStatus = 'pending';
@@ -467,7 +502,7 @@ export class DashboardGenerator {
           ${this.renderStatusItem('Duration', overallDuration)}
           ${this.renderStatusItem('Build Time', buildTimeDisplay)} 
           ${this.renderStatusItem('Test Results', testSummary, `status-${testStatus}`)}
-          ${this.renderStatusItem('Deployment', deploymentStatus, `status-${deploymentSuccess ? 'success' : deploymentStatus}`)}
+          ${this.renderStatusItem('Deployment', deploymentStatus, `status-${deploymentStatus}`)}
           </div>
         ${buildOutputHtml}
         ${testFilesHtml}
@@ -568,32 +603,60 @@ export class DashboardGenerator {
   }
 
   generatePreviewChannelsSection() {
-    const { preview } = this.data;
-    if (!preview) return '';
+    logger.debug('Generating preview channels section');
+    const preview = this.data.preview || {};
+
+    // FIX 3: Pass previous preview data explicitly to generatePreviewCard
+    const adminCard = preview.admin ? this.generatePreviewCard('Admin', preview.admin, preview.previousAdmin) : '';
+    const hoursCard = preview.hours ? this.generatePreviewCard('Hours', preview.hours, preview.previousHours) : '';
+
     return `
       <section class="widget preview-channels">
         <h2>Preview Channels</h2>
         <div class="preview-grid">
-          ${this.generatePreviewCard('Admin', preview.admin)}
-          ${this.generatePreviewCard('Hours', preview.hours)}
+          ${adminCard}
+          ${hoursCard}
         </div>
       </section>
     `;
   }
 
-  generatePreviewCard(name, data) {
-    if (!data) return '';
+  generatePreviewCard(name, data, previousData) {
+    if (!data || !data.url) {
+      return `
+      <div class="preview-card">
+        <h3>${this.escapeHtml(name)}</h3>
+        <p>Status: <span class="status status-pending">pending</span></p>
+        <p>URL not available.</p>
+      </div>`;
+    }
+
     const status = this.normalizeStatus(data.status);
-    const statusClass = `status-${status}`;
+    const currentUrl = this.escapeHtml(data.url);
+
+    // FIX 3: Use the passed previousData for the previous URL
+    let previousUrlSection = '<p>No previous URL available.</p>';
+    if (previousData && previousData.url) {
+      const previousUrl = this.escapeHtml(previousData.url);
+      previousUrlSection = `
+        <div class="url-section previous-section">
+          <h4>Previous URL:</h4>
+           <a href="${previousUrl}" class="preview-link previous-link" target="_blank">${previousUrl}</a>
+        </div>`;
+    }
+
     return `
       <div class="preview-card">
         <h3>${this.escapeHtml(name)}</h3>
-        <p>Status: <span class="status ${statusClass}">${status}</span></p>
-        ${data.url ? `<a href="${this.escapeHtml(data.url)}" class="preview-link current-link" target="_blank">Current: ${this.escapeHtml(data.url)}</a>` : ''}
-        ${this.data.preview?.previousAdmin && name === 'Admin' && this.data.preview.previousAdmin.url ? 
-          `<a href="${this.escapeHtml(this.data.preview.previousAdmin.url)}" class="preview-link previous-link" target="_blank">Previous: ${this.escapeHtml(this.data.preview.previousAdmin.url)}</a>` : ''}
-        ${this.data.preview?.previousHours && name === 'Hours' && this.data.preview.previousHours.url ? 
-          `<a href="${this.escapeHtml(this.data.preview.previousHours.url)}" class="preview-link previous-link" target="_blank">Previous: ${this.escapeHtml(this.data.preview.previousHours.url)}</a>` : ''}
+        <p>Status: <span class="status status-${status}">${status}</span></p>
+        
+        <div class="url-section">
+          <h4>Current URL:</h4>
+          <a href="${currentUrl}" class="preview-link current-link" target="_blank">${currentUrl}</a>
+        </div>
+
+        ${previousUrlSection}
+
         ${data.timestamp ? `<p class="timestamp">Last updated: ${new Date(data.timestamp).toLocaleString()}</p>` : ''}
       </div>
     `;
@@ -785,33 +848,23 @@ export class DashboardGenerator {
    * @returns {string} HTML string
    */
   generateAdvancedCheckCards() {
-    const checks = this.data.advancedChecks || {};
-    logger.debug('Advanced Checks Data (in generateAdvancedCheckCards):', JSON.stringify(checks));
-
-    if (Object.keys(checks).length === 0) {
-      return '<p>No advanced checks were performed.</p>';
+    const checks = this.data.advancedChecks;
+    if (!checks || Object.keys(checks).length === 0) {
+      return '<p>No advanced check data available.</p>';
     }
 
     const cards = Object.entries(checks).map(([name, check]) => {
-      // Ensure check is an object before proceeding
-      if (!check || typeof check !== 'object') {
-          logger.warn(`Skipping invalid advanced check data for '${name}':`, check);
-          return ''; // Skip rendering this card
-      }
+      // FIX 2: Use the already normalized status from check.status
+      //        Remove the || 'pending' fallback as normalization handles defaults.
+      const status = check.status; // Use the status normalized in normalizeData
+      const duration = this.formatDuration(check.duration || 0);
+      const title = check.title || name;
 
-      const status = this.normalizeStatus(check.status);
-      
-      // --- Corrected Duration Logic --- 
-      const durationMs = (typeof check.duration === 'number' && check.duration >= 0) ? check.duration : null;
-      const duration = durationMs !== null ? this.formatDuration(durationMs) : 'N/A';
-      if (durationMs === null && Object.hasOwn(check, 'duration')) {
-         logger.warn(`Invalid duration value for check '${name}': ${check.duration}`);
-      }
-      // --- END Corrected Duration Logic --- 
-
-      const icon = status === 'success' ? '✅' : (status === 'failed' ? '❌' : (status === 'warning' ? '⚠️' : '⏳'));
-      const statusClass = `status-${status}`;
-      const title = check.title || name; 
+      // Determine icon based on status
+      let icon = '⏳'; // Default (pending)
+      if (status === 'success') icon = '✅';
+      else if (status === 'failed') icon = '❌';
+      else if (status === 'warning') icon = '⚠️';
 
       let bodyContent = '';
       const message = this.escapeHtml(check.message || '');
@@ -832,11 +885,11 @@ export class DashboardGenerator {
       }
 
       return `
-        <div class="check-card ${statusClass}">
+        <div class="check-card status-${status}">
           <div class="card-header">
-            <span class="icon ${statusClass}-icon">${icon}</span>
+            <span class="icon ${status}-icon">${icon}</span>
             <h3 class="card-title">${this.escapeHtml(title)}</h3>
-             <span class="status ${statusClass}" style="margin-left: auto;">${this.escapeHtml(status)}</span>
+             <span class="status ${status}" style="margin-left: auto;">${this.escapeHtml(status)}</span>
           </div>
           <div class="card-body">
             <p>Duration: ${duration}</p>
@@ -878,10 +931,27 @@ export class DashboardGenerator {
     const { metrics } = this.data;
     if (!metrics?.channelCleanup) return '';
     const cleanup = metrics.channelCleanup;
-    const status = this.normalizeStatus(cleanup.status);
+    
+    // FIX: Derive status from cleanup.success (boolean)
+    const status = this.normalizeStatus(cleanup.success);
     const statusClass = `status-${status}`;
+    
+    // FIX: Get counts correctly - Sum from stats or use top-level if available
+    let cleanedCount = cleanup.deletedCount || 0; // Use top-level total deleted if available
+    let keptCount = 0; 
+    let failedCount = cleanup.totalErrors || 0; // Use top-level totalErrors
+    let skippedCount = cleanup.skippedChannels || 0; // Use top-level skipped
+
+    // If stats object exists, refine counts by summing per-site stats
+    if (cleanup.stats && typeof cleanup.stats === 'object') {
+        keptCount = Object.values(cleanup.stats).reduce((sum, site) => sum + (site.kept || 0), 0);
+        // If stats are present, deletedCount might be more reliable than summing site deletes
+        // failedCount could also be refined if stats provide per-site errors
+        // skippedCount might also be available per-site
+    }
+
     return `
-      <section class="widget channel-cleanup"><h2>Channel Cleanup</h2><div class="cleanup-status"><p>Status: <span class="status ${statusClass}">${status}</span></p><div class="cleanup-metrics"><div class="metric-item"><span class="metric-label">Cleaned</span><span class="metric-value">${cleanup.cleanedChannels || 0}</span></div><div class="metric-item"><span class="metric-label">Failed</span><span class="metric-value ${cleanup.failedChannels > 0 ? 'error-value' : ''}">${cleanup.failedChannels || 0}</span></div>${cleanup.skippedChannels ? `<div class="metric-item"><span class="metric-label">Skipped</span><span class="metric-value">${cleanup.skippedChannels}</span></div>` : ''}<div class="metric-item"><span class="metric-label">Kept</span><span class="metric-value">${cleanup.channelsKept || 0}</span></div></div></div>${cleanup.details ? `<div class="cleanup-details"><h3>Details</h3><pre>${this.escapeHtml(cleanup.details)}</pre></div>` : ''}</section>
+      <section class="widget channel-cleanup"><h2>Channel Cleanup</h2><div class="cleanup-status"><p>Status: <span class="status ${statusClass}">${status}</span></p><div class="cleanup-metrics"><div class="metric-item"><span class="metric-label">Cleaned</span><span class="metric-value">${cleanedCount}</span></div><div class="metric-item"><span class="metric-label">Failed</span><span class="metric-value ${failedCount > 0 ? 'error-value' : ''}">${failedCount}</span></div>${skippedCount > 0 ? `<div class="metric-item"><span class="metric-label">Skipped</span><span class="metric-value">${skippedCount}</span></div>` : ''}<div class="metric-item"><span class="metric-label">Kept</span><span class="metric-value">${keptCount}</span></div></div></div>${cleanup.details ? `<div class="cleanup-details"><h3>Details</h3><pre>${this.escapeHtml(cleanup.details)}</pre></div>` : ''}</section>
       `;
   }
   
@@ -1204,11 +1274,12 @@ export class DashboardGenerator {
       <div class="grid-col-1">
         ${overallStatusSection}
         ${issuesSection}
-        ${workflowAnalyticsSection}
+        <!-- ${workflowAnalyticsSection} Removed from here -->
         ${advancedChecksSection}
       </div>
       <div class="grid-col-2">
         ${previewChannelsSection}
+        ${workflowAnalyticsSection} <!-- Moved here -->
         ${timelineSection}
         ${workflowOptionsSection}
         ${channelCleanupSection}

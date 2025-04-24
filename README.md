@@ -188,6 +188,27 @@ To make imports cleaner, each portal's `tsconfig.json` should include path alias
    }
    ```
 
+### Firebase Cloud Functions Build Workaround (Important)
+
+Due to a persistent issue with `pnpm` module resolution within the `/functions` workspace on some development environments (observed on Windows with Node v20), the TypeScript build for Cloud Functions fails when using the standard `pnpm install` from the root.
+
+**Required Workaround:**
+
+After any change to dependencies in `functions/package.json`, you **must** install dependencies specifically for the functions package using `npm install` within that directory:
+
+```bash
+# Navigate to functions directory
+cd functions
+# Install dependencies using npm
+npm install 
+# Run the build (using the configured script)
+pnpm run build 
+# Navigate back if needed
+cd ..
+```
+
+This creates a local `functions/node_modules` directory. Ensure `/functions/node_modules` is listed in the root `.gitignore` file.
+
 ## Documentation
 
 The project documentation is organized into the following categories:

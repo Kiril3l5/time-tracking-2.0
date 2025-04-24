@@ -5,7 +5,7 @@
 This document outlines the plan and current implementation for Firebase Authentication in the Time Tracking 2.0 application, supporting both the admin portal (for managers) and hours portal (for workers).
 
 **Last Updated**: 2024-06-16 (Reflected state management refactor)
-**Status**: In Progress (Core Refactor Complete)  
+**Status**: In Progress (Core Refactor Complete, Portal Integration Complete, WebAuthn Backend Implemented)  
 **Author**: Claude / Gemini
 
 ## Implementation Progress
@@ -19,17 +19,25 @@ This document outlines the plan and current implementation for Firebase Authenti
 - ✅ Created permissions system documentation ([Permissions System](../schema/permissions-system.md))
 - ✅ **Refactored State Management**: Centralized auth state (user, profile, loading) in Zustand (`useAuthStore`).
 - ✅ **Refactored Auth Context**: `AuthProvider` now provides only auth *actions* (login, register, logout) via `useAuth` hook.
-- ✅ **Implemented Central Listener**: `App.tsx` listener updates Zustand state and fetches Firestore user data (`User` type).
+- ✅ **Implemented Central Listener**: `App.tsx` listener updates Zustand state and fetches Firestore user data (`User` type) (Implemented in both portals).
 - ✅ **Updated Registration**: `register` action in `AuthProvider` now creates Firestore document matching `User` type.
 - ✅ **Enabled Role Hooks**: Zustand hooks (`useIsAdmin`, `useIsManager`, `useIsWorker`) are functional based on Firestore `User.role`.
+- ✅ **Portal Integration**: Core authentication flow (Provider, Listener, Protected Routes, Login/Register Pages) implemented in both `admin` and `hours` portals.
+- ✅ **WebAuthn Backend Config**: Implemented backend logic (`functions/src/webauthn.ts`) to handle multiple origins (`expectedOrigins`) and a configurable Relying Party ID (`rpID`) via Firebase Function Configuration.
+- ✅ **WebAuthn Secure Challenge Storage**: Implemented secure storage for *authentication* challenges using a dedicated Firestore collection (`webAuthnAuthChallenges`) with a server-side expiry (`expiresAt`) and retrieval via a `challengeId`. Requires manual configuration of Firestore TTL policy on `expiresAt` field.
 
 ### In Progress
-- 🔄 Portal Integration: Implementing login/register pages in specific portals.
-- 🔄 Biometric Authentication: Implementing credential storage and actual biometric login flow.
+- 🔄 **WebAuthn (Passkey) Implementation**:
+    - Backend Cloud Functions for registration and authentication options generation and verification (`functions/src/webauthn.ts`) created.
+    - Frontend `PasskeyManager` component created for registration flow (needs UI integration).
+    - Frontend `LoginForm` updated to handle Passkey authentication flow (using `challengeId`).
+    - Secure *registration* challenge storage implemented (temporary storage on user document).
 - 🔄 User profile management UI.
 
 ### Pending
-- Biometric authentication testing across platforms.
+- **WebAuthn (Passkey) Frontend Integration**: Placing `PasskeyManager` in `admin` and `hours` portal UIs.
+- **WebAuthn (Passkey) End-to-End Testing**: Thorough testing across browsers/authenticators.
+- Password reset functionality implementation.
 - Advanced features (2FA, Google Sign-in, etc.)
 
 ## 1. Current Infrastructure Analysis
@@ -116,6 +124,23 @@ The project already has Firebase security rules in place with:
 
 ## 4. Implementation Plan
 
+> **IMPORTANT BUILD NOTE (Workaround Required):**
+> Due to persistent module resolution issues (`TS2307: Cannot find module`) when using `pnpm install` within the `functions` workspace on some development environments (specifically observed on Windows with Node v20/v22), the TypeScript build (`pnpm run build` inside `functions`) fails.
+> 
+> **Workaround:** To build the Cloud Functions successfully, dependencies for the `functions` package **must be installed using `npm install` directly within the `functions` directory** after any changes to `functions/package.json`.
+> ```bash
+> # Navigate to functions directory
+> cd functions
+> # Install dependencies using npm
+> npm install 
+> # Run the build
+> pnpm run build 
+> # Navigate back if needed
+> cd ..
+> ```
+> This creates a local `functions/node_modules` directory managed by npm. Ensure `/functions/node_modules` is added to the root `.gitignore` file.
+> The rest of the monorepo should continue using `pnpm install` from the root.
+
 ### 4.1 Common Package Authentication Module (`packages/common`)
 
 1.  **Firebase Core Initialization (`src/firebase/core/firebase.ts`)** ✅
@@ -144,6 +169,19 @@ The project already has Firebase security rules in place with:
     *   Includes functions for biometric capability detection (`isBiometricAvailable`, `isBiometricEnabled`).
     *   Includes helpers for credential persistence (`getRememberedUser`, `getLastUser`).
     *   Will be expanded for actual biometric login flow.
+
+7.  **WebAuthn (Passkey) Utilities & Components**
+    *   **Backend (`functions/src/webauthn.ts`)**: Contains V2 Cloud Functions:
+        *   `webauthnGenerateRegistrationOptions`: Generates registration options, stores temporary challenge on user doc.
+        *   `webauthnVerifyRegistration`: Verifies registration response, saves credential to `users/{userId}/passkeys` subcollection.
+        *   `webauthnGenerateAuthenticationOptions`: Generates authentication options, securely stores challenge in `webAuthnAuthChallenges` collection, returns `challengeId`.
+        *   `webauthnVerifyAuthentication`: Retrieves challenge using `challengeId`, verifies authentication response, deletes challenge doc, issues custom token.
+        *   Handles multi-origin (`expectedOrigins`) and configurable `rpID`.
+        *   Requires manual setup of Firestore TTL policy for `webAuthnAuthChallenges` collection on `expiresAt` field.
+    *   **Frontend Utilities (`src/firebase/auth/auth-service.ts`)**: Includes helpers for credential persistence (`getRememberedUser`, `getLastUser`). Older biometric checks are deprecated/removed.
+    *   **Frontend Components (`src/components/auth/`)**:
+        *   `LoginForm.tsx`: Updated to include Passkey login button and logic using `@simplewebauthn/browser` and backend functions (handles `challengeId`). Old biometric logic removed.
+        *   `PasskeyManager.tsx`: New component for registering new Passkeys/devices (requires integration into settings/profile pages).
 
 ### 4.1.1 Zustand Authentication Store (`src/store/useAuthStore.ts`) ✅
 
@@ -209,44 +247,91 @@ Two primary sets of hooks facilitate interaction with the authentication system:
     *   `useIsAdmin()`, `useIsManager()`, `useIsWorker()`: Select boolean based on the `role` field in the Firestore `User` data. Used for role-based UI/feature control.
     *   `useAuthActions()`: Selects the store's internal actions (`setUser`, `setUserProfile`, etc.). Primarily used internally by the central `onAuthStateChanged` listener in `App.tsx`.
 
-### 4.5 Admin Portal Integration ⏳
+### 4.5 Admin Portal Integration ✅
 
 Location: `packages/admin/src/`
 
-1. **Auth Provider Integration** ⏳
-   - (Pending implementation)
+1. **Auth Provider Integration** ✅
+   - `main.tsx` wraps `<App />` with `<AuthProvider>`.
 
-2. **Protected Routes Setup** ⏳
-   - (Pending implementation)
+2. **Central Listener Integration** ✅
+   - `App.tsx` implements `onAuthStateChanged` listener updating Zustand store and fetching Firestore profile.
 
-3. **Admin-specific Auth UI** ⏳
-   - (Pending implementation)
+3. **Protected Routes Setup** ✅
+   - `App.tsx` uses `AdminRoute`/`ManagerRoute`/`ProtectedRoute` components from `@common`.
 
-### 4.6 Hours Portal Integration (`packages/hours`)
+4. **Admin-specific Auth UI** ✅
+   - `LoginPage.tsx` and `RegisterPage.tsx` exist and utilize common `LoginForm`/`RegisterForm` components which use `useAuth`.
+
+### 4.6 Hours Portal Integration (`packages/hours`) ✅
 
 1.  **Auth Provider Integration & Listener** ✅
-    *   The root component `App.tsx` now wraps the application's router with `<AuthProvider>` from `@common`. This makes authentication actions (`useAuth`) available to components within the portal.
-    *   `App.tsx` also contains the central `onAuthStateChanged` listener that updates the global Zustand store (`useAuthStore`) with the current auth state and Firestore user data.
+    *   The root component `App.tsx` wraps the application's router with `<AuthProvider>` from `@common`.
+    *   `App.tsx` contains the central `onAuthStateChanged` listener updating the global Zustand store.
 
 2.  **Protected Routes Setup** ✅
-    *   `App.tsx` uses the `RequireAuth` component (which checks state via `useAuthStatus` from Zustand) to protect application routes like `/time`, `/dashboard`, `/history`, `/reports`.
+    *   `App.tsx` uses protected route components (e.g., `WorkerRoute`, `ProtectedRoute`) checking state via Zustand.
 
-3.  **Worker-specific Auth UI** 🔄
+3.  **Worker-specific Auth UI** ✅
     *   Login/Registration pages (`LoginPage.tsx`, `RegisterPage.tsx`) exist.
-    *   These pages utilize the common `LoginForm` and `RegisterForm` components.
-    *   Need to ensure these pages correctly use the `useAuth()` hook to call `login`/`register` actions.
+    *   These pages utilize the common `LoginForm` and `RegisterForm` components which correctly use the `useAuth()` hook.
 
-### 4.7 Mobile Biometric Authentication ⏳
+### 4.7 Passkey / Biometric Authentication (WebAuthn) 🔄
 
-1. **Platform Detection** ✅
-   - Added detection for biometric capabilities
-   - Used viewport detection for responsive UI
+**Goal**: Allow users to register and authenticate using device biometrics (Face ID, Touch ID, Windows Hello, Android Biometrics) or other FIDO2-compliant authenticators via the WebAuthn standard, including synced Passkeys (Apple/Google/Microsoft).
 
-2. **Web Implementation** ⏳
-   - (Partially implemented, detection only)
+**Approach**: Implement the WebAuthn flow using the `SimpleWebAuthn` libraries for frontend/backend, Firebase Cloud Functions for server logic, Firestore for storing public key credentials, and Firebase Custom Tokens for final authentication.
 
-3. **React Native/PWA Implementation** ⏳
-   - (Pending implementation)
+**Recommended Libraries**:
+*   `@simplewebauthn/browser`: Frontend library for interacting with the browser's WebAuthn API.
+*   `@simplewebauthn/server`: Backend library for generating/verifying challenges and responses (used in Cloud Functions).
+
+**Implementation Steps**:
+
+1.  **Setup Backend (Cloud Functions)** 🔄:
+    *   Install `@simplewebauthn/server` in the `functions` directory.
+    *   Create HTTPS callable Cloud Functions for:
+        *   `generateRegistrationOptions`: Generates challenges for registering a new Passkey/credential. Requires user's Firebase Auth UID and potentially email/name.
+        *   `verifyRegistration`: Verifies the browser's response to the registration challenge. Stores the validated public key credential (and related metadata like `credentialID`, `transports`) in Firestore, associated with the user's UID (e.g., in a subcollection `users/{userId}/passkeys`).
+        *   `generateAuthenticationOptions`: Generates challenges for authenticating with an existing Passkey/credential. May allow specifying `credentialID`s associated with the user.
+        *   `verifyAuthentication`: Verifies the browser's response to the authentication challenge. If valid, generates a Firebase Custom Token for the user's UID.
+    *   Configure Relying Party (RP) details (RP ID, RP Name) matching the deployed application domains.
+    *   Implement Firestore interactions within the functions to store/retrieve Passkey credentials.
+
+2.  **Implement Frontend Registration Flow** 🔄:
+    *   Install `@simplewebauthn/browser` in `packages/common` (or individual portals if preferred).
+    *   Create a UI section (e.g., in user profile/settings) for users to manage Passkeys.
+    *   Add a "Register New Passkey/Device" button.
+    *   On click, call the `generateRegistrationOptions` Cloud Function.
+    *   Pass the received options to `@simplewebauthn/browser`'s `startRegistration()` function.
+    *   Send the result from `startRegistration()` to the `verifyRegistration` Cloud Function.
+    *   Provide user feedback on success/failure.
+
+3.  **Implement Frontend Authentication Flow** 🔄:
+    *   Add a "Sign in with Passkey/Biometrics" button to `LoginForm.tsx` (conditionally rendered if Passkeys are potentially available for the user/device - might require remembering last username or prompting).
+    *   On click:
+        *   Call the `generateAuthenticationOptions` Cloud Function (potentially passing the username/email to help backend find associated credentials).
+        *   Pass the received options to `@simplewebauthn/browser`'s `startAuthentication()` function.
+        *   Send the result from `startAuthentication()` to the `verifyAuthentication` Cloud Function.
+    *   If the Cloud Function returns a Firebase Custom Token:
+        *   Use the Firebase Auth SDK's `signInWithCustomToken(token)` method.
+        *   This completes the sign-in, triggering the `onAuthStateChanged` listener and updating the Zustand store.
+    *   Provide user feedback on success/failure.
+
+4.  **Firestore Schema Update** 🔄:
+    *   Define the structure for storing Passkey credentials in Firestore (e.g., under `users/{userId}/passkeys/{credentialIdBase64}`). Ensure it includes `credentialID` (as Base64URL string), `publicKey` (as Buffer/Uint8Array or Base64), `counter`, `transports`, etc., as required by SimpleWebAuthn/WebAuthn verification.
+    *   Update `firestore.rules` to allow authenticated users to manage their *own* Passkey documents (create/read/delete) and allow the backend functions appropriate access.
+
+5.  **UI/UX Considerations** 🔄:
+    *   Clearly explain Passkeys/biometric login to users.
+    *   Handle various error scenarios gracefully (unsupported browser, user cancellation, verification failure).
+    *   Allow users to name/manage their registered Passkeys/devices.
+    *   Consider conditional UI (e.g., only show Passkey login if the browser indicates platform authenticator availability via `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`).
+
+6.  **Testing** ⏳:
+    *   Test across different browsers (Chrome, Safari, Firefox, Edge) and operating systems (macOS, Windows, iOS, Android).
+    *   Test with different authenticator types (device biometrics, security keys).
+    *   Test error handling and recovery flows.
 
 ## 5. Integration with Existing Firebase Rules
 
@@ -318,12 +403,12 @@ With the core authentication state management refactored and the basic user docu
     *   Integrate role-based protected routes fully within the `packages/admin` portal.
 
 3.  **Implement Profile Management** 🔄:
-    *   Create UI components for viewing and editing user profiles (leveraging the `User` data from `useCurrentUserProfile`).
-    *   Implement permission-based field visibility and editability according to `firestore.rules`.
+    *   Create UI components for viewing and editing user profiles.
+    *   Include UI for managing Passkeys (linking to step 4.7.2).
+    *   Implement permission-based field visibility and editability.
 
-4.  **Finalize Biometric Authentication** 🔄:
-    *   Implement secure credential storage and the actual biometric login/authentication flow for supported platforms (WebAuthn for web, platform APIs for native/PWA if applicable).
-    *   Add appropriate fallback mechanisms for unsupported platforms or user preference.
+4.  **Implement Passkey/Biometric Authentication (WebAuthn)** 🔄:
+    *   Follow the detailed steps outlined in section 4.7.
 
 5.  **Testing**: 
     *   Add unit and integration tests for authentication components and hooks.

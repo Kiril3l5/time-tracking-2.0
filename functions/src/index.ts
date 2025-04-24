@@ -7,6 +7,29 @@
  * See a full list of supported triggers at https://firebase.google.com/docs/functions
  */
 
+import * as admin from "firebase-admin";
+
+// Initialize Admin SDK **ONCE** here
+if (admin.apps.length === 0) {
+  admin.initializeApp();
+}
+
+// Import WebAuthn functions
+import {
+  webauthnGenerateRegistrationOptions,
+  webauthnVerifyRegistration,
+  webauthnGenerateAuthenticationOptions,
+  webauthnVerifyAuthentication
+} from "./webauthn";
+
+// Export WebAuthn functions
+export {
+  webauthnGenerateRegistrationOptions,
+  webauthnVerifyRegistration,
+  webauthnGenerateAuthenticationOptions,
+  webauthnVerifyAuthentication
+}; 
+
 // Time Tracking System Cloud Functions
 // Currently no functions are implemented
 

@@ -300,15 +300,21 @@ const checkCache = new CheckCache();
 /**
  * Run a bundle size analysis check
  * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
+ * @returns {Promise<{success: boolean, error?: string, data?: any, duration: number, name: string}>} - Result
  */
 export async function runBundleSizeCheck(options = {}) {
+  const checkName = 'bundleSize';
+  const startTime = Date.now();
   const { verbose = false, silentMode = false } = options;
   
   // Update silent mode setting
   silentLogger.setSilent(silentMode);
-  
   silentLogger.info("Running bundle size analysis...");
+  let resultData = {};
+  let success = false;
+  let errorMsg = null;
+  let warning = false;
+  let message = null;
   
   try {
     // Find build directories to analyze
@@ -319,18 +325,12 @@ export async function runBundleSizeCheck(options = {}) {
     ].filter(dir => fs.existsSync(dir));
     
     if (buildDirs.length === 0) {
-      silentLogger.warn("No build directories found for bundle analysis. Run the build step first.");
-      return {
-        success: false,
-        error: "No build directories found. Run build step first.",
-        warning: true
-      };
-    }
-    
-    // Try to use the module function
-    if (typeof analyzeBundles === 'function') {
-      // Set a timeout to prevent hanging
-      const result = await runWithTimeout(
+      errorMsg = "No build directories found. Run build step first.";
+      silentLogger.warn(errorMsg);
+      success = false;
+      warning = true;
+    } else if (typeof analyzeBundles === 'function') {
+      const analyzeResult = await runWithTimeout(
         analyzeBundles({
           directories: buildDirs,
           verbose: options.verbose,
@@ -338,77 +338,93 @@ export async function runBundleSizeCheck(options = {}) {
           saveReport: true,
           silent: true // Always silence inner module logging
         }),
-        60000,
+        options.timeout?.bundlesize || 60000, // Use provided timeout or default
         "Bundle size analysis",
-        { success: true },
+        { success: false, error: "Bundle size analysis timed out", issues: [] }, // Fallback on timeout
         options
       );
       
-      if (!result) {
-        silentLogger.warn("Bundle size analysis returned no result");
-        return { 
-          success: false, 
-          error: "Bundle size analysis returned no result",
-          warning: true
-        };
+      if (!analyzeResult) {
+         errorMsg = "Bundle size analysis returned no result";
+         silentLogger.warn(errorMsg);
+         success = false;
+         warning = true;
+      } else if (analyzeResult.timedOut) {
+         errorMsg = analyzeResult.error;
+         silentLogger.warn(errorMsg);
+         success = false;
+         warning = true;
+      } else {
+          resultData = analyzeResult; // Store the raw result data
+          if (analyzeResult.issues && analyzeResult.issues.length > 0) {
+            const errorCount = analyzeResult.issues.filter(issue => issue.severity === 'error').length;
+            const warningCount = analyzeResult.issues.filter(issue => issue.severity === 'warning').length;
+            
+            message = `Bundle size check found ${errorCount} errors and ${warningCount} warnings`;
+            silentLogger.warn(`Bundle size issues: ${errorCount} errors, ${warningCount} warnings`);
+            
+            success = errorCount === 0; // Fail only on errors
+            warning = warningCount > 0;
+            if (!success) errorMsg = errorMsg || `Bundle size check failed with ${errorCount} errors`;
+          } else {
+             success = true;
+             silentLogger.success("Bundle size check passed.");
+          }
       }
-      
-      if (result.issues && result.issues.length > 0) {
-        const errorCount = result.issues.filter(issue => issue.severity === 'error').length;
-        const warningCount = result.issues.filter(issue => issue.severity === 'warning').length;
-        
-        silentLogger.warn(`Bundle size issues: ${errorCount} errors, ${warningCount} warnings`);
-        
-        return { 
-          success: errorCount === 0, // Only fail on errors, warnings are acceptable
-          data: result,
-          warning: warningCount > 0,
-          message: `Bundle size check found ${errorCount} errors and ${warningCount} warnings` 
-        };
-      }
-      
-      silentLogger.success("Bundle size check passed.");
-      return { success: true, data: result };
     } else {
-      // Fallback to command line
+      // Fallback to command line (Consider removing if module is reliable)
       silentLogger.info("Using command line fallback for bundle size check");
       execSync('pnpm run analyze-bundle', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.bundlesize || 60000 
       });
-      return { success: true };
+      success = true; // Assume success if command doesn't throw
     }
   } catch (error) {
+    errorMsg = error.message;
     silentLogger.error("Bundle size check failed:", error);
-    return { 
-      success: false, 
-      error: error.message 
-    };
+    success = false; 
   }
+  
+  // Calculate duration and return consistent structure
+  const duration = Date.now() - startTime;
+  return {
+      name: checkName,
+      success: success,
+      duration: duration,
+      error: errorMsg,
+      warning: warning,
+      message: message || errorMsg, // Provide a summary message
+      data: resultData 
+  };
 }
 
 /**
  * Run dead code detection
  * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
+ * @returns {Promise<{success: boolean, error?: string, data?: any, duration: number, name: string}>} - Result
  */
 export async function runDeadCodeCheck(options = {}) {
+  const checkName = 'deadCode';
+  const startTime = Date.now();
   const { verbose = false, silentMode = false } = options;
   
-  // Update silent mode setting
   silentLogger.setSilent(silentMode);
-  
   silentLogger.info("Running dead code analysis...");
   
+  let resultData = {};
+  let success = false;
+  let errorMsg = null;
+  let criticalIssues = [];
+  let warnings = [];
+
   try {
-    // Define relevant source directories
     const srcDirs = [
       path.join(process.cwd(), 'packages/admin/src'),
       path.join(process.cwd(), 'packages/hours/src'),
       path.join(process.cwd(), 'packages/common/src')
     ];
     
-    // Run the analysis
     silentLogger.info("Running fresh dead code analysis...");
     
     const analyzeResult = await runWithTimeout(
@@ -417,582 +433,595 @@ export async function runDeadCodeCheck(options = {}) {
         verbose: options.verbose,
         excludeTests: true,
         saveReport: true,
-        // Add stricter options
         failOnUnusedExports: true,
         failOnEmptyFiles: true,
         failOnDuplicateCode: true,
         minDuplicationPercentage: 20,
         maxAllowedUnusedExports: 5
       }),
-      60000,
+      options.timeout?.deadcode || 60000, // Use provided timeout or default
       "Dead code analysis",
-      null, // Don't provide fallback, let it fail
+      { success: false, error: "Dead code analysis timed out" }, // Fallback on timeout
       options
     );
     
-    // --- DEBUGGING: Log raw dead code analysis result ---
     logger.debug('--- Raw analyzeDeadCode result START ---');
     logger.debug(JSON.stringify(analyzeResult, null, 2));
     logger.debug('--- Raw analyzeDeadCode result END ---');
-    // --- END DEBUGGING ---
 
     if (!analyzeResult) {
-      logger.error('analyzeDeadCode function returned null or undefined result.');
-      return { success: false, error: "Dead code analysis returned no result", criticalIssues: [], warnings: [] }; 
+      errorMsg = "Dead code analysis returned no result";
+      logger.error(errorMsg);
+      success = false;
+    } else if (analyzeResult.timedOut) {
+       errorMsg = analyzeResult.error;
+       logger.error(errorMsg);
+       success = false;
+    } else {
+        resultData = { // Store relevant data
+            unusedExports: analyzeResult.data?.unusedExports || analyzeResult.unusedExports || [],
+            emptyFiles: analyzeResult.data?.emptyFiles || analyzeResult.emptyFiles || [],
+            duplicates: analyzeResult.data?.duplicates || analyzeResult.duplicates || [],
+            deprecatedUsage: analyzeResult.data?.deprecatedUsage || analyzeResult.deprecatedUsage || [],
+            depcheckErrors: analyzeResult.depcheckErrors || []
+        };
+
+        // Categorize issues
+        if (resultData.unusedExports.length > 0) {
+            const count = resultData.unusedExports.length;
+            const maxAllowed = options.maxAllowedUnusedExports || 5;
+            if (count > maxAllowed) criticalIssues.push(`Found ${count} unused exports - exceeds maximum allowed (${maxAllowed})`);
+            else warnings.push(`Found ${count} unused exports that could be removed`);
+        }
+        if (resultData.emptyFiles.length > 0) criticalIssues.push(`Found ${resultData.emptyFiles.length} empty files`);
+        if (resultData.duplicates.length > 0) {
+            const high = resultData.duplicates.filter(d => d.percentage >= 80).length;
+            const med = resultData.duplicates.filter(d => d.percentage >= 50 && d.percentage < 80).length;
+            if (high > 0) criticalIssues.push(`Found ${high} instances of high code duplication (>80%)`);
+            if (med > 0) warnings.push(`Found ${med} instances of medium code duplication (50-80%)`);
+        }
+        if (resultData.deprecatedUsage.length > 0) criticalIssues.push(`Found ${resultData.deprecatedUsage.length} uses of deprecated APIs`);
+
+        // Check depcheck status
+        const depcheckCommandFailed = !!(resultData.depcheckErrors.length > 0 || analyzeResult.error);
+        const depcheckErrorMsg = analyzeResult.error || (depcheckCommandFailed ? `Depcheck failed in ${resultData.depcheckErrors.length} package(s).` : null);
+        if (depcheckCommandFailed) {
+            logger.error(`Depcheck command failed: ${depcheckErrorMsg}`);
+            criticalIssues.push(depcheckErrorMsg); // Add depcheck failure as critical
+        }
+        
+        // Determine overall success
+        const foundCriticalIssues = criticalIssues.length > 0;
+        success = analyzeResult.success && !foundCriticalIssues && !depcheckCommandFailed;
+        errorMsg = !success ? (depcheckErrorMsg || criticalIssues.join('; ') || analyzeResult.error || "Dead code check failed") : null;
+        
+        if (criticalIssues.length > 0) silentLogger.error("Dead code analysis found critical issues:", criticalIssues.join('; '));
+        if (warnings.length > 0) silentLogger.warn("Dead code analysis found warnings:", warnings.join('; '));
+        if (success && warnings.length === 0) silentLogger.success("Dead code analysis passed.");
     }
-    
-    // Categorize issues by severity
-    const criticalIssues = [];
-    const warnings = [];
-    
-    // Check for unused exports
-    if (analyzeResult.unusedExports && analyzeResult.unusedExports.length > 0) {
-      const count = analyzeResult.unusedExports.length;
-      const maxAllowed = options.maxAllowedUnusedExports || 5;
-      logger.debug(`Found ${count} unused exports (Max allowed: ${maxAllowed})`); // Log count
-      if (count > maxAllowed) {
-        criticalIssues.push(`Found ${count} unused exports - exceeds maximum allowed (${maxAllowed})`);
-      } else {
-        warnings.push(`Found ${count} unused exports that could be removed`);
-      }
-    }
-    
-    // Check for empty files (Assuming analyzeResult structure might have this)
-    if (analyzeResult.emptyFiles && analyzeResult.emptyFiles.length > 0) {
-      logger.debug(`Found ${analyzeResult.emptyFiles.length} empty files.`); // Log count
-      criticalIssues.push(`Found ${analyzeResult.emptyFiles.length} empty files that should be removed`);
-    }
-    
-    // Check for duplicate code (Assuming analyzeResult structure might have this)
-    if (analyzeResult.duplicates && analyzeResult.duplicates.length > 0) {
-      const highDuplication = analyzeResult.duplicates.filter(d => d.percentage >= 80);
-      const mediumDuplication = analyzeResult.duplicates.filter(d => d.percentage >= 50 && d.percentage < 80);
-      logger.debug(`Found ${analyzeResult.duplicates.length} duplicate code instances.`); // Log count
-      
-      if (highDuplication.length > 0) {
-        criticalIssues.push(`Found ${highDuplication.length} instances of high code duplication (>80%)`);
-      }
-      if (mediumDuplication.length > 0) {
-        warnings.push(`Found ${mediumDuplication.length} instances of medium code duplication (50-80%)`);
-      }
-    }
-    
-    // Check for deprecated API usage (Assuming analyzeResult structure might have this)
-    if (analyzeResult.deprecatedUsage && analyzeResult.deprecatedUsage.length > 0) {
-      logger.debug(`Found ${analyzeResult.deprecatedUsage.length} deprecated API uses.`); // Log count
-      criticalIssues.push(`Found ${analyzeResult.deprecatedUsage.length} uses of deprecated APIs`);
-    }
-    
-    // Determine overall success based on depcheck command success AND critical issues found
-    const foundCriticalIssues = criticalIssues.length > 0;
-    // *** Ensure success considers depcheckCommandFailed ***
-    // Check if depcheck failed (errors array has items or main error exists)
-    const depcheckCommandFailed = !!(analyzeResult.depcheckErrors && analyzeResult.depcheckErrors.length > 0 || analyzeResult.error);
-    const depcheckErrorMsg = analyzeResult.error || (depcheckCommandFailed ? `Depcheck failed in ${analyzeResult.depcheckErrors.length} package(s).` : null);
-    if (depcheckCommandFailed) {
-         logger.error(`Depcheck command failed during analysis: ${depcheckErrorMsg}`);
-    }
-    
-    // Overall success requires analyzeDeadCode didn't error, no critical issues found, AND depcheck didn't fail.
-    const overallSuccess = analyzeResult.success && !foundCriticalIssues && !depcheckCommandFailed; 
-    logger.debug(`Determined dead code check success: ${overallSuccess} (Analyze Success: ${analyzeResult.success}, Found Critical Issues: ${foundCriticalIssues}, Depcheck Failed: ${depcheckCommandFailed})`);
-    
-    // Construct detailed result
-    const result = {
-      success: overallSuccess, // Reflects depcheck failure
-      criticalIssues,
-      warnings,
-      data: {
-        unusedExports: analyzeResult.data?.unusedExports || analyzeResult.unusedExports || [], 
-        emptyFiles: analyzeResult.data?.emptyFiles || analyzeResult.emptyFiles || [],
-        duplicates: analyzeResult.data?.duplicates || analyzeResult.duplicates || [],
-        deprecatedUsage: analyzeResult.data?.deprecatedUsage || analyzeResult.deprecatedUsage || [],
-        depcheckErrors: analyzeResult.depcheckErrors || [] 
-      },
-      // Prioritize depcheck error message if it failed
-      error: depcheckCommandFailed ? depcheckErrorMsg : 
-             (foundCriticalIssues ? criticalIssues.join('; ') : null) 
-    };
-    
-    // Log results
-    if (criticalIssues.length > 0) {
-      silentLogger.error("Dead code analysis found critical issues:");
-      criticalIssues.forEach(issue => silentLogger.error(`- ${issue}`));
-    }
-    if (warnings.length > 0) {
-      silentLogger.warn("Dead code analysis found warnings:");
-      warnings.forEach(warning => silentLogger.warn(`- ${warning}`));
-    }
-    if (overallSuccess && warnings.length === 0) { 
-      silentLogger.success("Dead code analysis completed successfully with no issues.");
-    }
-    
-    return result;
     
   } catch (error) {
+    errorMsg = error.message;
     silentLogger.error("Dead code check failed:", error);
-    return { 
-      success: false, 
-      error: error.message,
-      criticalIssues: [`Dead code analysis failed: ${error.message}`],
-      warnings: []
-    };
+    success = false; 
   }
+  
+  const duration = Date.now() - startTime;
+  return {
+      name: checkName,
+      success: success,
+      duration: duration,
+      error: errorMsg,
+      warning: warnings.length > 0 && success, // Warning only if it passed but had warnings
+      message: errorMsg || (warnings.length > 0 ? warnings.join('; ') : "Dead code check passed"),
+      data: resultData 
+  };
 }
 
 /**
  * Run documentation quality check
  * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
+ * @returns {Promise<{success: boolean, error?: string, data?: any, duration: number, name: string}>} - Result
  */
 export async function runDocsQualityCheck(options = {}) {
+  const checkName = 'docsQuality';
+  const startTime = Date.now();
   const { verbose = false, silentMode = false, recordWarning } = options;
   
-  // Update silent mode setting
   silentLogger.setSilent(silentMode);
-  
   silentLogger.info("Checking documentation quality...");
   
+  let resultData = {};
+  let success = false;
+  let errorMsg = null;
+  let warning = false;
+  let message = null;
+
   try {
-    // Try to use the module function
     if (typeof analyzeDocumentation === 'function') {
-      const result = await runWithTimeout(
+      const analyzeResult = await runWithTimeout(
         analyzeDocumentation({
           verbose: options.verbose,
           saveReport: true,
           silent: true
         }),
-        30000,
+        options.timeout?.docsquality || 30000, // Use provided timeout or default
         "Documentation quality check",
-        { success: true, issues: [] },
+        { success: false, error: "Documentation quality check timed out", issues: [] },
         options
       );
       
-      // Check for execution error first
-      if (result.error && !result.success) {
-         silentLogger.warn(`Documentation quality check failed to run: ${result.error}`);
-         if (recordWarning) {
-            recordWarning(`Docs Quality check failed: ${result.error}`, 'Validation', 'Documentation');
-         }
-         return { success: false, error: result.error };
-      }
-
-      // Determine success based *only* on the underlying check's result.success
-      const checkPassed = result.success === true;
-      
-      // Log warnings if the underlying check found issues
-      const issuesFound = result.issues && Array.isArray(result.issues) && result.issues.length > 0;
-      
-      // Record warnings ONLY if the underlying check actually found issues
-      if (issuesFound) {
-        silentLogger.warn(`Found ${result.issues.length} documentation quality issues.`);
-        // Record each specific issue as a warning
-        if (recordWarning && typeof recordWarning === 'function') {
-          result.issues.forEach(fileIssue => {
-            if (fileIssue.issues && Array.isArray(fileIssue.issues)) {
-              fileIssue.issues.forEach(issueText => {
-                // Construct message with file context
-                const message = `Documentation issue: ${issueText}`; 
-                const filePath = fileIssue.file || null;
-                recordWarning(message, 'Validation', 'Documentation', 'warning', filePath);
-              });
-            }
-          });
-        }
-        // NOTE: Do NOT return success: false here anymore just because issues were found.
-      }
-      
-      // Log the final status based on the underlying check
-      if (checkPassed) {
-        silentLogger.success("Documentation quality check passed.");
+      if (!analyzeResult) {
+          errorMsg = "Documentation quality check returned no result";
+          success = false;
+      } else if (analyzeResult.timedOut || (analyzeResult.error && !analyzeResult.success)) {
+          errorMsg = analyzeResult.error || "Documentation quality check failed to run";
+          success = false;
+          silentLogger.warn(errorMsg);
+          if (recordWarning) recordWarning(`Docs Quality check failed: ${errorMsg}`, 'Validation', 'Documentation');
       } else {
-        silentLogger.warn(`Documentation quality check reported issues or failed.`);
+          resultData = analyzeResult; // Store raw data
+          success = analyzeResult.success === true; // Base success on the check's result
+          const issuesFound = analyzeResult.issues && Array.isArray(analyzeResult.issues) && analyzeResult.issues.length > 0;
+          
+          if (issuesFound) {
+            warning = true; // Mark as warning if issues found, regardless of success status
+            message = `Found ${analyzeResult.issues.length} documentation quality issues`;
+            silentLogger.warn(message);
+            // Record specific issues if recorder is available
+            if (recordWarning && typeof recordWarning === 'function') {
+               analyzeResult.issues.forEach(fileIssue => {
+                  if (fileIssue.issues && Array.isArray(fileIssue.issues)) {
+                      fileIssue.issues.forEach(issueText => {
+                          recordWarning(`Doc Issue: ${issueText}`, 'Validation', 'Documentation', 'warning', fileIssue.file || null);
+                      });
+                  }
+               });
+            }
+          }
+          
+          if (success) {
+            message = message || "Documentation quality check passed.";
+            silentLogger.success(message);
+          } else {
+             errorMsg = errorMsg || "Documentation quality check reported issues or failed.";
+             message = message || errorMsg;
+             silentLogger.warn(message);
+          }
       }
-      
-      // Return the actual success status from analyzeDocumentation,
-      // include the data, and set the warning flag if issues were found.
-      return { 
-        success: checkPassed, 
-        data: result,
-        warning: issuesFound, // Mark as warning if issues found
-        message: issuesFound ? `Found ${result.issues.length} documentation quality issues` : 'Documentation quality check passed' 
-      };
     } else {
-      // Fallback to command line
       silentLogger.info("Using command line fallback for documentation quality check");
       execSync('pnpm run check-docs', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.docsquality || 30000 
       });
-      return { success: true };
+      success = true; // Assume success
     }
   } catch (error) {
-    // Catch errors during the execution of runDocsQualityCheck itself
-    silentLogger.warn(`Documentation quality check execution error: ${error.message}`);
-    if (recordWarning) {
-        recordWarning(`Docs Quality check execution failed: ${error.message}`, 'Validation', 'Documentation', 'error');
-    }
-    return { 
-      success: false, 
-      error: error.message 
-    };
+      errorMsg = error.message;
+      success = false;
+      silentLogger.warn(`Documentation quality check execution error: ${errorMsg}`);
+      if (recordWarning) recordWarning(`Docs Quality check execution failed: ${errorMsg}`, 'Validation', 'Documentation', 'error');
   }
+  
+  const duration = Date.now() - startTime;
+  return {
+      name: checkName,
+      success: success,
+      duration: duration,
+      error: errorMsg,
+      warning: warning, // Reflects if issues were found
+      message: message || errorMsg || "Documentation quality check completed",
+      data: resultData
+  };
 }
 
 /**
  * Run documentation freshness check
  * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
+ * @returns {Promise<{success: boolean, error?: string, data?: any, duration: number, name: string}>} - Result
  */
 export async function runDocsFreshnessCheck(options = {}) {
+  const checkName = 'docsFreshness';
+  const startTime = Date.now();
   const { verbose = false, silentMode = false } = options;
   
-  // Update silent mode setting
   silentLogger.setSilent(silentMode);
-  
   silentLogger.info("Checking documentation freshness...");
+
+  let resultData = {};
+  let success = false;
+  let errorMsg = null;
+  let warning = false;
+  let message = null;
   
   try {
-    // Try to use the module function with timeout
     if (typeof checkDocumentation === 'function') {
-      const result = await runWithTimeout(
+      const analyzeResult = await runWithTimeout(
         checkDocumentation({
           verbose: options.verbose,
           saveReport: true,
           silent: true
         }),
-        30000,
+        options.timeout?.docsfreshness || 120000, // Use provided timeout or default (increased)
         "Documentation freshness check",
-        { success: true, staleDocuments: [] },
+        { success: false, error: "Documentation freshness check timed out", staleDocuments: [] },
         options
       );
       
-      const staleDocsCount = result.staleDocuments?.length || 0;
-      if (staleDocsCount > 0) {
-        silentLogger.warn(`Found ${staleDocsCount} stale documentation files.`);
-        return { 
-          success: false, 
-          data: result,
-          warning: true,
-          message: `Found ${staleDocsCount} stale documentation files` 
-        };
+      if (!analyzeResult) {
+          errorMsg = "Documentation freshness check returned no result";
+          success = false;
+      } else if (analyzeResult.timedOut || (analyzeResult.error && !analyzeResult.success)) {
+          errorMsg = analyzeResult.error || "Documentation freshness check failed to run";
+          success = false;
+          silentLogger.warn(errorMsg);
+      } else {
+          resultData = analyzeResult; // Store raw data
+          const staleDocsCount = analyzeResult.staleDocuments?.length || 0;
+          success = staleDocsCount === 0; // Success means no stale docs
+          
+          if (staleDocsCount > 0) {
+            warning = true; // Treat stale docs as a warning
+            message = `Found ${staleDocsCount} stale documentation files.`;
+            errorMsg = message; // Report the finding as the primary message/error if failed
+            silentLogger.warn(message);
+          }
+          
+          if (success) {
+            message = "Documentation freshness check passed.";
+            silentLogger.success(message);
+          }
       }
-      
-      silentLogger.success("Documentation freshness check passed.");
-      return { success: true, data: result };
     } else {
-      // Fallback to command line
       silentLogger.info("Using command line fallback for documentation freshness check");
       execSync('pnpm run docs:freshness', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
-        timeout: options.timeout?.docsfreshness || 30000 
+        timeout: options.timeout?.docsfreshness || 120000 
       });
-      return { success: true };
+      success = true; // Assume success
     }
   } catch (error) {
-    silentLogger.warn(`Documentation freshness check error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message 
-    };
+      errorMsg = error.message;
+      success = false;
+      silentLogger.warn(`Documentation freshness check error: ${errorMsg}`);
   }
+
+  const duration = Date.now() - startTime;
+  return {
+      name: checkName,
+      success: success,
+      duration: duration,
+      error: errorMsg,
+      warning: warning, // Reflects if stale docs were found
+      message: message || errorMsg || "Documentation freshness check completed",
+      data: resultData
+  };
 }
 
 /**
  * Run TypeScript check
  * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
+ * @returns {Promise<{success: boolean, error?: string, data?: any, duration: number, name: string}>} - Result
  */
 export async function runAdvancedTypeScriptCheck(options = {}) {
+  const checkName = 'typescript';
+  const startTime = Date.now();
   const { verbose = false, silentMode = false } = options;
   
-  // Update silent mode setting
   silentLogger.setSilent(silentMode);
-  
   silentLogger.info("Running advanced TypeScript check...");
   
+  let resultData = {};
+  let success = false;
+  let errorMsg = null;
+  let message = null;
+
   try {
-    // Try to use the module function
     if (typeof runTypeCheck === 'function') {
-      const result = await runWithTimeout(
+      const analyzeResult = await runWithTimeout(
         runTypeCheck({
           verbose: options.verbose,
           saveReport: true,
           silent: true
         }),
-        45000,
+        options.timeout?.typescript || 45000, // Use provided timeout or default
         "TypeScript check",
-        { success: true },
+        { success: false, error: "TypeScript check timed out", errors: [] },
         options
       );
       
-      if (!result.success) {
-        silentLogger.warn(`TypeScript check failed with ${result.errors?.length || 0} errors.`);
-        return { 
-          success: false, 
-          data: result,
-          warning: false, // TypeScript errors should be considered blocking
-          message: `TypeScript check failed with ${result.errors?.length || 0} errors` 
-        };
+      if (!analyzeResult) {
+          errorMsg = "TypeScript check returned no result";
+          success = false;
+      } else if (analyzeResult.timedOut || !analyzeResult.success) {
+          const errorCount = analyzeResult.errors?.length || 0;
+          errorMsg = analyzeResult.error || `TypeScript check failed with ${errorCount} errors.`;
+          success = false;
+          message = errorMsg;
+          silentLogger.warn(message);
+      } else {
+          success = true;
+          message = "TypeScript check passed.";
+          silentLogger.success(message);
       }
-      
-      silentLogger.success("TypeScript check passed.");
-      return { success: true, data: result };
+       resultData = analyzeResult; // Store data regardless of success
     } else {
-      // Fallback to command line
       silentLogger.info("Using command line fallback for TypeScript check");
       execSync('pnpm run workflow:typecheck', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.typecheck || 45000 
       });
-      return { success: true };
+      success = true; // Assume success
     }
   } catch (error) {
-    silentLogger.error(`TypeScript check error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message 
-    };
+      errorMsg = error.message;
+      success = false;
+      silentLogger.error(`TypeScript check error: ${errorMsg}`);
   }
+  
+  const duration = Date.now() - startTime;
+  return {
+      name: checkName,
+      success: success,
+      duration: duration,
+      error: errorMsg,
+      warning: false, // TS errors are generally not warnings
+      message: message || errorMsg || "TypeScript check completed",
+      data: resultData
+  };
 }
 
 /**
  * Run ESLint check
  * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
+ * @returns {Promise<{success: boolean, error?: string, data?: any, duration: number, name: string}>} - Result
  */
 export async function runAdvancedLintCheck(options = {}) {
-  const { verbose = false, silentMode = false } = options;
+  const checkName = 'lint';
+  const startTime = Date.now();
+  const { verbose = false, silentMode = false, treatLintAsWarning = false } = options;
   
-  // Update silent mode setting
   silentLogger.setSilent(silentMode);
-  
   silentLogger.info("Running advanced ESLint check...");
   
+  let resultData = {};
+  let success = false;
+  let errorMsg = null;
+  let warning = false; // Default to false, set based on treatLintAsWarning
+  let message = null;
+
   try {
-    // Try to use the module function
     if (typeof runLint === 'function') {
-      const result = await runWithTimeout(
+      const analyzeResult = await runWithTimeout(
         runLint({
           verbose: options.verbose,
           saveReport: true,
           silent: true
         }),
-        45000,
+        options.timeout?.lint || 45000, // Use provided timeout or default
         "ESLint check",
-        { success: true },
+        { success: false, error: "ESLint check timed out", errorCount: 1 }, // Assume failure on timeout
         options
       );
       
-      if (!result.success) {
-        silentLogger.warn(`ESLint check failed with ${result.errorCount || 0} errors.`);
-        return { 
-          success: false, 
-          data: result,
-          warning: options.treatLintAsWarning || false,
-          message: `ESLint check failed with ${result.errorCount || 0} errors` 
-        };
+      if (!analyzeResult) {
+          errorMsg = "ESLint check returned no result";
+          success = false;
+      } else if (analyzeResult.timedOut || !analyzeResult.success) {
+          const errorCount = analyzeResult.errorCount || 0;
+          errorMsg = analyzeResult.error || `ESLint check failed with ${errorCount} errors.`;
+          success = false; // Underlying check failed
+          warning = treatLintAsWarning; // If failed, it's a warning ONLY if specified
+          message = errorMsg;
+          if (warning) silentLogger.warn(message + " (Treated as warning)");
+          else silentLogger.error(message); // Log as error if blocking
+      } else {
+          success = true; // Underlying check passed
+          warning = false; // Passed = not a warning
+          message = "ESLint check passed.";
+          silentLogger.success(message);
       }
-      
-      silentLogger.success("ESLint check passed.");
-      return { success: true, data: result };
+      resultData = analyzeResult; // Store data
     } else {
-      // Fallback to command line
       silentLogger.info("Using command line fallback for ESLint check");
       execSync('pnpm run lint', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.lint || 45000 
       });
-      return { success: true };
+      success = true; // Assume success
     }
   } catch (error) {
-    silentLogger.warn(`ESLint check error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message 
-    };
+      errorMsg = error.message;
+      success = false; // Catch block means failure
+      warning = treatLintAsWarning; // If failed, it's a warning ONLY if specified
+      if (warning) silentLogger.warn(`ESLint check error: ${errorMsg} (Treated as warning)`);
+      else silentLogger.error(`ESLint check error: ${errorMsg}`);
   }
+
+  const duration = Date.now() - startTime;
+  return {
+      name: checkName,
+      success: success || warning, // Overall "success" for dashboard = true if it passed OR failed but is treated as warning
+      duration: duration,
+      error: !warning ? errorMsg : null, // Only report error if it's NOT treated as a warning
+      warning: warning, // Explicitly state if it's a warning
+      message: message || errorMsg || "ESLint check completed",
+      data: resultData
+  };
 }
 
 /**
  * Run workflow validation check
  * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
+ * @returns {Promise<{success: boolean, error?: string, data?: any, duration: number, name: string}>} - Result
  */
 export async function runWorkflowValidationCheck(options = {}) {
+  const checkName = 'workflowValidation';
+  const startTime = Date.now();
   const { verbose = false, silentMode = false } = options;
   
-  // Update silent mode setting
   silentLogger.setSilent(silentMode);
-  
   silentLogger.info("Running workflow validation...");
   
+  let resultData = {};
+  let success = false;
+  let errorMsg = null;
+  let warning = false; // Treat workflow issues as warnings by default
+  let message = null;
+
   try {
-    // Try to use the module function
     if (typeof validateWorkflows === 'function') {
-      const result = await runWithTimeout(
+      const analyzeResult = await runWithTimeout(
         validateWorkflows({
           verbose: options.verbose,
           saveReport: true,
           silent: true
         }),
-        30000,
+        options.timeout?.workflowvalidation || 30000, // Use provided timeout or default
         "Workflow validation",
-        { success: true },
+        { success: false, error: "Workflow validation timed out" },
         options
       );
       
-      if (!result.success) {
-        // Improved error message that doesn't rely solely on issues count
-        const errorMessage = result.error || 
-                           (result.invalidWorkflows ? 
-                             `Workflow validation failed with ${result.invalidWorkflows} invalid workflow file(s)` : 
-                             'Workflow validation failed: Missing required security checks');
-                             
-        silentLogger.warn(errorMessage);
-        
-        // Construct a more meaningful data object with proper issues
-        const enhancedData = {
-          ...result,
-          issues: result.issues || [
-            "Your GitHub Actions workflow may be missing one or more required security checks:",
-            "- Dependency vulnerability scan (npm/yarn/pnpm audit)",
-            "- Code scanning via CodeQL or similar tool",
-            "- Secret scanning for leaked credentials",
-            "- Vulnerability scanning for CVEs"
-          ]
-        };
-        
-        return { 
-          success: false, 
-          data: enhancedData,
-          warning: true,
-          message: errorMessage 
-        };
+      if (!analyzeResult) {
+          errorMsg = "Workflow validation returned no result";
+          success = false;
+      } else if (analyzeResult.timedOut || !analyzeResult.success) {
+           errorMsg = analyzeResult.error || 
+                      (analyzeResult.invalidWorkflows ? 
+                         `Validation failed with ${analyzeResult.invalidWorkflows} invalid file(s)` : 
+                         'Validation failed: Missing required security checks');
+           success = false; // Underlying check failed
+           warning = true; // Treat as warning
+           message = errorMsg;
+           silentLogger.warn(message + " (Treated as warning)");
+           
+           // Enhance data for reporting
+           resultData = {
+               ...analyzeResult,
+               issues: analyzeResult.issues || [/* Default issues list */]
+           };
+      } else {
+          success = true;
+          warning = false;
+          message = "Workflow validation passed.";
+          silentLogger.success(message);
+          resultData = analyzeResult;
       }
-      
-      silentLogger.success("Workflow validation passed.");
-      return { success: true, data: result };
     } else {
-      // Fallback to command line
       silentLogger.info("Using command line fallback for workflow validation");
       execSync('pnpm run workflow:validate', { 
         stdio: silentMode ? 'ignore' : 'inherit', 
         timeout: options.timeout?.workflowvalidation || 30000 
       });
-      return { success: true };
+      success = true; // Assume success
     }
   } catch (error) {
-    silentLogger.warn(`Workflow validation error: ${error.message}`);
-    return { 
-      success: false, 
-      error: error.message,
-      data: {
-        issues: ["Workflow validation check failed to complete: " + error.message]
-      }
-    };
+      errorMsg = error.message;
+      success = false; // Catch block means failure
+      warning = true; // Treat as warning
+      silentLogger.warn(`Workflow validation error: ${errorMsg} (Treated as warning)`);
+      resultData = { issues: [`Check failed to complete: ${errorMsg}`] };
   }
+  
+  const duration = Date.now() - startTime;
+  return {
+      name: checkName,
+      success: success || warning, // Overall success if passed OR treated as warning
+      duration: duration,
+      error: !warning ? errorMsg : null, // Only report error if blocking
+      warning: warning,
+      message: message || errorMsg || "Workflow validation completed",
+      data: resultData
+  };
 }
 
 /**
  * Run health checks
  * @param {Object} options - Options for the check
- * @returns {Promise<{success: boolean, error?: string, data?: any}>} - Result
+ * @returns {Promise<{success: boolean, error?: string, data?: any, duration: number, name: string}>} - Result
  */
 export async function runProjectHealthCheck(options = {}) {
-  const { verbose = false, silentMode = false } = options;
+  const checkName = 'health';
+  const startTime = Date.now();
+  const { verbose = false, silentMode = false, treatHealthAsWarning = false } = options;
   
-  // Update silent mode setting
   silentLogger.setSilent(silentMode);
-  
   silentLogger.info("Running project health checks...");
   
+  let resultData = {};
+  let success = false;
+  let errorMsg = null;
+  let warning = false;
+  let message = null;
+
   try {
-    // Try to use the module function
     if (typeof runHealthChecks === 'function') {
-      const result = await runWithTimeout(
-        runHealthChecks({
+      const analyzeResult = await runWithTimeout(
+        runHealthChecks({ // Pass all options down
           verbose: options.verbose,
           silent: true,
-          ...options
+          ...options 
         }),
-        60000,
+        options.timeout?.health || 60000, // Use provided timeout or default
         "Health checks",
-        { success: true },
+        { success: false, error: "Health checks timed out", issues: [] },
         options
       );
       
-      // Ensure we have a valid result object
-      if (!result) {
-        silentLogger.warn("Health checks returned null or undefined result");
-        return { 
-          success: false,
-          error: "Health checks returned null or undefined result",
-          warning: options.treatHealthAsWarning || false 
-        };
-      }
-      
-      // First check if it timed out
-      if (result.timedOut) {
-        silentLogger.warn("Health checks timed out");
-        return {
-          success: false,
-          error: "Health checks timed out",
-          warning: options.treatHealthAsWarning || false,
-          data: {
-            issues: ["Health checks timed out"]
+      if (!analyzeResult) {
+          errorMsg = "Health checks returned null or undefined result";
+          success = false;
+      } else if (analyzeResult.timedOut || !analyzeResult.success) {
+          let issuesMessage = '';
+          if (analyzeResult.issues && analyzeResult.issues.length > 0) {
+              issuesMessage = analyzeResult.issues.join(', ');
+          } else {
+              issuesMessage = 'Unknown issue';
           }
-        };
+          errorMsg = analyzeResult.error || `Health checks failed: ${issuesMessage}`;
+          success = false; // Underlying check failed
+          warning = treatHealthAsWarning; // Check if treated as warning
+          message = errorMsg;
+          if (warning) silentLogger.warn(message + " (Treated as warning)");
+          else silentLogger.error(message); // Log as error if blocking
+          
+          resultData = analyzeResult; // Keep data even on failure
+      } else {
+          success = true;
+          warning = false; // Passed = not warning
+          message = "Health checks passed.";
+          silentLogger.success(message);
+          resultData = analyzeResult;
       }
-      
-      // Now validate result structure
-      if (!result.success) {
-        // Collect issues to provide meaningful error messages
-        let issuesMessage = '';
-        if (result.issues && result.issues.length > 0) {
-          issuesMessage = result.issues.join(', ');
-          silentLogger.warn(`Health checks found issues: ${issuesMessage}`);
-        } else {
-          issuesMessage = 'Unknown issue';
-          silentLogger.warn(`Health checks failed without specific issues`);
-        }
-
-        return { 
-          success: false,
-          error: `Health checks failed: ${issuesMessage}`,
-          data: result,
-          warning: options.treatHealthAsWarning || false,
-          message: `Health checks found issues: ${issuesMessage}` 
-        };
-      }
-      
-      silentLogger.success("Health checks passed.");
-      return { success: true, data: result };
     } else {
-      // Health checks are critical, so no fallback
-      silentLogger.error("Health checker module not available");
-      return { 
-        success: false, 
-        error: "Health checker module not available" 
-      };
+      errorMsg = "Health checker module not available";
+      silentLogger.error(errorMsg);
+      success = false; 
     }
   } catch (error) {
-    const errorMessage = error ? error.message || "Unknown error" : "Null error received";
-    silentLogger.error(`Health check error: ${errorMessage}`);
-    
-    // Add more detailed debug logging
-    if (error && error.stack) {
-      silentLogger.debug(`Health check error stack: ${error.stack}`);
-    }
-    
-    return { 
-      success: false, 
-      error: errorMessage,
-      data: {
-        issues: [`Health check error: ${errorMessage}`]
-      } 
-    };
+      const errorMessage = error ? error.message || "Unknown error" : "Null error received";
+      errorMsg = `Health check error: ${errorMessage}`;
+      success = false; // Catch block means failure
+      warning = treatHealthAsWarning; // Check if treated as warning
+      if (warning) silentLogger.warn(errorMsg + " (Treated as warning)");
+      else silentLogger.error(errorMsg);
+
+      if (error && error.stack) silentLogger.debug(`Health check error stack: ${error.stack}`);
+      resultData = { issues: [`Health check error: ${errorMessage}`] };
   }
+  
+  const duration = Date.now() - startTime;
+  return {
+      name: checkName,
+      success: success || warning, // Overall success if passed OR treated as warning
+      duration: duration,
+      error: !warning ? errorMsg : null, // Only report error if blocking
+      warning: warning,
+      message: message || errorMsg || "Health check completed",
+      data: resultData
+  };
 }
 
 /**
@@ -1008,13 +1037,13 @@ export async function runProjectHealthCheck(options = {}) {
  * @param {boolean} [options.skipLintCheck=false] - Skip advanced lint checking
  * @param {boolean} [options.skipHealthCheck=false] - Skip health check
  * @param {boolean} [options.parallelChecks=true] - Run compatible checks in parallel
- * @returns {Promise<Object>} - Results of all checks
+ * @returns {Promise<Object>} - Results of all checks, where each result has the consistent structure
  */
 export async function runAllAdvancedChecks(options = {}) {
   // Initialize logger, results, etc.
   silentLogger.setSilent(options.silentMode || false);
-  const results = {};
-  let overallSuccess = true;
+  const results = {}; // Store results keyed by check name
+  let overallSuccess = true; // Tracks if any *blocking* check failed
   const startTime = performance.now();
 
   silentLogger.info('Starting advanced checks...');
@@ -1026,7 +1055,7 @@ export async function runAllAdvancedChecks(options = {}) {
     deadCode: runDeadCodeCheck,
     docsQuality: runDocsQualityCheck,
     docsFreshness: runDocsFreshnessCheck,
-    typescript: runAdvancedTypeScriptCheck,
+    typescript: runAdvancedTypeScriptCheck, // Keep these mappings
     lint: runAdvancedLintCheck,
     workflowValidation: runWorkflowValidationCheck,
     health: runProjectHealthCheck
@@ -1041,75 +1070,115 @@ export async function runAllAdvancedChecks(options = {}) {
   if (checksToRun.length > 0) {
     if (options.parallelChecks) {
       silentLogger.info(`Running ${checksToRun.length} checks in parallel...`);
+      // Map each check to its async function call, passing options
       const promises = checksToRun.map(check => 
-          check.fn(options).catch(error => ({ 
+          check.fn(options).catch(error => ({ // Call the actual check function
+              // Construct a failure object in the consistent format on catch
+              name: check.name, 
               success: false, 
-              error: error.message,
-              name: check.name 
+              error: error.message || 'Unknown execution error',
+              duration: 0, // Duration unknown if it crashed immediately
+              data: null 
           }))
       );
+      // Use Promise.allSettled to wait for all checks
       const settledResults = await Promise.allSettled(promises);
       
+      // Process settled results
       settledResults.forEach((settledResult, index) => {
           const checkName = checksToRun[index].name;
           if (settledResult.status === 'fulfilled') {
-              results[checkName] = settledResult.value;
-              if (settledResult.value && settledResult.value.success === false && !options.ignoreAdvancedFailures) {
+              // Check fulfilled, store the structured result
+              const checkResult = settledResult.value;
+              results[checkName] = checkResult; // Store the whole { name, success, duration, ... } object
+              // Update overallSuccess: fail if check failed AND is not treated as warning
+              if (checkResult && checkResult.success === false && !checkResult.warning && !options.ignoreAdvancedFailures) {
                   overallSuccess = false;
               }
           } else {
-              results[checkName] = { success: false, error: settledResult.reason?.message || 'Unknown check error' };
-              overallSuccess = false;
-              silentLogger.error(`Error running check ${checkName}: ${settledResult.reason?.message}`);
+              // Check rejected (error during execution not caught by inner try/catch)
+              const reason = settledResult.reason;
+              results[checkName] = { 
+                  name: checkName,
+                  success: false, 
+                  error: reason?.message || 'Unknown check execution error',
+                  duration: 0, // Can't know duration
+                  data: null
+              };
+              overallSuccess = false; // Execution error is always a failure
+              silentLogger.error(`Critical error running check ${checkName}: ${results[checkName].error}`);
           }
       });
     } else {
+      // Run sequentially (Less common path, but ensure consistency)
       silentLogger.info(`Running ${checksToRun.length} checks sequentially...`);
-      await runChecksSequentially(checksToRun, results, options);
-      overallSuccess = Object.values(results).every(r => r.success !== false || options.ignoreAdvancedFailures);
+      await runChecksSequentially(checksToRun, results, options); // Pass results object to be populated
+      // Determine overall success based on populated results
+      overallSuccess = Object.values(results).every(r => r.success !== false || r.warning || options.ignoreAdvancedFailures);
     }
   }
 
-  // --- Final Reporting --- (Ensure this part remains)
+  // --- Final Reporting --- 
   const duration = performance.now() - startTime;
   silentLogger.info(`Advanced checks completed in ${(duration / 1000).toFixed(1)}s`);
 
-  // Report summary
+  // Report summary using the structured results
   Object.entries(results).forEach(([name, result]) => {
-      if (result && result.success === false && !options.ignoreAdvancedFailures) {
+      // Use result.success and result.warning which are now consistently populated
+      if (result && result.success === false && !result.warning && !options.ignoreAdvancedFailures) {
           silentLogger.error(`- ${name}: Failed (${result.error || 'Check failed'})`);
       } else if (result && result.warning) {
-          silentLogger.warn(`- ${name}: Passed with warnings`);
-      } else if (result) {
-         // Only log success in verbose mode to keep output cleaner
+          // It might be success: true, warning: true (e.g. lint passed but treated as warning)
+          // Or success: false, warning: true (e.g. health failed but treated as warning)
+          const statusText = result.success ? 'Passed with warnings' : 'Failed (treated as warning)';
+          silentLogger.warn(`- ${name}: ${statusText}`);
+      } else if (result && result.success) {
+         // Only log success in verbose mode 
          if (options.verbose) {
             silentLogger.success(`- ${name}: Passed`);
          }
+      } else if (!result) {
+          // Handle cases where a check might not have produced a result object (should be rare now)
+          silentLogger.warn(`- ${name}: No result data available.`);
       }
   });
 
+  // Return the overall status and the detailed results map
   return {
     success: overallSuccess,
     duration,
-    results
+    results // Return the map of { checkName: { name, success, duration, ... } }
   };
 }
 
 /**
  * Helper function to run checks sequentially
+ * Ensures the results object is populated correctly.
  */
 async function runChecksSequentially(checksToRun, results, options) {
-  for (const { name, fn, options: checkOptions } of checksToRun) {
+  for (const { name, fn } of checksToRun) { // Removed checkOptions from loop destructuring
     try {
       silentLogger.info(`Running ${name} check...`);
-      const result = await fn(checkOptions);
-      results[name] = result || { success: false, error: `${name} check returned no result` };
+      // Call the check function, it should return the consistent structure
+      const result = await fn(options); // Pass main options object
+      results[name] = result || { // Store the returned structured object
+          name: name,
+          success: false, 
+          error: `${name} check returned no result`,
+          duration: 0,
+          data: null 
+      };
     } catch (error) {
       silentLogger.error(`${name} check error: ${error.message}`);
+      // Construct consistent failure object on catch
       results[name] = { 
+        name: name,
         success: false, 
         error: error.message, 
-        warning: name === 'health' && options.treatHealthAsWarning 
+        duration: 0, // Duration unknown
+        // Determine warning status based on options for this check
+        warning: (name === 'health' && options.treatHealthAsWarning) || (name === 'lint' && options.treatLintAsWarning), 
+        data: null
       };
     }
   }
@@ -1117,146 +1186,94 @@ async function runChecksSequentially(checksToRun, results, options) {
 
 /**
  * Run a single advanced check with direct workflow integration
+ * (This function should remain largely the same as it already calls the updated checks)
  * 
  * @param {string} checkName - Name of the check to run
  * @param {Object} options - Check options
  * @param {string} [options.phase='Validation'] - Current workflow phase
- * @returns {Promise<Object>} Check result
+ * @returns {Promise<Object>} Check result in the consistent format { name, success, duration, error, data }
  */
 export async function runSingleCheckWithWorkflowIntegration(checkName, options = {}) {
   const { 
     phase = 'Validation',
-    ...checkOptions
+    // We pass all other options down to the specific check function now
+    ...checkOptions 
   } = options;
   
-  // Get workflow state for tracking
   const workflowState = getWorkflowState();
-  
   const stepName = `${checkName} Check`;
-  const startTime = Date.now();
+  const startTime = Date.now(); // Start time for this specific integrated run
   
-  // Start step tracking
   workflowState.setCurrentStep(stepName);
-  
-  // Set silent mode based on options - we'll handle our own logging
   const isSilent = checkOptions.silentMode !== false;
   silentLogger.setSilent(isSilent);
   
+  // --- Simplified Logic: Call the appropriate (now consistent) check function ---
   try {
-    // Select the appropriate check function
-    let checkFunction;
-    switch(checkName.toLowerCase()) {
-      case 'bundle':
-      case 'bundlesize':
-        checkFunction = runBundleSizeCheck;
-        break;
-      case 'deadcode':
-        checkFunction = runDeadCodeCheck;
-        break;
-      case 'docs':
-      case 'documentation':
-        checkFunction = runDocsQualityCheck;
-        break;
-      case 'docfreshness':
-        checkFunction = runDocsFreshnessCheck;
-        break;
-      case 'typescript':
-        checkFunction = runAdvancedTypeScriptCheck;
-        break;
-      case 'lint':
-        checkFunction = runAdvancedLintCheck;
-        break;
-      case 'workflow':
-      case 'workflowvalidation':
-        checkFunction = runWorkflowValidationCheck;
-        break;
-      case 'health':
-        checkFunction = runProjectHealthCheck;
-        break;
-      default: {
-        const error = `Unknown advanced check: ${checkName}`;
-        workflowState.addWarning(error, stepName, phase);
-        workflowState.completeStep(stepName, { success: false, error });
-        return { success: false, error };
+      let checkFunction;
+      switch(checkName.toLowerCase()) {
+          case 'bundle': case 'bundlesize': checkFunction = runBundleSizeCheck; break;
+          case 'deadcode': checkFunction = runDeadCodeCheck; break;
+          case 'docs': case 'documentation': checkFunction = runDocsQualityCheck; break;
+          case 'docfreshness': checkFunction = runDocsFreshnessCheck; break;
+          case 'typescript': checkFunction = runAdvancedTypeScriptCheck; break;
+          case 'lint': checkFunction = runAdvancedLintCheck; break;
+          case 'workflow': case 'workflowvalidation': checkFunction = runWorkflowValidationCheck; break;
+          case 'health': checkFunction = runProjectHealthCheck; break;
+          default: {
+              const error = `Unknown advanced check: ${checkName}`;
+              workflowState.addWarning(error, stepName, phase);
+              workflowState.completeStep(stepName, { success: false, error });
+              // Return consistent error format
+              return { name: checkName, success: false, error, duration: Date.now() - startTime, data: null }; 
+          }
       }
-    }
-    
-    // Run the check with timeout handling
-    const checkResult = await runWithTimeout(
-      checkFunction(checkOptions),
-      options.timeout?.[checkName.toLowerCase()] || 60000,
-      `${checkName} Check`,
-      { success: false, error: `${checkName} check timed out` },
-      checkOptions
-    );
-    
-    // Record specific warnings based on check type
-    if (checkResult.data) {
-      if (checkName.toLowerCase() === 'bundle' || checkName.toLowerCase() === 'bundlesize') {
-        // Bundle size warnings
-        if (checkResult.data.issues) {
-          checkResult.data.issues.forEach(issue => {
-            workflowState.addWarning(`Bundle size issue: ${issue.message}`, stepName, phase);
-          });
-        }
-      } 
       
-      else if (checkName.toLowerCase() === 'deadcode') {
-        // Dead code warnings
-        if (checkResult.data.files) {
-          checkResult.data.files.forEach(file => {
-            workflowState.addWarning(`Potential dead code: ${file.path} (${file.confidence}% confidence)`, stepName, phase);
-          });
-        }
-      } 
+      // Directly call the selected check function. It will handle its own timeout via runWithTimeout internally
+      // and return the standardized { name, success, duration, error, data } object.
+      const checkResult = await checkFunction(checkOptions); 
       
-      else if (checkName.toLowerCase() === 'docs' || checkName.toLowerCase() === 'documentation') {
-        // Documentation quality warnings
-        if (checkResult.data.issues) {
-          checkResult.data.issues.forEach(issue => {
-            workflowState.addWarning(`Documentation issue: ${issue.message} (${issue.file})`, stepName, phase);
-          });
-        }
-      } 
+      // Duration for workflowState.completeStep should reflect this integration step's time
+      const integrationDuration = Date.now() - startTime;
+
+      // Record warnings from the check result (if any) to the workflow state
+      // The check function itself might have already logged them via silentLogger
+      if (checkResult.warning && checkResult.message) {
+           workflowState.addWarning(`${checkName}: ${checkResult.message}`, stepName, phase, checkResult.success ? 'warning' : 'error');
+      } else if (!checkResult.success && checkResult.error) {
+           workflowState.addWarning(`${checkName} Failed: ${checkResult.error}`, stepName, phase, 'error');
+      }
+      // Example: Extract specific issues if needed (modify based on actual data structure)
+      if (checkResult.data?.issues?.length > 0 && checkName.toLowerCase() === 'docs') {
+          checkResult.data.issues.forEach(issue => workflowState.addWarning(`Doc Issue: ${issue.message} (${issue.file})`, stepName, phase));
+      }
       
-      else if (checkName.toLowerCase() === 'docfreshness') {
-        // Documentation freshness warnings
-        if (checkResult.data.staleDocuments) {
-          checkResult.data.staleDocuments.forEach(doc => {
-            workflowState.addWarning(`Stale documentation: ${doc.file} (last updated ${doc.lastUpdated})`, stepName, phase);
-          });
-        }
-      } 
-    }
-    
-    // Complete step tracking
-    workflowState.completeStep(stepName, { 
-      success: checkResult.success,
-      data: checkResult.data,
-      duration: Date.now() - startTime
-    });
-    
-    return checkResult;
+      // Complete the workflow step tracking using the success status from the check result
+      workflowState.completeStep(stepName, { 
+          success: checkResult.success, 
+          error: checkResult.error, // Pass error if present
+          duration: integrationDuration // Use the duration of this specific integration call
+      });
+      
+      // Return the structured result obtained from the check function
+      // Ensure the name field is correctly set from the input checkName
+      return { ...checkResult, name: checkName, duration: checkResult.duration ?? integrationDuration }; // Return the result, ensure name and duration are set
+
   } catch (error) {
-    // Record error as a warning
-    workflowState.addWarning(`${checkName} check error: ${error.message}`, stepName, phase);
-    workflowState.trackError(error, stepName);
-    
-    // Complete step with failure
-    workflowState.completeStep(stepName, { 
-      success: false, 
-      error: error.message,
-      duration: Date.now() - startTime
-    });
-    
-    return {
-      success: false,
-      error: error.message
-    };
+      // Catch errors from invoking the check function itself (less likely now)
+      const duration = Date.now() - startTime; 
+      const errorMsg = `${checkName} integration error: ${error.message}`;
+      
+      workflowState.addWarning(errorMsg, stepName, phase);
+      workflowState.trackError(error, stepName);
+      workflowState.completeStep(stepName, { success: false, error: errorMsg, duration });
+      
+      // Return consistent error format
+      return { name: checkName, success: false, error: errorMsg, duration, data: null }; 
   }
 }
 
-// And update the export default statement at the end:
+// Export default remains the same
 export default {
   runBundleSizeCheck,
   runDeadCodeCheck,

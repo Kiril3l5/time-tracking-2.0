@@ -9,6 +9,7 @@ import { logger } from '../core/logger.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fsPromises from 'fs/promises';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +17,8 @@ const __dirname = path.dirname(__filename);
 // Constants for workflow state persistence
 const WORKFLOW_STATE_FILE = path.resolve(process.cwd(), 'temp', 'workflow-state.json');
 const BACKUP_DIR = path.resolve(process.cwd(), 'temp', 'backups');
+// Define path for persistent last successful preview data
+const LAST_PREVIEW_FILE_PATH = path.resolve(process.cwd(), 'temp', 'last-successful-preview.json');
 
 /**
  * Workflow Error class for categorized errors
@@ -48,7 +51,9 @@ class WorkflowState {
       previewUrls: {
         hours: null,
         admin: null
-      }
+      },
+      lastSuccessfulPreview: null,
+      options: {}
     };
     
     // Ensure temp directories exist
@@ -56,6 +61,7 @@ class WorkflowState {
     
     // Try to load previous state if it exists
     this._loadState();
+    this._loadLastSuccessfulPreview(); // Load previous data
   }
 
   /**
@@ -90,7 +96,7 @@ class WorkflowState {
         const loadedState = JSON.parse(content);
         
         // Only load certain fields from the previous state
-        const fieldsToLoad = ['metrics', 'warnings', 'errors'];
+        const fieldsToLoad = ['metrics', 'warnings', 'errors', 'lastSuccessfulPreview'];
         
         fieldsToLoad.forEach(field => {
           if (loadedState[field]) {
@@ -99,9 +105,12 @@ class WorkflowState {
         });
         
         logger.debug('Loaded previous workflow state');
+      } else {
+        this.state = this._getDefaultState(); // Use default if no file
       }
     } catch (error) {
-      logger.debug(`Failed to load previous workflow state: ${error.message}`);
+      logger.warn(`Failed to load previous workflow state: ${error.message}. Using default state.`);
+      this.state = this._getDefaultState();
     }
   }
 
@@ -151,7 +160,8 @@ class WorkflowState {
       previewUrls: {
         hours: null,
         admin: null
-      }
+      },
+      lastSuccessfulPreview: this.state.lastSuccessfulPreview,
     };
     
     // Save new state
@@ -265,9 +275,11 @@ class WorkflowState {
           };
         } else if (key === 'channelCleanup') {
           acc[key] = {
-            ...this.state.metrics?.channelCleanup,
             ...value,
-            status: value.status || 'pending',
+            // Explicitly preserve existing stats if it exists
+            stats: this.state.metrics?.channelCleanup?.stats ?? value.stats, 
+            // Ensure status/counts are set reliably (using merged value first)
+            status: value.status ?? this.state.metrics?.channelCleanup?.status ?? 'pending',
             cleanedChannels: value.cleanedChannels || 0,
             failedChannels: value.failedChannels || 0
           };
@@ -351,7 +363,7 @@ class WorkflowState {
    * @returns {Object} Current state
    */
   getState() {
-    return { ...this.state };
+    return { ...this.state, lastSuccessfulPreview: this.state.lastSuccessfulPreview || null };
   }
 
   /**
@@ -395,41 +407,112 @@ class WorkflowState {
   }
 
   /**
-   * Update arbitrary state properties
-   * @param {Object} updates - State updates to apply
+   * Update general state properties
+   * @param {Object} updates - Object with state properties to update
    */
   updateState(updates) {
-    this.state = {
-      ...this.state,
-      ...updates
-    };
-    
-    this._saveState();
-    
-    return this.state;
+    if (typeof updates === 'object' && updates !== null) {
+      this.state = { ...this.state, ...updates };
+      this._saveState();
+    }
   }
   
   /**
    * Clear workflow state
    */
   clearState() {
-    this.state = {
-      currentStep: null,
-      completedSteps: [],
-      errors: [],
-      warnings: [],
-      metrics: {},
-      startTime: null,
-      endTime: null,
-      status: 'idle',
-      channelId: null,
-      previewUrls: {
-        hours: null,
-        admin: null
+    this.state = this._getDefaultState();
+    this._loadLastSuccessfulPreview(); // Reload it after clearing
+    this._saveState(); // Save the cleared state
+  }
+
+  // --- New methods for handling last successful preview --- 
+  _loadLastSuccessfulPreview() {
+    try {
+      if (fs.existsSync(LAST_PREVIEW_FILE_PATH)) {
+        const data = fs.readFileSync(LAST_PREVIEW_FILE_PATH, 'utf8');
+        this.state.lastSuccessfulPreview = JSON.parse(data);
+        logger.debug('Loaded last successful preview URLs from file.');
+      } else {
+        this.state.lastSuccessfulPreview = null; // Initialize if file doesn't exist
+        logger.debug('No last successful preview file found.');
       }
+    } catch (error) {
+      logger.warn(`Could not load or parse last successful preview file: ${error.message}`);
+      this.state.lastSuccessfulPreview = null;
+    }
+  }
+
+  async saveLastSuccessfulPreview(previewUrls) {
+    if (!previewUrls || (previewUrls.admin === null && previewUrls.hours === null)) {
+        logger.warn('Attempted to save empty or null last successful preview URLs. Skipping.');
+        return;
+    }
+    try {
+      await fsPromises.writeFile(LAST_PREVIEW_FILE_PATH, JSON.stringify(previewUrls, null, 2));
+      logger.debug(`Saved last successful preview URLs to ${LAST_PREVIEW_FILE_PATH}`);
+      // Update current state as well for immediate use if needed?
+      this.state.lastSuccessfulPreview = previewUrls;
+    } catch (error) {
+      logger.error(`Could not save last successful preview URLs: ${error.message}`);
+    }
+  }
+  // --- End new methods --- 
+
+  _getDefaultState() {
+    // Provides a default structure if no state file is loaded
+    return {
+        currentStep: null,
+        completedSteps: [],
+        errors: [],
+        warnings: [],
+        metrics: { phaseDurations: {}, buildPerformance: {}, packageMetrics: {}, testResults: {} },
+        startTime: null,
+        endTime: null,
+        status: 'idle',
+        channelId: null,
+        previewUrls: { hours: null, admin: null },
+        lastSuccessfulPreview: null, // Add field here
+        options: {}
     };
-    
-    this._saveState();
+  }
+
+  // Method to inject previous preview into current metrics before dashboard generation
+  injectPreviousPreviewIntoMetrics() {
+      if (this.state.lastSuccessfulPreview) {
+          logger.debug('Injecting previous preview URLs into current metrics');
+          this.updateMetrics({ 
+              previousPreview: this.state.lastSuccessfulPreview 
+          });
+          // Note: We don't save the main state file here, 
+          // as this is just for the current run's dashboard generation.
+          // The persistent saving happens via saveLastSuccessfulPreview.
+      } else {
+          logger.debug('No last successful preview data available to inject into metrics.');
+      }
+  }
+
+  /**
+   * Explicitly update the advanced checks results in the state.
+   * Used to merge the final results from the workflow instance before dashboard generation.
+   * @param {Object} advancedChecksResults - The final results object from the workflow instance.
+   */
+  updateAdvancedChecks(advancedChecksResults) {
+    if (advancedChecksResults && typeof advancedChecksResults === 'object') {
+      // Ensure metrics.advancedChecks exists
+      if (!this.state.metrics.advancedChecks) {
+        this.state.metrics.advancedChecks = {};
+      }
+      // Deep merge might be safer, but for now, let's overwrite/merge at top level
+      this.state.metrics.advancedChecks = {
+        ...this.state.metrics.advancedChecks, 
+        ...advancedChecksResults 
+      };
+      logger.debug('Updated advanced checks in singleton state:', JSON.stringify(this.state.metrics.advancedChecks));
+      this._saveState();
+    } else {
+      logger.warn('Attempted to update advanced checks with invalid data.');
+    }
   }
 }
 

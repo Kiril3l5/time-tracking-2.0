@@ -3,11 +3,20 @@ import { useAuth } from '../../providers/AuthProvider';
 import { 
   getRememberedUser, 
   getLastUser, 
-  isBiometricAvailable, 
-  isBiometricEnabled
 } from '../../firebase/auth/auth-service';
 import { useViewport } from '../../hooks/ui/useViewport';
 import { useFeatureFlag } from '../../hooks/features/useFeatureFlag';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { 
+    startAuthentication, 
+    browserSupportsWebAuthn
+} from '@simplewebauthn/browser';
+import { getAuth, signInWithCustomToken } from 'firebase/auth';
+
+// Define callable function references
+const functions = getFunctions();
+const generateAuthenticationOptions = httpsCallable(functions, 'webauthnGenerateAuthenticationOptions');
+const verifyAuthentication = httpsCallable(functions, 'webauthnVerifyAuthentication');
 
 interface LoginFormProps {
   // Optional redirect URL after successful login
@@ -36,7 +45,7 @@ const LoginForm = ({
   onRegister,
 }: LoginFormProps) => {
   // Feature flags
-  const isBiometricFeatureEnabled = useFeatureFlag('biometric-auth');
+  const isPasskeyFeatureEnabled = useFeatureFlag('biometric-auth');
   
   // State for form fields
   const [email, setEmail] = useState('');
@@ -46,8 +55,9 @@ const LoginForm = ({
   // States for form handling
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [lastLoggedInUser, setLastLoggedInUser] = useState<string | null>(null);
+  const [isCheckingPasskeySupport, setIsCheckingPasskeySupport] = useState(true);
+  const [isPasskeyAvailable, setIsPasskeyAvailable] = useState(false);
   
   // Get auth context
   const { login } = useAuth();
@@ -55,41 +65,44 @@ const LoginForm = ({
   // Get viewport size for responsive behavior
   const { isMobile } = useViewport();
   
-  // Effect to check biometric availability and setup remembered user
+  // Effect to check Passkey/WebAuthn availability and setup remembered user
   useEffect(() => {
     const setupLoginForm = async () => {
-      try {
-        // Check for remembered user email and prefill
-        const rememberedUser = getRememberedUser();
-        if (rememberedUser) {
-          setEmail(rememberedUser);
-          setRememberMe(true);
-        }
-        
-        // Check for biometric authentication availability
-        if (isBiometricFeatureEnabled) {
-          // Check device/browser support
-          const deviceSupported = isBiometricAvailable();
-          
-          if (deviceSupported) {
-            // Get the last user (even if not "remembered")
-            const lastUser = getLastUser();
-            if (lastUser) {
-              setLastLoggedInUser(lastUser);
-              
-              // Check if this user has biometric enabled
-              const isBiometricEnabledForUser = await isBiometricEnabled(lastUser);
-              setBiometricAvailable(isBiometricEnabledForUser);
+        setIsCheckingPasskeySupport(true);
+        try {
+            // Remembered user logic (unchanged)
+            const rememberedUser = getRememberedUser();
+            if (rememberedUser) {
+                setEmail(rememberedUser);
+                setRememberMe(true);
             }
-          }
+            
+            // Check for Passkey/WebAuthn availability
+            if (isPasskeyFeatureEnabled) {
+                const supported = await browserSupportsWebAuthn();
+                if (supported) {
+                    // More sophisticated checks like PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+                    // could be added here to be more certain biometrics are available.
+                    // For now, just check if the last user might have registered one.
+                    const lastUser = getLastUser(); 
+                    if (lastUser) {
+                        setLastLoggedInUser(lastUser); 
+                        // We can't know for sure if a passkey *exists* for this user from the browser alone,
+                        // but we can show the button optimistically if the browser supports WebAuthn.
+                        setIsPasskeyAvailable(true); 
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Error setting up login form:', err);
+            setError('Could not check Passkey availability.')
+        } finally {
+            setIsCheckingPasskeySupport(false);
         }
-      } catch (err) {
-        console.error('Error setting up login form:', err);
-      }
     };
     
     setupLoginForm();
-  }, [isBiometricFeatureEnabled]);
+  }, [isPasskeyFeatureEnabled]);
   
   // Handle form submission
   const handleSubmit = async (e: React.FormEvent) => {
@@ -135,25 +148,72 @@ const LoginForm = ({
     }
   };
   
-  // Handle biometric authentication
-  const handleBiometricLogin = async () => {
-    if (!lastLoggedInUser || !isBiometricFeatureEnabled) return;
+  // Handle Passkey/Biometric authentication
+  const handlePasskeyLogin = async () => {
+    if (!isPasskeyAvailable || isCheckingPasskeySupport) return;
     
     setError(null);
     setIsSubmitting(true);
     
+    let challengeId: string | null = null; // Variable to store the challenge ID
+
     try {
-      // In a real implementation, this would use WebAuthn to get credentials
-      // and then authenticate the user using the stored credential
-      
-      // For now, we're just showing a placeholder
-      setError('Biometric authentication is not fully implemented yet.');
-      
-      // Redirect after successful login would go here
-    } catch (err: unknown) {
-      setError('Biometric authentication failed. Please use password.');
+        // 1. Get options from server
+        const optionsResult = await generateAuthenticationOptions({ userId: lastLoggedInUser }); 
+        // Expecting { ...options, challengeId: string } 
+        const optionsResponse = optionsResult.data as any; 
+        const options = { ...optionsResponse, challenge: undefined }; // Remove challenge if present
+        challengeId = optionsResponse.challengeId; // Store the challenge ID
+
+        if (!challengeId) {
+            throw new Error('Challenge ID missing from server response.');
+        }
+
+        // 2. Start authentication with browser API via SimpleWebAuthn
+        let authenticationResponse;
+        try {
+            authenticationResponse = await startAuthentication(options);
+        } catch (browserError: any) {
+            console.error('Browser WebAuthn authentication failed:', browserError);
+            if (browserError.name === 'NotAllowedError') {
+                setError('Passkey authentication cancelled or not permitted.');
+            } else {
+                 setError(`Browser error during authentication: ${browserError.message}`);
+            }
+            setIsSubmitting(false);
+            return;
+        }
+
+        // 3. Send response AND challengeId to server for verification
+        const verificationPayload: VerifyAuthPayload = { // Use the interface defined in functions
+            challengeId: challengeId,
+            authResponse: authenticationResponse
+        };
+        const verificationResult = await verifyAuthentication(verificationPayload);
+        const verificationData = verificationResult.data as { verified: boolean; customToken?: string };
+
+        // 4. Sign in with Custom Token if verification succeeded
+        if (verificationData.verified && verificationData.customToken) {
+            const auth = getAuth();
+            await signInWithCustomToken(auth, verificationData.customToken);
+            // Successful login will trigger the onAuthStateChanged listener in App.tsx,
+            // updating Zustand state and handling redirection implicitly.
+            // No explicit redirect needed here if App.tsx handles it based on auth state.
+            
+             // Clear potential last user/remember me if login is successful?
+             // localStorage.removeItem('rememberedUser');
+             // localStorage.removeItem('lastUser');
+
+        } else {
+             throw new Error('Passkey verification failed on server.');
+        }
+
+    } catch (err: any) {
+        console.error('Passkey login process failed:', err);
+        const errorMessage = err.message || 'An unknown error occurred during Passkey login.';
+        setError(`Passkey Login Error: ${errorMessage}`);
     } finally {
-      setIsSubmitting(false);
+        setIsSubmitting(false);
     }
   };
   
@@ -182,10 +242,10 @@ const LoginForm = ({
         </div>
       )}
       
-      {biometricAvailable && lastLoggedInUser && isBiometricFeatureEnabled && (
+      {isPasskeyFeatureEnabled && !isCheckingPasskeySupport && isPasskeyAvailable && (
         <button
           type="button"
-          onClick={handleBiometricLogin}
+          onClick={handlePasskeyLogin}
           disabled={isSubmitting}
           className="
             w-full mb-4 py-3 bg-blue-100 text-blue-800 rounded-md 
@@ -194,11 +254,25 @@ const LoginForm = ({
           "
         >
           <span className="mr-2">
-            {/* Fingerprint icon (can be replaced with an SVG or image) */}
-            👆
+            {/* Placeholder Icon */} 
+            🔑
           </span>
-          Use Biometric Login
+          Sign in with Passkey / Biometrics
         </button>
+      )}
+      {!isPasskeyFeatureEnabled && isCheckingPasskeySupport && (
+         <div className="text-center text-sm text-gray-500 mb-4">Checking for Passkey support...</div>
+      )}
+
+      {isPasskeyFeatureEnabled && !isCheckingPasskeySupport && isPasskeyAvailable && (
+        <div className="relative mb-4">
+            <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-300"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+                <span className="px-2 bg-gray-50 text-gray-500">Or sign in with password</span>
+            </div>
+        </div>
       )}
       
       <form onSubmit={handleSubmit}>
@@ -278,36 +352,31 @@ const LoginForm = ({
         <button
           type="submit"
           disabled={isSubmitting}
-          className={`
-            w-full py-3 px-4 rounded-md
-            font-medium text-white
+          className="
+            w-full py-3 px-4 bg-blue-600 text-white rounded-md font-semibold 
+            hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 
+            disabled:opacity-50 disabled:cursor-not-allowed
             min-h-[44px] touch-manipulation
-            transition-all duration-200
-            ${isSubmitting 
-              ? 'bg-blue-400 cursor-not-allowed' 
-              : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 active:scale-[0.98]'
-            }
-          `}
+          "
         >
-          {isSubmitting ? 'Signing in...' : 'Sign in'}
+          {isSubmitting ? 'Logging in...' : 'Login with Password'}
         </button>
+        
+        {onRegister && (
+          <div className="mt-6 text-center">
+            <p className="text-sm text-gray-600">
+              Don't have an account?{' '}
+              <button 
+                type="button" 
+                onClick={onRegister} 
+                className="font-medium text-blue-600 hover:text-blue-500"
+              >
+                Register here
+              </button>
+            </p>
+          </div>
+        )}
       </form>
-      
-      {onRegister && (
-        <div className="mt-6 text-center">
-          <span className="text-sm text-gray-600">Don't have an account?</span>
-          <button
-            type="button"
-            onClick={onRegister}
-            className="
-              ml-2 text-sm font-medium text-blue-600 hover:text-blue-500
-              min-h-[44px] px-2 py-1 -my-1 touch-manipulation
-            "
-          >
-            Create account
-          </button>
-        </div>
-      )}
     </div>
   );
 };
@@ -330,5 +399,11 @@ const getFirebaseErrorMessage = (code: string): string => {
       return 'An unexpected error occurred during login.';
   }
 };
+
+// Define the payload type expected by the verify function (mirroring the backend)
+interface VerifyAuthPayload {
+    challengeId: string;
+    authResponse: any; // Use appropriate type from @simplewebauthn/types if possible
+}
 
 export default LoginForm; 

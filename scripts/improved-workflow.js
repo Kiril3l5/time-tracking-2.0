@@ -23,6 +23,7 @@ import path from 'path';
 import { rotateFiles } from './core/command-runner.js';
 import { cleanupChannels } from './firebase/channel-cleanup.js';
 import { generateWorkflowDashboard } from './workflow/dashboard-integration.js';
+import getWorkflowStateInstance from './workflow/workflow-state.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -962,6 +963,14 @@ class Workflow {
           // Check if any advanced check failed (respecting treatAsWarning flags)
           if (!this.options.ignoreAdvancedFailures && this.advancedCheckResults) { // Check if results exist
                for (const [checkName, checkResult] of Object.entries(this.advancedCheckResults)) {
+                   // FIX 2: Ensure the checkResult itself reflects the final status, not just the step
+                   // The object this.advancedCheckResults[checkName] passed to the dashboard
+                   // needs its 'status' field updated here if it hasn't been already.
+                   // The runSingleCheck... and runAll... should ideally return the final status directly.
+                   // Let's double-check if the results object IS being updated correctly.
+                   // Add a debug log to see the state *before* recording the step.
+                   this.logger.debug(`[Advanced Check Finalization] Check: ${checkName}, Result before step record:`, JSON.stringify(checkResult));
+
                    // Default treatAsWarning to false if not specified for a check
                    const treatAsWarning = (checkName === 'lint' && this.options.treatLintAsWarning) ||
                                           (checkName === 'health' && this.options.treatHealthAsWarning) ||
@@ -978,8 +987,26 @@ class Workflow {
                }
            }
            // --- End Determination --- 
-          
-          this.recordWorkflowStep('Advanced Checks', 'Validation', advancedChecksSuccess, Date.now() - advancedCheckStartTime, advancedChecksError);
+           
+           // FIX 2: Explicitly update the status field in the instance results object
+           if (this.advancedCheckResults) {
+             Object.entries(this.advancedCheckResults).forEach(([checkName, checkResult]) => {
+               if (checkResult && typeof checkResult === 'object') { // Ensure result object exists
+                 // Determine final status based on success flag (defaulting to pending if success is undefined)
+                 const finalStatus = typeof checkResult.success === 'boolean' 
+                   ? (checkResult.success ? 'success' : 'failed') 
+                   : 'pending'; 
+                 // Ensure the status property exists before assigning
+                 if (!Object.hasOwn(this.advancedCheckResults[checkName], 'status')) {
+                    this.advancedCheckResults[checkName].status = 'pending'; // Initialize if needed
+                 }
+                 this.advancedCheckResults[checkName].status = finalStatus;
+                 this.logger.debug(`[Advanced Check Status Update] Set ${checkName} status to: ${finalStatus}`);
+               }
+             });
+           }
+ 
+           this.recordWorkflowStep('Advanced Checks', 'Validation', advancedChecksSuccess, Date.now() - advancedCheckStartTime, advancedChecksError);
       } catch (error) {
           // Handle errors *during* the advanced checks execution block
           this.logger.error(`Advanced checks execution error: ${error.message}`);
@@ -1222,101 +1249,108 @@ class Workflow {
    * Deploy Phase
    */
   async deploy() {
-    this.progressTracker.startStep('Deploy Phase');
-    this.logger.sectionHeader('Deploying Preview');
-    const phaseStartTime = Date.now();
-    this.metrics.deployStart = phaseStartTime;
+    this.metrics.deployStart = Date.now();
+    getWorkflowStateInstance().setCurrentStep('Deploy Phase');
+    const startTime = Date.now();
+    let deploySuccess = true;
+    let deployError = null;
+
+    if (this.options.skipDeploy) {
+      logger.warn('Deployment skipped due to options.');
+      this.recordWorkflowStep('Deploy Phase', 'Deploy', true, 0, 'Skipped');
+      getWorkflowStateInstance().completeStep('Deploy Phase', { success: true, skipped: true });
+      return { success: true, skipped: true };
+    }
+
+    logger.sectionHeader('Deploying Preview');
     
+    // Re-initialize previewUrls for this run
+    this.previewUrls = { admin: null, hours: null }; 
+
     try {
-      // Skip deployment if requested
-      if (this.options.skipDeploy) {
-        this.logger.info('Deployment skipped due to --skip-deploy flag');
-        this.metrics.deploymentStatus = { status: 'skipped', reason: 'User requested skip' };
-        this.recordWorkflowStep('Deploy Phase', 'Deploy', true, 0, null, { skipped: true });
-        return true;
-      }
-      
-      // Create a unique channel ID for the preview
-      const channelStartTime = Date.now();
-      
-      // Store the current preview URLs before generating new ones
-      // This will allow showing previous/current comparison in the dashboard
-      if (this.metrics && this.metrics.preview) {
-        this.metrics.previousPreview = { ...this.metrics.preview };
-      }
-      
       const channelId = await createChannelId();
-      this.recordWorkflowStep('Create Channel ID', 'Deploy', true, Date.now() - channelStartTime);
-      
-      // Use the new workflow-integrated deployment function
-      // which handles hours and admin app deployments together
-      this.logger.info(`Deploying apps to channel: ${channelId}...`);
+      logger.info(`Using preview channel ID: ${channelId}`);
+      getWorkflowStateInstance().updateMetrics({ channelId }); // Store channel ID
+
+      // --- FIX: Remove loop and call deployment function ONCE --- 
+      logger.info('Starting deployment process for all targets...');
       const deployResult = await deployPackageWithWorkflowIntegration({
-        channelId: channelId,
-        skipBuild: this.options.skipBuild,
+        // No target needed here as the function handles both
+        channelId,
+        recordWarning: this.recordWarning.bind(this),
+        recordStep: this.recordWorkflowStep.bind(this),
         phase: 'Deploy'
       });
-      
-      if (!deployResult.success) {
-        const error = new Error('Deployment failed');
-        Object.assign(error, {
-          details: deployResult.error || 'Unknown deployment error'
-        });
-        throw error;
-      }
-      
-      // Store the preview URLs for the dashboard
-      if (deployResult.urls) {
-        this.previewUrls = deployResult.urls;
-        
-        if (this.previewUrls.hours) {
-          this.logger.success(`✓ Hours app deployed to: ${this.previewUrls.hours}`);
-        }
-        
-        if (this.previewUrls.admin) {
-          this.logger.success(`✓ Admin app deployed to: ${this.previewUrls.admin}`);
-        }
-      }
-      
-      this.progressTracker.completeStep(true, 'Deployment complete');
-      this.recordWorkflowStep('Deploy Phase', 'Deploy', true, Date.now() - phaseStartTime);
 
-      // Calculate phase duration and update deployment status
-      const phaseEndTime = Date.now();
-      this.metrics.phaseDurations.deploy = phaseEndTime - phaseStartTime;
-      this.metrics.deploymentStatus = {
-        status: 'success',
-        timestamp: phaseEndTime,
-        details: {
-          duration: phaseEndTime - phaseStartTime
+      // --- FIX: Correctly handle the result object --- 
+      if (deployResult.success) {
+        deploySuccess = true; // Mark phase as success
+        if (deployResult.urls && (deployResult.urls.admin || deployResult.urls.hours)) {
+          this.previewUrls = deployResult.urls; // Store the fetched URLs
+          getWorkflowStateInstance().setPreviewUrls(this.previewUrls);
+          logger.success('Deployment successful. Preview URLs:');
+          if (this.previewUrls.admin) logger.info(`  Admin: ${this.previewUrls.admin}`);
+          if (this.previewUrls.hours) logger.info(`  Hours: ${this.previewUrls.hours}`);
+          // Save successful URLs for next run
+          await getWorkflowStateInstance().saveLastSuccessfulPreview(this.previewUrls);
+        } else {
+          // Deployment command succeeded, but URL fetch failed or returned null
+          logger.warn('Deployment command succeeded, but failed to retrieve preview URLs.');
+          // Keep deploySuccess = true, but previewUrls will remain null
         }
-      };
-      
-      return true;
+      } else {
+        // Deployment failed (either command failed or URL fetch logic had critical error)
+        deploySuccess = false;
+        deployError = deployResult.error || 'Unknown deployment failure'; 
+        logger.error(`Deployment failed: ${deployError}`);
+        this.recordWorkflowError(deployError, 'Deploy', 'Package Deployment'); // Record the specific error
+      }
+      // --- END FIX --- 
+
     } catch (error) {
-      this.progressTracker.completeStep(false, `Deployment failed: ${error.message}`);
-      
-      // Enhanced error logging for deployment failures
-      this.logger.error('\nDeploy Phase Failed:');
-      this.logger.error(`${error.message}`);
-      
-      if (error.details) {
-        this.logger.error('\nDeployment Error Details:');
-        this.logger.error(error.details);
+      // Catch errors from createChannelId or unexpected errors within the try block
+      deploySuccess = false;
+      deployError = `Deployment phase failed: ${error.message}`;
+      logger.error(deployError);
+      // Ensure error is recorded if not already done by the logic above
+      if (!this.workflowErrors.some(e => e.message === deployError)) {
+          this.recordWorkflowError(deployError, 'Deploy');
       }
-      
-      this.recordWorkflowStep('Deploy Phase', 'Deploy', false, Date.now() - phaseStartTime, error.message);
-
-      // Update deployment status on error
-      this.metrics.deploymentStatus = {
-        status: 'error',
-        timestamp: Date.now(),
-        details: {
-          error: error.message
+    } finally {
+      const phaseEndTime = Date.now();
+      this.metrics.phaseDurations.deploy = phaseEndTime - startTime;
+      this.metrics.duration = phaseEndTime - this.metrics.setupStart;
+      // FIX 1 RE-APPLY (Corrected Logic): Use deploySuccess flag if status is still pending
+      if (this.metrics.deploymentStatus?.status === 'pending') {
+        if (this.options.skipDeploy) {
+          this.logger.debug('Deployment status was pending in finally (deploy skipped). Setting to skipped.');
+          this.metrics.deploymentStatus = {
+            status: 'skipped',
+            timestamp: new Date().toISOString(),
+            details: { info: 'Deployment skipped via option.' }
+          };
+        } else {
+            // If not skipped, determine status based on the reliable deploySuccess flag
+            const finalStatus = deploySuccess ? 'success' : 'failed';
+            this.logger.warn(`Deployment status was still pending in finally. Setting based on deploySuccess flag: ${finalStatus}`);
+            this.metrics.deploymentStatus = {
+              status: finalStatus,
+              timestamp: new Date().toISOString(),
+              details: { error: deploySuccess ? null : (deployError || 'Deployment failed but status was pending.') }
+            };
         }
-      };
-      throw error;
+      }
     }
+
+    // Record the overall Deploy Phase step status based on deploySuccess
+    this.recordWorkflowStep('Deploy Phase', 'Deploy', deploySuccess, Date.now() - startTime, deployError); 
+    getWorkflowStateInstance().completeStep('Deploy Phase', { success: deploySuccess, error: deployError });
+    
+    return { 
+      success: deploySuccess, 
+      error: deployError, 
+      urls: this.previewUrls 
+    };
   }
 
   /**
@@ -1328,101 +1362,143 @@ class Workflow {
    * @returns {Promise<boolean>} Success status of the dashboard generation
    */
   async generateResults() {
-    this.progressTracker.startStep('Results Phase');
-    this.logger.sectionHeader('Generating Dashboard');
-    const phaseStartTime = Date.now();
-    this.metrics.resultsStart = phaseStartTime;
+    this.metrics.resultsStart = Date.now();
+    getWorkflowStateInstance().setCurrentStep('Results Phase'); 
+    const startTime = Date.now();
+    let resultsSuccess = true;
+    let resultsError = null;
     
+
+    logger.sectionHeader('Generating Results');
+
     try {
-      // Clean up Firebase channels
-      this.logger.info('Cleaning up old preview channels...');
-      const cleanupStartTime = Date.now();
-      const cleanupResult = await cleanupChannels({
-        keepCount: 5,
-        dryRun: false  // Explicitly set to false to ensure actual deletion
-      });
-      
-      // Store channel cleanup results in metrics
-      this.metrics.channelCleanup = {
-        status: cleanupResult.success ? 'success' : 'error',
-        success: cleanupResult.success,
-        sitesProcessed: Object.keys(cleanupResult.stats || {}).length,
-        totalChannels: Object.values(cleanupResult.stats || {}).reduce((sum, stat) => sum + (stat?.found || 0), 0),
-        channelsKept: Object.values(cleanupResult.stats || {}).reduce((sum, stat) => sum + (stat?.kept || 0), 0),
-        cleanedChannels: cleanupResult.deletedCount || 0,
-        failedChannels: cleanupResult.totalErrors || 0,
-        skippedChannels: Object.values(cleanupResult.stats || {}).reduce((sum, stat) => sum + (stat?.skipped || 0), 0),
-        // Add the preview comparison data for the dashboard
-        previewComparison: cleanupResult.previewComparison || {},
-        // Add site-specific data for the dashboard
-        sites: Object.entries(cleanupResult.stats || {}).map(([name, stat]) => ({
-          name,
-          found: stat?.found || 0,
-          kept: stat?.kept || 0,
-          deleted: stat?.deleted || 0,
-          errors: stat?.errors || 0
-        }))
-      };
-      
-      // Record channel cleanup step for dashboard timeline
-      this.recordWorkflowStep('Channel Cleanup', 'Maintenance', 
-        cleanupResult.success, 
-        Date.now() - cleanupStartTime, // Use actual duration instead of hardcoded 0
-        cleanupResult.success ? null : 'Channel cleanup encountered errors'
-      );
-      
-      if (cleanupResult.deletedCount > 0) {
-        this.logger.success(`✓ Cleaned up ${cleanupResult.deletedCount} old preview channels`);
-      } else {
-        this.logger.info(`No channels needed cleanup (kept: ${this.metrics.channelCleanup.channelsKept}, found: ${this.metrics.channelCleanup.totalChannels})`);
-      }
-      
-      // DEBUG: Print the workflow warnings to see if they're being collected
-      this.logger.info(`DEBUG: Number of workflow warnings: ${this.workflowWarnings.length}`);
-      if (this.workflowWarnings.length > 0) {
-        this.logger.info('DEBUG: Workflow warnings:');
-        this.workflowWarnings.forEach((warning, index) => {
-          this.logger.info(`[${index + 1}] ${warning.message} (${warning.phase}${warning.step ? ` - ${warning.step}` : ''}, ${warning.severity})`);
+        // Perform channel cleanup first
+        logger.info('Running channel cleanup...');
+        const cleanupResult = await cleanupChannels({
+            verbose: this.options.verbose,
+            recordWarning: this.recordWarning.bind(this),
+            recordStep: this.recordWorkflowStep.bind(this),
+            phase: 'Results'
         });
-      }
-      
-      // Log the state being passed to the dashboard generator for debugging
-      this.logger.info('DEBUG: Final advancedCheckResults before dashboard generation:');
-      this.logger.info(JSON.stringify(this.advancedCheckResults, null, 2));
-      
-      // Generate dashboard with proper options
-      const dashboardResult = await generateWorkflowDashboard(this, {
-        isCI: process.env.CI === 'true',
-        outputPath: join(process.cwd(), 'dashboard.html'),
-        noOpen: process.env.CI === 'true',
-        verbose: this.options.verbose
-      });
-      
-      if (dashboardResult.success) {
-        this.logger.success(`Dashboard generated at: ${dashboardResult.path}`);
-        this.metrics.dashboardPath = dashboardResult.path;
-        this.progressTracker.completeStep(true, 'Dashboard generated successfully');
-        this.recordWorkflowStep('Results Phase', 'Results', true, Date.now() - phaseStartTime);
-      } else {
-        const errorMessage = dashboardResult.error?.message || 'Unknown error';
-        this.logger.error(`Failed to generate dashboard: ${errorMessage}`);
-        this.progressTracker.completeStep(false, `Dashboard generation failed: ${errorMessage}`);
-        this.recordWorkflowStep('Results Phase', 'Results', false, Date.now() - phaseStartTime, errorMessage);
-      }
-      
-      // Calculate total duration and final phase duration
-      const phaseEndTime = Date.now();
-      this.metrics.phaseDurations.results = phaseEndTime - phaseStartTime;
-      this.metrics.duration = phaseEndTime - this.metrics.setupStart;
-      
-      return dashboardResult.success;
+        // Store cleanup results in the main metrics object of the Workflow instance
+        this.metrics.channelCleanup = cleanupResult; 
+
+        // Inject previous preview URLs into the main metrics object
+        const workflowState = getWorkflowStateInstance();
+        if (workflowState.state.lastSuccessfulPreview) {
+          this.metrics.lastSuccessfulPreview = workflowState.state.lastSuccessfulPreview;
+          // DEBUG: Log the previous preview data being injected
+          logger.debug('[DEBUG] Injecting lastSuccessfulPreview into metrics:', JSON.stringify(this.metrics.lastSuccessfulPreview, null, 2));
+        } else {
+          logger.debug('[DEBUG] No lastSuccessfulPreview found in workflow state.');
+        }
+        
+        logger.info('Generating workflow dashboard...');
+
+        // --- Prepare data FOR the dashboard from the Workflow instance --- 
+        const dashboardData = {
+          // Determine overall status based on errors collected in THIS instance
+          status: this.workflowErrors.length > 0 ? 'failed' : 'success', 
+          startTime: this.startTime, // Use start time from THIS instance
+          endTime: Date.now(), 
+          options: this.options, // Use options from THIS instance
+          metrics: this.metrics, // Pass metrics collected by THIS instance
+          steps: Array.from(this.workflowSteps.values()), // Use steps from THIS instance
+          errors: this.workflowErrors, // Use errors from THIS instance
+          warnings: this.workflowWarnings, // Use warnings from THIS instance
+          previewUrls: this.previewUrls, // Use preview URLs from THIS instance
+          // FIX: Add the missing advanced check results
+          advancedCheckResults: this.advancedCheckResults, 
+          // Get supplemental info from singleton if needed
+          channelId: workflowState.state.channelId,
+          // *** ADD EXPLICIT PREVIOUS URL DATA (Correct Location) ***
+          previousPreviewData: this.metrics?.channelCleanup?.stats?.previewComparison ?? null
+        };
+        // --- End Prepare data --- 
+
+        // Debug logging remains the same...
+        logger.debug("--- Data PREPARED for generateWorkflowDashboard ---");
+        logger.debug(`Steps Count: ${dashboardData.steps?.length}`);
+        logger.debug(`Errors Count: ${dashboardData.errors?.length}`);
+        logger.debug(`Warnings Count: ${dashboardData.warnings?.length}`);
+        logger.debug(`Metrics Keys: ${Object.keys(dashboardData.metrics || {}).join(', ')}`);
+        logger.debug("-------------------------------------------------");
+
+        // *** FIX: Pass the CORRECT dashboardData object ***
+        const dashboardResult = await generateWorkflowDashboard(
+            dashboardData, // <-- PASS THE PREPARED DATA HERE
+            {
+                isCI: false, 
+                noOpen: false, 
+                verbose: this.options.verbose
+            }
+        );
+
+        if (!dashboardResult.success) {
+            resultsSuccess = false;
+            resultsError = dashboardResult.error?.message || 'Dashboard generation failed';
+            // Record error using the Workflow instance's method
+            this.recordWorkflowError(resultsError, 'Results', 'Generate Dashboard'); 
+        } else {
+            // Store dashboard path in metrics if successful
+            this.metrics.dashboardPath = dashboardResult.reportPath;
+        }
+
+        // ** Inject lastSuccessfulPreview from the CURRENT run for persistence ***
+        if (this.previewUrls && this.metrics.deploymentStatus.status === 'success') { 
+            this.metrics.lastSuccessfulPreview = { ...this.previewUrls };
+            this.logger.debug('[DEBUG] Injecting lastSuccessfulPreview into metrics:', JSON.stringify(this.metrics.lastSuccessfulPreview));
+        }
+            
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Results generation failed: ${errorMessage}`);
-      this.progressTracker.completeStep(false, `Results generation failed: ${errorMessage}`);
-      this.recordWorkflowStep('Results Phase', 'Results', false, Date.now() - phaseStartTime, errorMessage);
-      return false;
+        resultsSuccess = false;
+        resultsError = `Results phase failed: ${error.message}`;
+        logger.error(resultsError);
+        // Record error using the Workflow instance's method
+        this.recordWorkflowError(resultsError, 'Results'); 
     }
+
+    const duration = Date.now() - startTime;
+    this.metrics.phaseDurations.results = duration;
+    // Record step using the Workflow instance's method
+    this.recordWorkflowStep('Results Phase', 'Results', resultsSuccess, duration, resultsError); 
+    // Update singleton state if needed (maybe just final status?)
+    getWorkflowStateInstance().completeStep('Results Phase', { success: resultsSuccess, error: resultsError });
+
+    // Display final summary/options
+    if (resultsSuccess && this.workflowErrors.length === 0) {
+        logger.sectionHeader('Workflow Complete');
+    } else {
+        logger.sectionHeader('Workflow Completed with Errors/Failures');
+        if (resultsError) logger.error(`Results Phase Error: ${resultsError}`);
+    }
+
+    // *** FIX: Update singleton state AFTER workflow run completes ***
+    logger.debug('Updating workflowState singleton with final results from workflow instance...');
+    const finalInstanceMetrics = this.metrics;
+    const finalInstanceChecks = this.advancedCheckResults;
+
+    if (finalInstanceMetrics && finalInstanceMetrics.deploymentStatus) {
+      // Update deployment status and potentially other final metrics
+      logger.debug('Updating singleton deploymentStatus:', JSON.stringify(finalInstanceMetrics.deploymentStatus));
+      getWorkflowStateInstance().updateMetrics({ 
+        deploymentStatus: finalInstanceMetrics.deploymentStatus, 
+        // Optionally add other final metrics here if needed by dashboard
+        // e.g., buildPerformance: finalInstanceMetrics.buildPerformance 
+      });
+    } else {
+      logger.warn('Final instance metrics or deploymentStatus not found for singleton update.');
+    }
+    
+    if (finalInstanceChecks) {
+      // Update advanced check results
+      logger.debug('Updating singleton advancedChecks:', JSON.stringify(finalInstanceChecks));
+      getWorkflowStateInstance().updateAdvancedChecks(finalInstanceChecks);
+    } else {
+       logger.warn('Final instance advancedChecks not found for singleton update.');
+    }
+    logger.debug('Singleton state update complete.');
+    // *** END FIX ***
   }
 
   /**
@@ -1694,17 +1770,94 @@ function parseArgs() {
   return options;
 }
 
-// Main function
+/**
+ * Main function to run the workflow
+ */
 async function main() {
   logger.init();
   const options = parseArgs();
 
+  // Get the singleton instance of the workflow state manager
+  const workflowState = getWorkflowStateInstance(); 
+
+  // Clean up previous runs
+  cleanupPreviousRuns();
+
+  // Initialize workflow state (NOW using the instance)
+  // Pass parsed args or an empty object
+  workflowState.initialize(options); 
+
   const workflow = new Workflow(options);
-  await workflow.run();
+  
+  // Setup performance monitoring
+  performanceMonitor.start('Total Workflow');
+  
+  try {
+    await workflow.run();
+    
+    // Log final status
+    logger.info("Workflow completed successfully.");
+
+    // *** FIX: Update singleton state AFTER workflow run completes ***
+    logger.debug('Updating workflowState singleton with final results from workflow instance...');
+    const finalInstanceMetrics = workflow.metrics; 
+    const finalInstanceChecks = workflow.advancedCheckResults;
+
+    // Get the singleton instance
+    const workflowStateSingleton = getWorkflowStateInstance(); // Get instance here
+
+    if (finalInstanceMetrics && finalInstanceMetrics.deploymentStatus) {
+      // Update deployment status and potentially other final metrics
+      logger.debug('Updating singleton deploymentStatus:', JSON.stringify(finalInstanceMetrics.deploymentStatus));
+      workflowStateSingleton.updateMetrics({ 
+        deploymentStatus: finalInstanceMetrics.deploymentStatus, 
+        // Optionally add other final metrics here if needed by dashboard
+        // e.g., buildPerformance: finalInstanceMetrics.buildPerformance 
+      });
+    } else {
+      logger.warn('Final instance metrics or deploymentStatus not found for singleton update.');
+    }
+    
+    if (finalInstanceChecks) {
+      // Update advanced check results
+      logger.debug('Updating singleton advancedChecks:', JSON.stringify(finalInstanceChecks));
+      workflowStateSingleton.updateAdvancedChecks(finalInstanceChecks);
+    } else {
+       logger.warn('Final instance advancedChecks not found for singleton update.');
+    }
+    logger.debug('Singleton state update complete.');
+    // *** END FIX ***
+    
+  } catch (error) {
+    logger.error(`Workflow failed: ${error.message}`);
+    if (options.verbose && error.stack) {
+      logger.error(error.stack);
+    }
+    
+    // Record the failure in the state
+    workflowState.fail(error); 
+    
+    process.exitCode = 1; // Indicate failure
+    
+  } finally {
+    // Ensure performance monitoring ends
+    performanceMonitor.end('Total Workflow');
+    
+    // Ensure state reflects completion or failure
+    if (process.exitCode !== 1 && workflowState.getStatus() !== 'failed') {
+       workflowState.complete('success');
+    }
+    
+    // Generate dashboard regardless of success/failure
+    try {
+       await generateWorkflowDashboard(workflowState.getState());
+       logger.info("Workflow dashboard generated.");
+    } catch (dashboardError) {
+       logger.error(`Failed to generate workflow dashboard: ${dashboardError.message}`);
+    }
+    
+    logger.info("Workflow finished.");
+  }
 }
 
-// Run the script
-main().catch(error => {
-  logger.error('Workflow failed:', error);
-  process.exit(1);
-}); 
+main(); 
