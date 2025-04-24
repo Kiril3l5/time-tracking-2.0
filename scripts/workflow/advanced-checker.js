@@ -1051,6 +1051,7 @@ export async function runAllAdvancedChecks(options = {}) {
   // --- Run Checks ---
   // Define all possible checks and their functions
   const allChecks = {
+    typescriptBuild: runTypeScriptBuildCheck, // Add new TypeScript build check with highest priority
     bundleSize: runBundleSizeCheck,
     deadCode: runDeadCodeCheck,
     docsQuality: runDocsQualityCheck,
@@ -1273,6 +1274,189 @@ export async function runSingleCheckWithWorkflowIntegration(checkName, options =
   }
 }
 
+/**
+ * Run TypeScript build check for the common package
+ * 
+ * @param {Object} options - Options for the check
+ * @returns {Promise<Object>} Check result
+ */
+export async function runTypeScriptBuildCheck(options = {}) {
+  silentLogger.setSilent(options.silentMode || false);
+  
+  const startTime = performance.now();
+  
+  try {
+    const { runPackageBuildCheck } = await import('../checks/typescript-check.js');
+    
+    // Record step if available
+    if (options.recordStep) {
+      options.recordStep('TypeScript Build Check', options.phase || 'Validation');
+    }
+    
+    // Run the package build check
+    const checkResult = runPackageBuildCheck({
+      package: 'common',
+      dryRun: true,
+      debug: true
+    });
+    
+    // Calculate duration
+    const duration = Math.round(performance.now() - startTime);
+    
+    // Process errors
+    if (!checkResult.success && checkResult.errors && checkResult.errors.length > 0) {
+      // Create a clear message for the workflow dashboard
+      const errorSummary = `TypeScript build check failed with ${checkResult.errorCount} ${checkResult.errorCount === 1 ? 'error' : 'errors'}`;
+      silentLogger.error(errorSummary);
+      
+      // Create specific actionable messages by error type
+      const errorsByType = checkResult.errors.reduce((acc, error) => {
+        if (!acc[error.code]) {
+          acc[error.code] = [];
+        }
+        acc[error.code].push(error);
+        return acc;
+      }, {});
+      
+      // Format errors for display in the workflow dashboard
+      silentLogger.error('===== TypeScript Build Errors =====');
+      
+      // Add each error as a warning in the workflow
+      checkResult.errors.forEach((error, index) => {
+        if (index < 15) { // Limit displayed errors to avoid overwhelming the console
+          // Format the error message for display
+          const formattedMessage = error.file && error.line 
+            ? `${error.file}:${error.line}:${error.column} - ${error.message}`
+            : error.message || 'Unknown error';
+            
+          silentLogger.error(formattedMessage);
+          
+          // Record each error in the workflow state if the recordWarning function is available
+          if (options.recordWarning) {
+            options.recordWarning(
+              formattedMessage,
+              options.phase || 'Validation',
+              'TypeScript Build Check',
+              'error',
+              error.file
+            );
+            
+            // If there's a suggestion, add it as additional info
+            if (error.suggestion) {
+              options.recordWarning(
+                `Suggestion for ${error.file}: ${error.suggestion}`,
+                options.phase || 'Validation',
+                'TypeScript Build Check',
+                'info',
+                error.file
+              );
+            }
+          }
+        }
+      });
+      
+      if (checkResult.errors.length > 15) {
+        const remainingErrors = checkResult.errors.length - 15;
+        const message = `... and ${remainingErrors} more error${remainingErrors === 1 ? '' : 's'}`;
+        silentLogger.error(message);
+        
+        if (options.recordWarning) {
+          options.recordWarning(
+            message,
+            options.phase || 'Validation',
+            'TypeScript Build Check',
+            'error'
+          );
+        }
+      }
+      
+      // Add actionable suggestions by error type
+      Object.entries(errorsByType).forEach(([code, errors]) => {
+        if (code === 'TS6133' && errors.length > 0) {
+          const message = `Found ${errors.length} unused variables/imports. Consider using the '--noUnusedLocals' flag in tsconfig.json or prefixing unused variables with underscore.`;
+          silentLogger.warn(message);
+          if (options.recordWarning) {
+            options.recordWarning(
+              message,
+              options.phase || 'Validation',
+              'TypeScript Build Check',
+              'info'
+            );
+          }
+        } else if (code === 'TS2339' && errors.length > 0) {
+          const message = `Found ${errors.length} property not exist errors. Check interface definitions for missing properties.`;
+          silentLogger.warn(message);
+          if (options.recordWarning) {
+            options.recordWarning(
+              message,
+              options.phase || 'Validation',
+              'TypeScript Build Check',
+              'info'
+            );
+          }
+        }
+      });
+      
+      silentLogger.error('===================================');
+      
+      // Provide actionable error message instead of generic error
+      let actionableError;
+      
+      if (checkResult.errorCount > 0) {
+        const fileList = Array.from(new Set(checkResult.errors.slice(0, 5).map(e => e.file))).join(', ');
+        
+        if (Object.keys(errorsByType).length === 1 && errorsByType['TS6133']) {
+          actionableError = `Found ${checkResult.errorCount} unused variables/parameters. Fix by removing or prefixing with underscore in: ${fileList}`;
+        } else if (Object.keys(errorsByType).length === 1 && errorsByType['TS2339']) {
+          actionableError = `Found ${checkResult.errorCount} 'property does not exist' errors. Check interface definitions in: ${fileList}`;
+        } else {
+          actionableError = `Found ${checkResult.errorCount} TypeScript errors in ${checkResult.fileCount || Object.keys(errorsByType).length} file(s). Fix issues in: ${fileList}`;
+        }
+      } else {
+        actionableError = checkResult.error;
+      }
+      
+      // Record step completion with actionable error message
+      if (options.recordStep) {
+        options.recordStep('TypeScript Build Check', options.phase || 'Validation', false, duration, actionableError);
+      }
+      
+      return {
+        ...checkResult,
+        error: actionableError,
+        duration,
+        message: actionableError,
+        actionableErrors: errorsByType
+      };
+    }
+    
+    // Record step completion
+    if (options.recordStep) {
+      options.recordStep('TypeScript Build Check', options.phase || 'Validation', checkResult.success, duration, checkResult.error);
+    }
+    
+    return {
+      ...checkResult,
+      duration
+    };
+  } catch (error) {
+    const duration = Math.round(performance.now() - startTime);
+    
+    silentLogger.error(`TypeScript build check failed with error: ${error.message}`);
+    
+    // Record step failure
+    if (options.recordStep) {
+      options.recordStep('TypeScript Build Check', options.phase || 'Validation', false, duration, error.message);
+    }
+    
+    return {
+      success: false,
+      error: error.message,
+      duration
+    };
+  }
+}
+
 // Export default remains the same
 export default {
   runBundleSizeCheck,
@@ -1284,5 +1468,6 @@ export default {
   runWorkflowValidationCheck,
   runProjectHealthCheck,
   runAllAdvancedChecks,
-  runSingleCheckWithWorkflowIntegration
+  runSingleCheckWithWorkflowIntegration,
+  runTypeScriptBuildCheck
 };

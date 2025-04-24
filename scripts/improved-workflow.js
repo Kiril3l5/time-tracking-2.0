@@ -747,7 +747,7 @@ class Workflow {
             skipDocsCheck: this.options.skipAdvancedChecks || this.options.skipDocsCheck || false,
             skipDocsFreshnessCheck: this.options.skipAdvancedChecks || this.options.skipDocsFreshnessCheck || false,
             skipDeadCodeCheck: this.options.skipAdvancedChecks || this.options.skipDeadCodeCheck || false,
-            skipTypeCheck: true, // Skip TypeScript check as we already ran it
+            skipTypeScriptBuild: this.options.skipAdvancedChecks || this.options.skipTypeScriptBuild || false,
             skipLintCheck: true, // Skip lint check as we already ran it
             skipWorkflowValidation: this.options.skipAdvancedChecks || this.options.skipWorkflowValidation || false,
             skipHealthCheck: true, // Skip health check as we already ran it
@@ -895,6 +895,60 @@ class Workflow {
                 'Code Quality'
               );
             });
+          }
+          
+          // Process TypeScript build errors
+          if (this.advancedCheckResults.typescriptBuild && 
+              this.advancedCheckResults.typescriptBuild.data && 
+              this.advancedCheckResults.typescriptBuild.data.errors) {
+            const tsBuildErrors = this.advancedCheckResults.typescriptBuild.data.errors;
+            
+            // Add each error as a separate warning item in the dashboard
+            tsBuildErrors.forEach(error => {
+              // Format the error message
+              const errorMessage = error.file && error.line 
+                ? `Build Error: ${error.file}:${error.line}:${error.column} - ${error.message}`
+                : `Build Error: ${error.message || 'Unknown error'}`;
+                
+              this.recordWarning(
+                errorMessage,
+                'Validation',
+                'TypeScript Build',
+                'error',
+                error.file
+              );
+            });
+            
+            // Add a summary warning if there are many errors
+            if (tsBuildErrors.length > 10) {
+              this.recordWarning(
+                `Found ${tsBuildErrors.length} TypeScript build errors. Fix these issues before committing.`,
+                'Validation',
+                'TypeScript Build',
+                'error'
+              );
+            }
+            
+            // Add specific actionable guidance for common errors
+            const unusedVarsCount = tsBuildErrors.filter(err => err.code === 'TS6133').length;
+            if (unusedVarsCount > 0) {
+              this.recordWarning(
+                `Found ${unusedVarsCount} unused variables. Fix by removing or prefixing with underscore (_).`,
+                'Validation',
+                'TypeScript Build',
+                'info'
+              );
+            }
+            
+            const propNotExistCount = tsBuildErrors.filter(err => err.code === 'TS2339').length;
+            if (propNotExistCount > 0) {
+              this.recordWarning(
+                `Found ${propNotExistCount} 'property does not exist' errors. Check interface definitions to add missing properties.`,
+                'Validation',
+                'TypeScript Build',
+                'info'
+              );
+            }
           }
           
           // ENHANCED ERROR COLLECTION: Ensure ALL advanced check errors are collected
@@ -1708,6 +1762,7 @@ Advanced Check Options:
   --skip-docs-freshness     Skip documentation freshness check
   --skip-workflow-validation Skip workflow validation
   --skip-health-check       Skip health checks
+  --skip-typescript-build   Skip TypeScript build check
   --skip-advanced-checks    Skip all advanced checks
   
 Performance Options:
@@ -1741,6 +1796,7 @@ function parseArgs() {
     skipWorkflowValidation: false,
     skipHealthCheck: false,
     skipAdvancedChecks: false,
+    skipTypeScriptBuild: false, // Add new option for TypeScript build check
     // Caching option
     noCache: false
   };
@@ -1759,6 +1815,7 @@ function parseArgs() {
     if (arg === '--skip-workflow-validation') options.skipWorkflowValidation = true;
     if (arg === '--skip-health-check') options.skipHealthCheck = true;
     if (arg === '--skip-advanced-checks') options.skipAdvancedChecks = true;
+    if (arg === '--skip-typescript-build') options.skipTypeScriptBuild = true;
     // Cache option
     if (arg === '--no-cache') options.noCache = true;
     if (arg === '--help' || arg === '-h') {

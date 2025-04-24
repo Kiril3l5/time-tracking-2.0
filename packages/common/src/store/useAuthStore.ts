@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { User as FirebaseUser } from 'firebase/auth';
 // Import the centrally defined User type for Firestore data
 import { User } from '../types/firestore'; 
-import { UserRole } from '../utils/permissions';
 
 /**
  * @interface AuthState
@@ -70,7 +69,7 @@ const initialState: AuthState = {
  *
  * Components should subscribe to this store for auth state using the selector hooks.
  */
-export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
+export const useAuthStore = create<AuthState & AuthActions>((set, _get) => ({
   ...initialState,
 
   // --- Actions --- 

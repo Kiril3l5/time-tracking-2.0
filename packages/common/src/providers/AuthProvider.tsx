@@ -1,18 +1,17 @@
-import React, { createContext, useContext, ReactNode } from 'react';
+import { createContext, useContext, ReactNode } from 'react';
 import { 
-  Auth, 
-  User, 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   signOut as firebaseSignOut,
   sendPasswordResetEmail,
   UserCredential
 } from 'firebase/auth';
-import { doc, setDoc, Timestamp } from 'firebase/firestore'; // Import Timestamp
+import { doc, setDoc } from 'firebase/firestore';
 import { auth as firebaseAuth, db } from '../firebase/core/firebase'; // Import db
+// Import needed hooks from the auth store
+import { useAuthStatus, useCurrentUserProfile } from '../store/useAuthStore';
 // Remove Zustand imports as the listener is now external
 // import { useAuthActions } from '../store/useAuthStore'; 
-import { UserProfile } from '../types/firestore'; // Keep UserProfile type
 
 /**
  * @interface RegistrationFormData
@@ -64,6 +63,14 @@ interface AuthContextType {
   logout: () => Promise<void>;
   /** Sends a password reset email to the provided address. */
   resetPassword: (email: string) => Promise<void>;
+  /** Authentication status flag */
+  isAuthenticated: boolean;
+  /** Loading status flag */
+  isLoading: boolean;
+  /** Check if user has a specific role */
+  hasRole: (role: string) => boolean;
+  /** Check if user has a specific permission */
+  hasPermission: (permission: string) => boolean;
 }
 
 // Create the context with a default value 
@@ -233,6 +240,10 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     register,
     logout,
     resetPassword,
+    isAuthenticated: false,
+    isLoading: true,
+    hasRole: () => false,
+    hasPermission: () => false,
   };
 
   return (
@@ -248,7 +259,9 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
  * Custom hook to access the authentication action functions provided by AuthProvider.
  * Must be used within a component wrapped by AuthProvider.
  * 
- * @returns {AuthContextType} The authentication context value (action functions).
+ * This hook combines the action functions from context with state from the Zustand store.
+ * 
+ * @returns {AuthContextType} The authentication context value (action functions and state).
  * @throws Error if used outside of an AuthProvider.
  */
 export const useAuth = (): AuthContextType => {
@@ -256,7 +269,31 @@ export const useAuth = (): AuthContextType => {
   if (context === undefined) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
-  return context;
+  
+  // Get authentication state from the Zustand store
+  const { isLoading, isAuthenticated } = useAuthStatus();
+  const userProfile = useCurrentUserProfile();
+  
+  // Check if a user has a specific role
+  const hasRole = (role: string): boolean => {
+    if (!userProfile) return false;
+    return userProfile.role === role;
+  };
+  
+  // Check if a user has a specific permission
+  const hasPermission = (permission: string): boolean => {
+    if (!userProfile || !userProfile.permissions) return false;
+    return userProfile.permissions.includes(permission);
+  };
+  
+  // Return combined context with actions from AuthProvider and state from Zustand
+  return {
+    ...context,
+    isLoading,
+    isAuthenticated,
+    hasRole,
+    hasPermission
+  };
 };
 
 // Remove default export if it exists and isn't needed, 
