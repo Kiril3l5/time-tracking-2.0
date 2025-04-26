@@ -1293,28 +1293,63 @@ export async function runTypeScriptBuildCheck(options = {}) {
       options.recordStep('TypeScript Build Check', options.phase || 'Validation');
     }
     
-    // Run the package build check
-    const checkResult = runPackageBuildCheck({
-      package: 'common',
-      dryRun: true,
-      debug: true
-    });
+    // Get list of packages to check
+    const packagesToCheck = ['common', 'admin', 'hours'];
+    silentLogger.info(`Running TypeScript build check for packages: ${packagesToCheck.join(', ')}...`);
+    
+    // Run checks for each package and collect results
+    const packageResults = {};
+    let overallSuccess = true;
+    let combinedErrors = [];
+    let totalErrorCount = 0;
+    
+    for (const packageName of packagesToCheck) {
+      silentLogger.info(`Checking package: ${packageName}...`);
+      
+      // Run the package build check
+      const checkResult = runPackageBuildCheck({
+        package: packageName,
+        dryRun: true,
+        debug: options.verbose || false
+      });
+      
+      // Store results
+      packageResults[packageName] = checkResult;
+      
+      // Update overall success status
+      if (!checkResult.success) {
+        overallSuccess = false;
+        
+        // Collect errors with package name prefix
+        if (checkResult.errors && Array.isArray(checkResult.errors)) {
+          const errorsWithPackage = checkResult.errors.map(error => ({
+            ...error,
+            package: packageName,
+            file: error.file ? `${packageName}/${error.file}` : error.file
+          }));
+          
+          combinedErrors = [...combinedErrors, ...errorsWithPackage];
+          totalErrorCount += checkResult.errorCount || errorsWithPackage.length;
+        }
+      }
+    }
     
     // Calculate duration
     const duration = Math.round(performance.now() - startTime);
     
-    // Process errors
-    if (!checkResult.success && checkResult.errors && checkResult.errors.length > 0) {
+    // Process errors across all packages
+    if (!overallSuccess && combinedErrors.length > 0) {
       // Create a clear message for the workflow dashboard
-      const errorSummary = `TypeScript build check failed with ${checkResult.errorCount} ${checkResult.errorCount === 1 ? 'error' : 'errors'}`;
+      const errorSummary = `TypeScript build check failed with ${totalErrorCount} errors across multiple packages`;
       silentLogger.error(errorSummary);
       
-      // Create specific actionable messages by error type
-      const errorsByType = checkResult.errors.reduce((acc, error) => {
-        if (!acc[error.code]) {
-          acc[error.code] = [];
+      // Group errors by type for better reporting
+      const errorsByType = combinedErrors.reduce((acc, error) => {
+        const code = error.code || 'unknown';
+        if (!acc[code]) {
+          acc[code] = [];
         }
-        acc[error.code].push(error);
+        acc[code].push(error);
         return acc;
       }, {});
       
@@ -1322,7 +1357,7 @@ export async function runTypeScriptBuildCheck(options = {}) {
       silentLogger.error('===== TypeScript Build Errors =====');
       
       // Add each error as a warning in the workflow
-      checkResult.errors.forEach((error, index) => {
+      combinedErrors.forEach((error, index) => {
         if (index < 15) { // Limit displayed errors to avoid overwhelming the console
           // Format the error message for display
           const formattedMessage = error.file && error.line 
@@ -1338,26 +1373,15 @@ export async function runTypeScriptBuildCheck(options = {}) {
               options.phase || 'Validation',
               'TypeScript Build Check',
               'error',
-              error.file
+              error.package
             );
-            
-            // If there's a suggestion, add it as additional info
-            if (error.suggestion) {
-              options.recordWarning(
-                `Suggestion for ${error.file}: ${error.suggestion}`,
-                options.phase || 'Validation',
-                'TypeScript Build Check',
-                'info',
-                error.file
-              );
-            }
           }
         }
       });
       
-      if (checkResult.errors.length > 15) {
-        const remainingErrors = checkResult.errors.length - 15;
-        const message = `... and ${remainingErrors} more error${remainingErrors === 1 ? '' : 's'}`;
+      if (combinedErrors.length > 15) {
+        const remainingErrors = combinedErrors.length - 15;
+        const message = `... and ${remainingErrors} more errors`;
         silentLogger.error(message);
         
         if (options.recordWarning) {
@@ -1370,50 +1394,63 @@ export async function runTypeScriptBuildCheck(options = {}) {
         }
       }
       
-      // Add actionable suggestions by error type
-      Object.entries(errorsByType).forEach(([code, errors]) => {
-        if (code === 'TS6133' && errors.length > 0) {
-          const message = `Found ${errors.length} unused variables/imports. Consider using the '--noUnusedLocals' flag in tsconfig.json or prefixing unused variables with underscore.`;
+      // Add special handling for common error types
+      // Handle TS6133 (unused variables/imports)
+      if (errorsByType['TS6133'] && errorsByType['TS6133'].length > 0) {
+        const unusedCount = errorsByType['TS6133'].length;
+        const message = `Found ${unusedCount} unused variables/imports. Consider removing them or prefixing with underscore.`;
+        silentLogger.warn(message);
+        
+        if (options.recordWarning) {
+          options.recordWarning(
+            message,
+            options.phase || 'Validation',
+            'TypeScript Build Check',
+            'info'
+          );
+        }
+      }
+      
+      // Handle TS2769 (Vite configuration errors)
+      if (errorsByType['TS2769'] && errorsByType['TS2769'].length > 0) {
+        const viteErrors = errorsByType['TS2769'].filter(e => e.file && e.file.includes('vite.config.ts'));
+        if (viteErrors.length > 0) {
+          const message = `Found ${viteErrors.length} Vite configuration type errors. These may be caused by mismatched vite versions across packages.`;
           silentLogger.warn(message);
+          
+          const suggestion = "Consider updating package.json dependencies to align Vite versions or updating vite.config.ts to use proper typings.";
+          silentLogger.info(suggestion);
+          
           if (options.recordWarning) {
             options.recordWarning(
               message,
               options.phase || 'Validation',
               'TypeScript Build Check',
-              'info'
+              'warning'
             );
-          }
-        } else if (code === 'TS2339' && errors.length > 0) {
-          const message = `Found ${errors.length} property not exist errors. Check interface definitions for missing properties.`;
-          silentLogger.warn(message);
-          if (options.recordWarning) {
+            
             options.recordWarning(
-              message,
+              suggestion,
               options.phase || 'Validation',
               'TypeScript Build Check',
               'info'
             );
           }
         }
-      });
+      }
       
       silentLogger.error('===================================');
       
-      // Provide actionable error message instead of generic error
+      // Provide actionable error message
       let actionableError;
       
-      if (checkResult.errorCount > 0) {
-        const fileList = Array.from(new Set(checkResult.errors.slice(0, 5).map(e => e.file))).join(', ');
-        
-        if (Object.keys(errorsByType).length === 1 && errorsByType['TS6133']) {
-          actionableError = `Found ${checkResult.errorCount} unused variables/parameters. Fix by removing or prefixing with underscore in: ${fileList}`;
-        } else if (Object.keys(errorsByType).length === 1 && errorsByType['TS2339']) {
-          actionableError = `Found ${checkResult.errorCount} 'property does not exist' errors. Check interface definitions in: ${fileList}`;
-        } else {
-          actionableError = `Found ${checkResult.errorCount} TypeScript errors in ${checkResult.fileCount || Object.keys(errorsByType).length} file(s). Fix issues in: ${fileList}`;
-        }
+      // Create more specific actionable messages based on error types
+      if (errorsByType['TS6133'] && Object.keys(errorsByType).length === 1) {
+        actionableError = `Found ${totalErrorCount} unused variables/imports. Fix by removing or prefixing with underscore.`;
+      } else if (errorsByType['TS2769'] && errorsByType['TS2769'].every(e => e.file && e.file.includes('vite.config.ts'))) {
+        actionableError = `Found ${totalErrorCount} Vite configuration type errors. Check Vite version compatibility.`;
       } else {
-        actionableError = checkResult.error;
+        actionableError = `Found ${totalErrorCount} TypeScript errors across multiple packages. See workflow warnings for details.`;
       }
       
       // Record step completion with actionable error message
@@ -1422,22 +1459,25 @@ export async function runTypeScriptBuildCheck(options = {}) {
       }
       
       return {
-        ...checkResult,
+        success: false,
         error: actionableError,
         duration,
-        message: actionableError,
-        actionableErrors: errorsByType
+        errorCount: totalErrorCount,
+        packageResults,
+        errors: combinedErrors,
+        errorsByType
       };
     }
     
     // Record step completion
     if (options.recordStep) {
-      options.recordStep('TypeScript Build Check', options.phase || 'Validation', checkResult.success, duration, checkResult.error);
+      options.recordStep('TypeScript Build Check', options.phase || 'Validation', overallSuccess, duration);
     }
     
     return {
-      ...checkResult,
-      duration
+      success: overallSuccess,
+      duration,
+      packageResults
     };
   } catch (error) {
     const duration = Math.round(performance.now() - startTime);

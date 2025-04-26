@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useViewport } from '@common/hooks/ui/useViewport';
@@ -6,7 +6,6 @@ import { Layout } from './components/Layout';
 
 // Import common auth components and hooks
 import { 
-  ProtectedRoute, 
   AdminRoute, 
   ManagerRoute 
 } from '@common/components/auth/ProtectedRoute';

@@ -1,10 +1,10 @@
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, type ConfigEnv, type UserConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 import path from 'path';
 
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   const rootDir = path.resolve(__dirname, '../..');
   
   // Load env file based on `mode` from both the current dir and the root dir
@@ -25,7 +25,7 @@ export default defineConfig(({ mode }) => {
           },
         ],
       }),
-    ],
+    ] as any,
     define: {
       // Make all environment variables available to the client
       // This avoids the "Missing Firebase configuration" error

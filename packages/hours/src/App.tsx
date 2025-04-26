@@ -3,12 +3,9 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useViewport } from '@common/hooks/ui/useViewport';
 import { Layout } from './components/Layout';
-import MobileHoursLayout from './layouts/MobileHoursLayout';
 import { auth, db } from '@common/firebase/core/firebase';
 import { onAuthStateChanged } from 'firebase/auth'; 
 import { useAuthActions, useAuthStatus } from '@common/store/useAuthStore'; 
-// Import AuthProvider to wrap the Router
-import { AuthProvider } from '@common/providers/AuthProvider'; 
 // Import the correct User type from firestore types
 import { User } from '@common/types/firestore'; 
 // Import Firestore functions needed for fetching
@@ -156,42 +153,40 @@ export default function App() {
   // Wrap the Router with AuthProvider to make actions available via useAuth()
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <Router>
-          <Routes>
-            {/* Root path redirects based on Zustand state */}
-            <Route path="/" element={<Home />} />
-            
-            {/* Auth pages (likely use useAuth() for actions) */}
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
+      <Router>
+        <Routes>
+          {/* Root path redirects based on Zustand state */}
+          <Route path="/" element={<Home />} />
+          
+          {/* Auth pages (likely use useAuth() for actions) */}
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
 
-            {/* Protected routes (use useAuthStatus() for state check) */}
-            <Route path="/time" element={
-              <RequireAuth>
-                <TimeEntryPage />
-              </RequireAuth>
-            } />
-            
-            {/* Legacy pages - adapt as needed */}
-            <Route path="/dashboard" element={
-              <RequireAuth>
-                <Layout><Dashboard /></Layout>
-              </RequireAuth>
-            } />
-            <Route path="/history" element={
-              <RequireAuth>
-                <Layout><TimeHistory /></Layout>
-              </RequireAuth>
-            } />
-            <Route path="/reports" element={
-              <RequireAuth>
-                <Layout><Reports /></Layout>
-              </RequireAuth>
-            } />
-          </Routes>
-        </Router>
-      </AuthProvider>
+          {/* Protected routes (use useAuthStatus() for state check) */}
+          <Route path="/time" element={
+            <RequireAuth>
+              <TimeEntryPage />
+            </RequireAuth>
+          } />
+          
+          {/* Legacy pages - adapt as needed */}
+          <Route path="/dashboard" element={
+            <RequireAuth>
+              <Layout><Dashboard /></Layout>
+            </RequireAuth>
+          } />
+          <Route path="/history" element={
+            <RequireAuth>
+              <Layout><TimeHistory /></Layout>
+            </RequireAuth>
+          } />
+          <Route path="/reports" element={
+            <RequireAuth>
+              <Layout><Reports /></Layout>
+            </RequireAuth>
+          } />
+        </Routes>
+      </Router>
     </QueryClientProvider>
   );
 }

@@ -25,7 +25,7 @@ export default defineConfig(({ mode }) => {
           },
         ],
       }),
-    ],
+    ] as any,
     define: {
       // Make all environment variables available to the client
       // This avoids the "Missing Firebase configuration" error

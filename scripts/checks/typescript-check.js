@@ -18,6 +18,7 @@ import { commandRunner } from '../core/command-runner.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { execSync } from 'child_process';
 
 /* global process */
 
@@ -218,232 +219,208 @@ export function runPackageBuildCheck(options = {}) {
     };
   }
   
-  // Run TypeScript compiler directly - no options so we get the real build errors
-  // --noEmit is actually a problem because it might skip some build-time-only errors
-  // Use direct npx tsc invocation from the package directory
-  let buildCommand;
-  let commandOptions = { stdio: 'pipe', ignoreError: true };
-  
-  if (process.platform === 'win32') {
-    // For Windows/PowerShell, use direct execution with proper CWD
-    buildCommand = 'npx tsc';
-    commandOptions.cwd = packageDir;
-  } else {
-    // For Unix/Linux systems, use cd and &&
-    buildCommand = `cd ${packageDir} && npx tsc`;
-  }
-  
-  logger.debug(`Running command: ${buildCommand} in ${commandOptions.cwd || 'current directory'}`);
-  
-  // Run the command
-  const result = commandRunner.runCommand(buildCommand, commandOptions);
-  
-  // Debug output to see what format the command returns
-  if (debug) {
-    logger.debug('==== TypeScript Build Command Output Start ====');
-    logger.debug(`Command success: ${result.success}`);
-    logger.debug(`Command exit code: ${result.exitCode}`);
-    logger.debug(`STDOUT length: ${result.stdout ? result.stdout.length : 0}`);
-    logger.debug(`STDERR length: ${result.stderr ? result.stderr.length : 0}`);
-    logger.debug(`OUTPUT length: ${result.output ? result.output.length : 0}`);
-    logger.debug(`ERROR length: ${result.error ? result.error.length : 0}`);
-    
-    if (result.stdout) logger.debug(`STDOUT sample: ${result.stdout.substring(0, 200)}...`);
-    if (result.stderr) logger.debug(`STDERR sample: ${result.stderr.substring(0, 200)}...`);
-    if (result.output) logger.debug(`OUTPUT sample: ${result.output.substring(0, 200)}...`);
-    if (result.error) logger.debug(`ERROR sample: ${result.error.substring(0, 200)}...`);
-    logger.debug('==== TypeScript Build Command Output End ====');
-  }
-  
-  // Parse the results
-  if (result.success) {
-    logger.success(`TypeScript build check for package ${packageName} passed`);
-    return {
-      success: true,
-      errorCount: 0,
-      errors: []
-    };
-  }
-  
-  // Parse errors from the output - try all possible locations for error messages
-  const errorOutput = result.stderr || '';
-  const stdOutput = result.stdout || '';
-  const defaultOutput = result.output || '';
-  const errorField = result.error || '';
-  
-  // Combine all possible output sources
-  const combinedOutput = [stdOutput, errorOutput, defaultOutput, errorField]
-    .filter(output => output && output.trim() !== '')
-    .join('\n');
-  
-  // Log the combined output for debugging
-  if (debug) {
-    logger.debug('==== Combined Output for Error Parsing ====');
-    logger.debug(combinedOutput);
-    logger.debug('========================================');
-  }
-  
-  // Enhanced parsing for build-specific errors
-  const errors = parseTypeScriptBuildErrors(combinedOutput);
-  
-  // Log parsed errors
-  if (debug) {
-    logger.debug(`Parsed ${errors.length} TypeScript errors`);
-    if (errors.length > 0) {
-      logger.debug('==== First 3 Parsed Errors ====');
-      errors.slice(0, 3).forEach(error => logger.debug(JSON.stringify(error)));
-      logger.debug('==============================');
+  // Direct execSync approach for better error handling with PowerShell
+  try {
+    // For direct execution with full path reference
+    const tsConfigPath = path.join(packageDir, 'tsconfig.json');
+    if (!fs.existsSync(tsConfigPath)) {
+      logger.warn(`No tsconfig.json found in ${packageDir}, TypeScript build check may not be accurate`);
     }
-  }
-  
-  const errorCount = errors.length;
-  if (errorCount > 0) {
-    // Group errors by file for better reporting
-    const fileErrors = new Map();
-    errors.forEach(error => {
-      const file = error.file || 'unknown';
-      if (!fileErrors.has(file)) {
-        fileErrors.set(file, []);
+    
+    // Always log the command for debugging
+    logger.info(`Running TypeScript compiler in ${packageDir}`);
+    
+    try {
+      // Use execSync directly for better error handling
+      const output = execSync('npx tsc', { 
+        cwd: packageDir, 
+        encoding: 'utf8', 
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: true
+      });
+      
+      // If we get here, the command succeeded (no errors)
+      logger.success(`TypeScript build check for package ${packageName} passed`);
+      return {
+        success: true,
+        errorCount: 0,
+        errors: []
+      };
+    } catch (execError) {
+      // execSync throws an error if the command fails (which means TypeScript found errors)
+      // The error object has stdout and stderr properties with the output
+      const errorOutput = execError.stdout || '';
+      
+      // Parse errors from the output
+      const errors = parseTypeScriptBuildErrors(errorOutput);
+      
+      // If standard parsing didn't find anything, try PowerShell-specific parsing
+      if (errors.length === 0) {
+        const powerShellErrors = parsePowerShellTypeScriptOutput(errorOutput);
+        if (powerShellErrors.length > 0) {
+          return createErrorResult(packageName, powerShellErrors);
+        }
       }
-      fileErrors.get(file).push(error);
-    });
-    
-    // Create a summary by file
-    const summaryByFile = Array.from(fileErrors.entries()).map(([file, fileErrors]) => {
-      return `${file}: ${fileErrors.length} errors`;
-    });
-    
-    logger.error(`TypeScript build check for package ${packageName} found ${errorCount} error${errorCount === 1 ? '' : 's'} in ${fileErrors.size} file${fileErrors.size === 1 ? '' : 's'}`);
-    logger.error(`Files with errors: ${summaryByFile.join(', ')}`);
-    
-    // Display a summary of errors
-    const maxErrorsToShow = 10; // Show more errors to help developers
-    const displayErrors = errors.slice(0, maxErrorsToShow);
-    
-    // Print a more visible error block
-    logger.error('===== TypeScript Build Errors =====');
-    for (const error of displayErrors) {
-      logger.error(`${error.file}:${error.line}:${error.column} - ${error.message}`);
+      
+      // If we found errors through normal parsing, return them
+      if (errors.length > 0) {
+        return createErrorResult(packageName, errors);
+      }
+      
+      // Fallback for when we can't parse specific errors but know the command failed
+      const errorLines = errorOutput.split('\n').filter(line => 
+        line.includes('error') || 
+        line.includes('Error:') || 
+        line.includes('TS')
+      );
+      
+      if (errorLines.length > 0) {
+        logger.warn(`TypeScript build failed with ${errorLines.length} potential error lines`);
+        return {
+          success: false,
+          errorCount: errorLines.length,
+          errors: errorLines.map(line => ({ message: line.trim() })),
+          error: `TypeScript build failed with ${errorLines.length} errors.`
+        };
+      }
+      
+      // Last resort fallback if we couldn't find any error details
+      return {
+        success: false,
+        errorCount: 1,
+        errors: [{ message: 'TypeScript build failed' }],
+        error: 'TypeScript build failed without specific errors. Check project configuration.'
+      };
     }
+  } catch (error) {
+    logger.error(`Error running TypeScript build check: ${error.message}`);
     
-    if (errors.length > maxErrorsToShow) {
-      logger.error(`... and ${errors.length - maxErrorsToShow} more errors`);
+    if (debug && error.stack) {
+      logger.debug("Error stack trace:");
+      logger.debug(error.stack);
     }
-    logger.error('===================================');
-    
-    // Create an actionable error message
-    const actionableMessage = `Found ${errorCount} TypeScript errors in ${fileErrors.size} file(s). Fix TypeScript type issues in: ${Array.from(fileErrors.keys()).slice(0, 3).join(', ')}${fileErrors.size > 3 ? ' and others' : ''}.`;
     
     return {
       success: false,
-      errorCount,
-      errors,
-      fileCount: fileErrors.size,
-      filesSummary: summaryByFile,
-      error: actionableMessage
+      error: `Error running TypeScript build check: ${error.message}`,
+      errorCount: 1,
+      errors: [{ message: error.message }]
     };
   }
+}
+
+/**
+ * Helper function to create a standardized error result
+ * @param {string} packageName - Package name
+ * @param {Array} errors - Array of error objects
+ * @returns {Object} - Standard error result object
+ */
+function createErrorResult(packageName, errors) {
+  const errorCount = errors.length;
   
-  // If no errors were parsed but the command failed, try to extract some information from the output
-  const outputLines = combinedOutput.split('\n');
-  const errorLines = outputLines.filter(line => 
-    line.includes('error') || 
-    line.includes('Error:') || 
-    line.includes('TS')
-  );
-  
-  if (errorLines.length > 0) {
-    logger.warn('TypeScript build command failed. Raw error output:');
-    errorLines.slice(0, 10).forEach(line => logger.warn(`> ${line}`));
-    if (errorLines.length > 10) {
-      logger.warn(`... and ${errorLines.length - 10} more error lines`);
+  // Group errors by file for better reporting
+  const fileErrors = new Map();
+  errors.forEach(error => {
+    const file = error.file || 'unknown';
+    if (!fileErrors.has(file)) {
+      fileErrors.set(file, []);
     }
-  } else {
-    logger.warn('TypeScript build command failed, but no specific errors were identified.');
+    fileErrors.get(file).push(error);
+  });
+  
+  // Create a summary by file
+  const summaryByFile = Array.from(fileErrors.entries()).map(([file, fileErrors]) => {
+    return `${file}: ${fileErrors.length} errors`;
+  });
+  
+  logger.error(`TypeScript build check for package ${packageName} found ${errorCount} error${errorCount === 1 ? '' : 's'} in ${fileErrors.size} file${fileErrors.size === 1 ? '' : 's'}`);
+  logger.error(`Files with errors: ${summaryByFile.join(', ')}`);
+  
+  // Display a summary of errors
+  const maxErrorsToShow = 10;
+  const displayErrors = errors.slice(0, maxErrorsToShow);
+  
+  // Print a more visible error block
+  logger.error('===== TypeScript Build Errors =====');
+  for (const error of displayErrors) {
+    logger.error(`${error.file || 'unknown'}:${error.line || '?'}:${error.column || '?'} - ${error.message || 'Unknown error'}`);
   }
+  
+  if (errors.length > maxErrorsToShow) {
+    logger.error(`... and ${errors.length - maxErrorsToShow} more errors`);
+  }
+  logger.error('===================================');
+  
+  // Create an actionable error message
+  const actionableMessage = `Found ${errorCount} TypeScript errors in ${fileErrors.size} file(s). Fix TypeScript type issues in: ${Array.from(fileErrors.keys()).slice(0, 3).join(', ')}${fileErrors.size > 3 ? ' and others' : ''}.`;
   
   return {
     success: false,
-    errorCount: errorLines.length || 0,
-    errors: errorLines.map(line => ({ message: line })),
-    error: errorLines.length > 0 
-      ? `Build failed with ${errorLines.length} errors. Fix TypeScript issues before proceeding.` 
-      : 'Build command failed without specific errors. Check package configuration.'
+    errorCount,
+    errors,
+    fileCount: fileErrors.size,
+    filesSummary: summaryByFile,
+    error: actionableMessage
   };
 }
 
 /**
- * Parse TypeScript error messages specifically from PowerShell output
- * This specialized parser handles the unique formatting in PowerShell output
- * @param {string} output - Error output from PowerShell
- * @returns {Array} - Array of parsed error objects
+ * Parse PowerShell-specific TypeScript errors
+ * @param {string} output - PowerShell command output
+ * @returns {Array<Object>} - Array of parsed error objects
  */
 function parsePowerShellTypeScriptOutput(output) {
   const errors = [];
   const lines = output.split('\n');
   
-  // Look for specific PowerShell error patterns
+  // Special Windows / PowerShell error patterns
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
+    if (!line) continue;
     
-    // Pattern for src/file.tsx:line:column - error TSxxxx: message
-    const colonFormat = line.match(/src\/([^:]+):(\d+):(\d+)\s*-\s*(error|warning)\s*(TS\d+):\s*(.*)/);
-    if (colonFormat) {
+    // Pattern for standard TypeScript errors in PowerShell output
+    // Example: src/App.tsx:1:8 - error TS6133: 'React' is declared but its value is never read.
+    const stdMatch = line.match(/([^:]+):(\d+):(\d+)\s*-\s*(error|warning)\s*(TS\d+):\s*(.*)/);
+    if (stdMatch) {
       errors.push({
-        file: 'src/' + colonFormat[1],
-        line: parseInt(colonFormat[2], 10),
-        column: parseInt(colonFormat[3], 10),
-        severity: colonFormat[4],
-        code: colonFormat[5],
-        message: colonFormat[6].trim()
+        file: stdMatch[1],
+        line: parseInt(stdMatch[2], 10),
+        column: parseInt(stdMatch[3], 10),
+        severity: stdMatch[4],
+        code: stdMatch[5],
+        message: stdMatch[6].trim()
       });
       continue;
     }
     
-    // Check for the specific TS6133 unused parameter pattern
-    const unusedParameter = line.match(/([^:]+):(\d+):(\d+)\s*-\s*(error)\s*(TS6133):\s*'([^']+)'\s+is declared but its value is never read/);
-    if (unusedParameter) {
-      // Build a more actionable message for this common error
-      const actionableMessage = `'${unusedParameter[6]}' is declared but never used. Remove this parameter or prefix with underscore (_${unusedParameter[6]}).`;
-      
+    // For vite.config.ts errors which have a complex multi-line format
+    if (line.includes('vite.config.ts') && line.includes('error TS2769')) {
+      // Extract just the key information
       errors.push({
-        file: unusedParameter[1],
-        line: parseInt(unusedParameter[2], 10),
-        column: parseInt(unusedParameter[3], 10),
-        severity: 'warning', // Treat unused parameters as warnings
-        code: 'TS6133',
-        message: actionableMessage,
-        suggestion: `Use _${unusedParameter[6]} as parameter name to indicate it's intentionally unused`
-      });
-      continue;
-    }
-    
-    // Check for the specific TS6133 unused import pattern in PowerShell
-    const unusedImport = line.match(/([^:]+):(\d+):(\d+)\s*-\s*(error)\s*(TS6133):\s*'([^']+)' is declared but its value is never read/);
-    if (unusedImport) {
-      errors.push({
-        file: unusedImport[1],
-        line: parseInt(unusedImport[2], 10),
-        column: parseInt(unusedImport[3], 10),
-        severity: 'warning', // Treat unused imports as warnings
-        code: 'TS6133',
-        message: `'${unusedImport[6]}' is declared but its value is never read.`,
-        suggestion: `Remove the unused import or export`
-      });
-      continue;
-    }
-    
-    // Check for property not exist pattern that's common in PowerShell output
-    const propertyNotExist = line.match(/([^:]+):(\d+):(\d+)\s*-\s*(error)\s*(TS2339):\s*Property\s+'([^']+)'\s+does not exist on type\s+'([^']+)'/);
-    if (propertyNotExist) {
-      errors.push({
-        file: propertyNotExist[1],
-        line: parseInt(propertyNotExist[2], 10),
-        column: parseInt(propertyNotExist[3], 10),
+        file: 'vite.config.ts',
+        line: line.match(/:(\d+):/)?.[1] || '0',
+        column: line.match(/:(\d+):\d+/)?.[1] || '0',
         severity: 'error',
-        code: 'TS2339',
-        message: `Property '${propertyNotExist[6]}' does not exist on type '${propertyNotExist[7]}'.`
+        code: 'TS2769',
+        message: 'No overload matches this call in Vite configuration'
       });
+      continue;
+    }
+    
+    // Look for "Found X errors in Y files" summary line to extract error counts
+    const errorsFoundMatch = line.match(/Found\s+(\d+)\s+errors?\s+in\s+(\d+)\s+files?/i);
+    if (errorsFoundMatch) {
+      // If we haven't found any errors yet but summary indicates some, add a generic error
+      const errorCount = parseInt(errorsFoundMatch[1], 10);
+      const fileCount = parseInt(errorsFoundMatch[2], 10);
+      
+      if (errors.length === 0 && errorCount > 0) {
+        errors.push({
+          severity: 'error',
+          code: 'TSSUMMARY',
+          message: `TypeScript compilation failed with ${errorCount} errors in ${fileCount} files.`
+        });
+      }
       continue;
     }
   }

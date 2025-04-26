@@ -13,25 +13,37 @@ import path from 'path';
 async function main() {
   logger.info('Running TypeScript build check...');
   
-  // First run direct tsc for comparison
+  // First try to execute TypeScript directly on the packages
   try {
-    logger.info('Running direct TypeScript check...');
-    const packageDir = path.join(process.cwd(), 'packages/common');
-    
-    // Run tsc directly
-    const tscOutput = execSync('npx tsc', { 
-      cwd: packageDir, 
-      encoding: 'utf8', 
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: true
-    });
-    
-    logger.info('Direct TypeScript check result:');
-    logger.info(tscOutput || 'No output (success)');
+    // Test packages - will help us to verify that there are errors
+    const packageFolders = ['common', 'admin', 'hours'];
+    for (const pkg of packageFolders) {
+      const packageDir = path.join(process.cwd(), 'packages', pkg);
+      
+      logger.info(`Testing direct TypeScript execution for ${pkg}...`);
+      try {
+        const output = execSync('npx tsc', { 
+          cwd: packageDir, 
+          encoding: 'utf8', 
+          stdio: ['ignore', 'pipe', 'pipe'],
+          shell: true
+        });
+        
+        logger.info(`TypeScript check for ${pkg} - no errors found`);
+      } catch (error) {
+        logger.info(`TypeScript check for ${pkg} - errors found`);
+        if (error.stdout) {
+          logger.info('Stdout error output:');
+          logger.info(error.stdout);
+        }
+        if (error.stderr) {
+          logger.info('Stderr error output:');
+          logger.info(error.stderr);
+        }
+      }
+    }
   } catch (error) {
-    logger.error('Direct TypeScript check failed:');
-    if (error.stdout) logger.info('STDOUT: ' + error.stdout);
-    if (error.stderr) logger.error('STDERR: ' + error.stderr);
+    logger.error('Error testing packages directly:', error.message);
   }
   
   try {

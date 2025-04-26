@@ -763,7 +763,8 @@ class Workflow {
               docsQuality: 30000,
               bundleSize: 60000,
               deadCode: 45000,
-              workflowValidation: 30000
+              workflowValidation: 30000,
+              typescriptBuild: 60000 // Add timeout for TypeScript build check
             }
           };
           
